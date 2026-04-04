@@ -1,6 +1,15 @@
 {
   "bot_token": "",
   "app_token": "",
+  "user_token": "",
+  "client_id": "",
+  "client_secret": "",
   "sidebar_width": 30,
-  "timestamp_format": "15:04"
+  "timestamp_format": "15:04",
+  "notifications": false,
+  "poll_interval": 10,
+  "channel_sort_by": "type",
+  "channel_sort_asc": true,
+  "hidden_channels": [],
+  "channel_aliases": {}
 }

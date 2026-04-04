@@ -6,34 +6,44 @@ A lightweight, terminal-based Slack client. Read and send messages, switch chann
 
 - **Three-panel TUI** -- channel sidebar, message viewport, and input bar with focus cycling
 - **Real-time messages** via Slack Socket Mode -- incoming messages appear instantly
+- **New message polling** -- configurable background polling detects new messages across all channels
 - **Send as yourself** -- uses your user token so messages come from you, not a bot
-- **Channel search** (`Ctrl-K`) -- fuzzy-filter and jump to any channel instantly
-- **Hide channels** (`Ctrl-X`) -- declutter the sidebar; view and unhide with `Ctrl-G`
+- **Channel search** (`Ctrl-K`) -- filter and jump to any channel instantly
+- **Message search** (`Ctrl-F`) -- search messages in the current channel or across all channels, with context view
+- **Search context view** -- select a search result to see surrounding messages with the match highlighted; load more history with PgUp
+- **Hide channels** (`Ctrl-X`) -- declutter the sidebar; view and unhide with `Ctrl-G`; toggle inline with `Ctrl-O`
 - **Channel aliases** (`Ctrl-A`) -- rename any channel or group chat with a custom display name
-- **Unread indicators** -- channels with new messages are marked with `*`
+- **Next unread** (`Ctrl-N`) -- jump directly to the next channel with new messages
+- **Unread indicators** -- channels with new messages are marked with `*` in the sidebar
+- **Notifications** -- terminal bell, OSC 9 desktop notifications, and window urgency hints (configurable)
+- **Channel sorting** -- sort by type, name, or most recent message; ascending or descending
+- **Date headers** -- sticky date bar in the header and date separators between messages from different days
+- **Sidebar scrolling** -- selection always stays in view; PgUp/PgDn/Home/End support
 - **Configurable sidebar width** -- adjust via the settings menu (`Ctrl-S`)
 - **Slack mrkdwn rendering** -- bold, italic, user mentions, links, and code blocks converted to plain text
-- **Interactive settings** (`Ctrl-S`) -- edit config live, changes persist immediately
+- **Interactive settings** (`Ctrl-S`) -- cycle through options with Enter/Tab, changes persist immediately
 - **Built-in help** (`Ctrl-H`) -- full shortcut reference overlay
+- **OAuth browser login** -- `slackers login` opens your browser to authorize; teammates can onboard in seconds
 - **Cross-platform** -- single static binary for Linux, macOS, and Windows
-- **Persistent config** -- tokens, hidden channels, aliases, and preferences saved to `~/.config/slackers/`
+- **Persistent config** -- tokens, hidden channels, aliases, sort preferences, and all settings saved to `~/.config/slackers/`
 
 ```
 +---------------------+------------------------------------------+
-|                     |  #general                                |
+|                     |  #general                    Today        |
 |  Channels           |------------------------------------------|
-|  ---------------    |  alice [10:32]                            |
-|  # general          |    Hey everyone, standup in 5 min         |
-|  # engineering      |                                          |
-|  # random           |  bob [10:33]                              |
-|                     |    Thanks for the heads up!               |
-|  Direct Messages    |                                          |
-|  ---------------    |                                          |
+|  ---------------    |  -- Mon, Apr 3, 2026 --                   |
+|  # general          |                                          |
+|  # engineering      |  alice  Apr 3 10:32                       |
+|  # random           |    Hey everyone, standup in 5 min         |
+|                     |                                          |
+|  Direct Messages    |  bob  Apr 3 10:33                         |
+|  ---------------    |    Thanks for the heads up!               |
 |  @ alice            |                                          |
 |  @ bob              |                                          |
 |                     |------------------------------------------|
 |                     |  > Type a message...                     |
 +---------------------+------------------------------------------+
+  slackers | Connected | Ctrl-H: help | Ctrl-S: settings
 ```
 
 ## Installation
@@ -42,8 +52,10 @@ A lightweight, terminal-based Slack client. Read and send messages, switch chann
 
 Grab the latest release for your platform from the [Releases](https://github.com/rw3iss/slackers/releases) page:
 
-- **Linux**: `slackers-linux-amd64`
-- **macOS**: `slackers-darwin-arm64`
+- **Linux (x86_64)**: `slackers-linux-amd64`
+- **Linux (ARM64)**: `slackers-linux-arm64`
+- **macOS (Intel)**: `slackers-darwin-amd64`
+- **macOS (Apple Silicon)**: `slackers-darwin-arm64`
 - **Windows**: `slackers-windows-amd64.exe`
 
 Move it somewhere on your PATH:
@@ -93,6 +105,11 @@ Slackers connects to Slack through a Slack App that you create in your workspace
     }
   },
   "oauth_config": {
+    "redirect_urls": [
+      "http://127.0.0.1:9876/callback",
+      "http://127.0.0.1:9877/callback",
+      "http://127.0.0.1:9878/callback"
+    ],
     "scopes": {
       "bot": [
         "channels:read", "channels:history", "channels:join", "channels:manage",
@@ -204,8 +221,12 @@ All tokens and settings are saved to `~/.config/slackers/config.json`:
   "bot_token": "xoxb-...",
   "app_token": "xapp-...",
   "user_token": "xoxp-...",
-  "sidebar_width": 25,
-  "timestamp_format": "15:04"
+  "sidebar_width": 30,
+  "timestamp_format": "15:04",
+  "notifications": false,
+  "poll_interval": 10,
+  "channel_sort_by": "type",
+  "channel_sort_asc": true
 }
 ```
 
@@ -222,11 +243,13 @@ slackers
 | Key | Action |
 |-----|--------|
 | `Tab` / `Shift-Tab` | Cycle focus between panels |
+| `Esc` | Toggle focus between sidebar and input |
 | `Up` / `Down` | Navigate channels or scroll messages |
 | `Enter` | Select channel (sidebar) or send message (input) |
 | `i` or `/` | Focus the message input |
-| `Esc` | Cancel input, return to sidebar |
 | `Ctrl-K` | Search and jump to a channel |
+| `Ctrl-F` | Search messages (Tab toggles current/all scope) |
+| `Ctrl-N` | Jump to next unread channel |
 | `Ctrl-X` | Hide selected channel from sidebar |
 | `Ctrl-G` | View and unhide hidden channels |
 | `Ctrl-O` | Toggle hidden channels visible in sidebar |
@@ -236,6 +259,19 @@ slackers
 | `Ctrl-S` | Open settings |
 | `PgUp` / `PgDn` | Scroll messages by page |
 | `Ctrl-C` or `Ctrl-Q` | Quit |
+
+### Settings (Ctrl-S)
+
+| Setting | Options | Description |
+|---------|---------|-------------|
+| Sidebar Width | 10-80 | Channel sidebar width in characters |
+| Timestamp Format | Go time format | e.g. `15:04`, `3:04 PM` |
+| Notifications | on / off | Terminal bell + desktop notifications |
+| Poll Interval | 1-300 | Seconds between new-message checks |
+| Sort By | type / name / recent | Channel list sorting mode |
+| Sort Direction | asc / desc | Channel list sorting direction |
+
+Settings with fixed options cycle with Enter/Tab. Changes save immediately and persist across restarts.
 
 ### CLI commands
 
@@ -285,6 +321,7 @@ Everything below is for contributors or anyone who wants to customize the client
 slackers/
   cmd/slackers/main.go    CLI entry point (Cobra commands, flag handling)
   internal/
+    auth/                  OAuth2 browser-based authentication flow
     config/                Configuration loading, saving, validation
     format/                Slack mrkdwn to plain text conversion
     slack/
@@ -293,11 +330,18 @@ slackers/
     tui/
       model.go             Root Bubbletea model (Init/Update/View)
       channels.go          Channel list sidebar component
-      messages.go          Message viewport component
+      messages.go          Message viewport with context mode
       input.go             Text input bar component
+      search.go            Channel search overlay
+      msgsearch.go         Message search overlay
+      hidden.go            Hidden channels management overlay
+      rename.go            Channel rename/alias overlay
+      settings.go          Interactive settings editor overlay
+      help.go              Help page overlay
+      notify.go            Terminal notification helpers
       styles.go            Lipgloss style definitions
       keymap.go            Key binding definitions
-    types/                 Shared domain types (Channel, Message, User)
+    types/                 Shared domain types (Channel, Message, User, SearchResult)
   scripts/                 Install/uninstall/cleanup shell scripts
   configs/                 Default config template, Slack app manifest
 ```
@@ -334,6 +378,8 @@ The TUI uses Bubbletea's Elm architecture (Model/Update/View). All state mutatio
 make build-all
 # Produces:
 #   build/slackers-linux-amd64
+#   build/slackers-linux-arm64
+#   build/slackers-darwin-amd64
 #   build/slackers-darwin-arm64
 #   build/slackers-windows-amd64.exe
 ```
