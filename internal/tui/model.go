@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -56,6 +57,19 @@ type SilentHistoryMsg struct{ Messages []types.Message }
 
 // FileUploadedMsg is sent when file uploads complete.
 type FileUploadedMsg struct{ Count int }
+
+// FileDownloadCompleteMsg signals a file download finished.
+type FileDownloadCompleteMsg struct {
+	DestPath string
+	Err      error
+}
+
+// FileDownloadProgressMsg reports download progress.
+type FileDownloadProgressMsg struct {
+	FileName   string
+	Downloaded int64
+	Total      int64
+}
 
 var filePattern = regexp.MustCompile(`\[FILE:([^\]]+)\]`)
 
@@ -392,6 +406,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case msg.String() == "ctrl+down":
+			m.messages.ExitSelectMode()
+			m.focus = types.FocusInput
+			m.updateFocus()
+			return m, nil
+
+		case msg.String() == "ctrl+up":
+			// From input or anywhere: jump to messages and enter file select mode.
+			if m.messages.EnterFileSelectMode() {
+				m.focus = types.FocusMessages
+				m.updateFocus()
+			}
+			return m, nil
+
 		case key.Matches(msg, m.keymap.Enter):
 			if m.focus == types.FocusSidebar {
 				ch := m.channels.SelectedChannel()
@@ -681,6 +709,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case FileDownloadMsg:
+		downloadPath := m.cfg.DownloadPath
+		if downloadPath == "" {
+			home, _ := os.UserHomeDir()
+			downloadPath = filepath.Join(home, "Downloads")
+		}
+		destPath := filepath.Join(downloadPath, msg.File.Name)
+		m.warning = fmt.Sprintf("Downloading %s...", msg.File.Name)
+		return m, downloadFileCmd(m.slackSvc, msg.File, destPath)
+
+	case FileDownloadCompleteMsg:
+		if msg.Err != nil {
+			m.err = msg.Err
+			m.warning = ""
+		} else {
+			m.warning = fmt.Sprintf("Downloaded: %s", msg.DestPath)
+		}
+		return m, nil
+
+	case FileDownloadProgressMsg:
+		pct := 0
+		if msg.Total > 0 {
+			pct = int(msg.Downloaded * 100 / msg.Total)
+		}
+		m.warning = fmt.Sprintf("Downloading %s... %d%%", msg.FileName, pct)
+		return m, nil
+
 	case FileUploadedMsg:
 		return m, nil
 
@@ -968,6 +1023,16 @@ func fetchContextCmd(svc slackpkg.SlackService, channelID, timestamp, channelNam
 			TargetIdx:   targetIdx,
 			ChannelName: channelName,
 		}
+	}
+}
+
+func downloadFileCmd(svc slackpkg.SlackService, file types.FileInfo, destPath string) tea.Cmd {
+	return func() tea.Msg {
+		err := svc.DownloadFile(file.URL, destPath, nil)
+		if err != nil {
+			return FileDownloadCompleteMsg{Err: err}
+		}
+		return FileDownloadCompleteMsg{DestPath: destPath}
 	}
 }
 

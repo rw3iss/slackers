@@ -13,6 +13,15 @@ type Channel struct {
 	UserID    string // for DMs: the other user's ID
 }
 
+// FileInfo represents an attached file.
+type FileInfo struct {
+	ID       string
+	Name     string
+	Size     int64
+	MimeType string
+	URL      string // private download URL
+}
+
 // Message represents a single Slack message.
 type Message struct {
 	UserID    string
@@ -20,6 +29,7 @@ type Message struct {
 	Text      string
 	Timestamp time.Time
 	ChannelID string
+	Files     []FileInfo
 }
 
 // User represents a Slack workspace member.

@@ -23,6 +23,16 @@ type MoreContextLoadedMsg struct {
 	Messages []types.Message
 }
 
+// FileDownloadMsg requests downloading a file.
+type FileDownloadMsg struct {
+	File types.FileInfo
+}
+
+// selectableItem tracks a file in the message view that can be selected.
+type selectableItem struct {
+	file types.FileInfo
+}
+
 // MessageViewModel displays messages in a scrollable viewport.
 type MessageViewModel struct {
 	viewport    viewport.Model
@@ -34,11 +44,16 @@ type MessageViewModel struct {
 	width       int
 	height      int
 
+	// File selection mode
+	selectMode  bool
+	selectables []selectableItem
+	selectIdx   int
+
 	// Context mode (search result viewing)
 	contextMode     bool
 	contextMessages []types.Message
 	contextTarget   int
-	contextChannel  string // channel ID for load-more
+	contextChannel  string
 }
 
 // NewMessageView creates a new message view model.
@@ -160,15 +175,77 @@ func (m *MessageViewModel) SetFocused(focused bool) {
 	m.focused = focused
 }
 
+// ExitSelectMode leaves file selection mode.
+func (m *MessageViewModel) ExitSelectMode() {
+	if m.selectMode {
+		m.selectMode = false
+		m.rebuildContent()
+	}
+}
+
+// EnterFileSelectMode activates file selection if there are files available.
+func (m *MessageViewModel) EnterFileSelectMode() bool {
+	if len(m.selectables) > 0 {
+		m.selectMode = true
+		m.selectIdx = len(m.selectables) - 1
+		m.rebuildContent()
+		return true
+	}
+	return false
+}
+
 // Update delegates to the viewport when focused.
 func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 	if !m.focused {
 		return m, nil
 	}
 
-	// Handle load-more in context mode when at the top.
-	if m.contextMode {
-		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// Toggle file select mode with 'f'.
+		if keyMsg.String() == "f" {
+			if len(m.selectables) > 0 {
+				m.selectMode = !m.selectMode
+				if m.selectMode {
+					m.selectIdx = len(m.selectables) - 1
+				}
+				m.rebuildContent()
+			}
+			return m, nil
+		}
+
+		// File selection navigation.
+		if m.selectMode {
+			switch keyMsg.String() {
+			case "up":
+				if m.selectIdx > 0 {
+					m.selectIdx--
+					m.rebuildContent()
+				}
+				return m, nil
+			case "down":
+				if m.selectIdx < len(m.selectables)-1 {
+					m.selectIdx++
+					m.rebuildContent()
+				}
+				return m, nil
+			case "enter":
+				if m.selectIdx >= 0 && m.selectIdx < len(m.selectables) {
+					f := m.selectables[m.selectIdx].file
+					m.selectMode = false
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return FileDownloadMsg{File: f}
+					}
+				}
+			case "esc", "f":
+				m.selectMode = false
+				m.rebuildContent()
+				return m, nil
+			}
+		}
+
+		// Load-more in context mode when at the top.
+		if m.contextMode {
 			if keyMsg.String() == "ctrl+u" || keyMsg.String() == "pgup" {
 				if m.viewport.YOffset <= 0 && m.contextChannel != "" {
 					oldestTS := m.ContextOldestTimestamp()
@@ -215,8 +292,12 @@ func (m MessageViewModel) View() string {
 		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorMuted).Render("  "+dateStr))
 	}
 
-	if m.contextMode {
+	if m.selectMode {
+		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorHighlight).Render("  [FILE SELECT: ↑↓ navigate | Enter: download | f/Esc: exit]"))
+	} else if m.contextMode {
 		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorHighlight).Render("  [Context - PgUp: load more | scroll bottom: exit]"))
+	} else if len(m.selectables) > 0 {
+		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorMuted).Render("  [f: select files]"))
 	}
 
 	header := strings.Join(headerParts, "") + "\n"
@@ -272,6 +353,24 @@ func (m MessageViewModel) visibleDate() string {
 }
 
 func (m *MessageViewModel) rebuildContent() {
+	// Rebuild selectables from current messages.
+	m.selectables = nil
+	msgs := m.messages
+	if m.contextMode {
+		msgs = m.contextMessages
+	}
+	for _, msg := range msgs {
+		for _, f := range msg.Files {
+			m.selectables = append(m.selectables, selectableItem{file: f})
+		}
+	}
+	if m.selectIdx >= len(m.selectables) {
+		m.selectIdx = len(m.selectables) - 1
+	}
+	if m.selectIdx < 0 {
+		m.selectIdx = 0
+	}
+
 	if m.contextMode {
 		m.viewport.SetContent(m.renderContextMessages())
 	} else {
@@ -314,8 +413,11 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 
 	highlightBg := lipgloss.NewStyle().Background(lipgloss.Color("236"))
 	dateSepStyle := lipgloss.NewStyle().Foreground(ColorMuted).Bold(true)
+	fileStyle := lipgloss.NewStyle().Foreground(ColorAccent)
+	fileSelectedStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Background(lipgloss.Color("236"))
 
 	var lastDate string
+	fileIdx := 0 // tracks which selectable file we're at
 
 	for i, msg := range msgs {
 		name := msg.UserName
@@ -327,11 +429,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			}
 		}
 
-		// Insert date separator when the day changes.
 		msgDate := msg.Timestamp.Format("Mon, Jan 2, 2006")
 		if msgDate != lastDate {
 			if lastDate != "" {
-				lines = append(lines, "") // extra spacing
+				lines = append(lines, "")
 			}
 			sep := fmt.Sprintf("── %s ──", msgDate)
 			lines = append(lines, dateSepStyle.Render("  "+sep))
@@ -339,7 +440,6 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			lastDate = msgDate
 		}
 
-		// Show abbreviated date + time in timestamps.
 		ts := msg.Timestamp.Format("Jan 2 15:04")
 		nameStyle := UserNameStyle.Foreground(UserColor(name))
 
@@ -364,6 +464,21 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				lines = append(lines, "  "+MessageTextStyle.Render(tl))
 			}
 		}
+
+		// Render file attachments.
+		for _, f := range msg.Files {
+			isSelected := m.selectMode && fileIdx == m.selectIdx
+			sizeStr := formatFileSize(f.Size)
+			if isSelected {
+				lines = append(lines, fileSelectedStyle.Render(
+					fmt.Sprintf("  > [FILE:%s] (%s) — Enter to download", f.Name, sizeStr)))
+			} else {
+				lines = append(lines, fileStyle.Render(
+					fmt.Sprintf("    [FILE:%s] (%s)", f.Name, sizeStr)))
+			}
+			fileIdx++
+		}
+
 		lines = append(lines, "")
 	}
 

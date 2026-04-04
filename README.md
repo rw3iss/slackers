@@ -28,6 +28,7 @@ A lightweight, terminal-based Slack client.
 - Jump to next unread (`Ctrl-N`)
 - Terminal notifications (bell, desktop, urgency hints)
 - File uploads (`Ctrl-U`) with built-in file browser and `[FILE:<path>]` syntax
+- File downloads -- select files in chat history (`f` or `Ctrl-Up`) and download with Enter
 - Input history — Up/Down in the input bar recalls sent messages
 - Interactive settings (`Ctrl-S`) and built-in help (`Ctrl-H`)
 - OAuth browser login for quick onboarding
@@ -103,6 +104,9 @@ Teammates then run: `slackers join https://your-url.com/team.json`
 | `Ctrl-O` | Toggle hidden visible |
 | `Ctrl-A` | Rename/alias channel |
 | `Ctrl-U` | Attach file to send |
+| `f` (messages panel) | Toggle file select mode |
+| `Ctrl-Up` | Jump to file select mode from anywhere |
+| `Ctrl-Down` | Exit file select, focus input |
 | `Up` / `Down` (input) | Browse sent message history |
 | `Ctrl-R` | Refresh channels |
 | `Ctrl-H` | Help |

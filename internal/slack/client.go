@@ -2,6 +2,8 @@ package slack
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,6 +31,8 @@ type SlackService interface {
 	SearchMessages(query, channelID string, limit int) ([]types.SearchResult, error)
 	// UploadFile uploads a file to a channel.
 	UploadFile(channelID, filePath string) error
+	// DownloadFile downloads a file from Slack to the local path. Returns bytes written.
+	DownloadFile(url, destPath string, progress func(downloaded, total int64)) error
 	// CheckNewMessages returns channel IDs with new messages and a map of all latest timestamps.
 	CheckNewMessages(lastSeen map[string]string) ([]string, map[string]string, error)
 	// Warnings returns and clears any accumulated fallback warnings.
@@ -57,10 +61,13 @@ func NewSlackClient(botToken, userToken string) SlackService {
 		c.primary = slack.New(userToken)
 		c.fallback = slack.New(botToken)
 		c.hasUser = true
+		registerClientToken(c.primary, userToken)
+		registerClientToken(c.fallback, botToken)
 	} else {
 		c.primary = slack.New(botToken)
 		c.fallback = nil
 		c.hasUser = false
+		registerClientToken(c.primary, botToken)
 	}
 	return c
 }
@@ -244,6 +251,7 @@ func (c *slackClient) FetchHistory(channelID string, limit int) ([]types.Message
 			Text:      msg.Text,
 			Timestamp: parseSlackTimestamp(msg.Timestamp),
 			ChannelID: channelID,
+			Files:     extractFiles(msg.Files),
 		})
 	}
 
@@ -319,10 +327,11 @@ func (c *slackClient) FetchHistoryAround(channelID string, timestamp string, con
 			Text:      msg.Text,
 			Timestamp: parseSlackTimestamp(msg.Timestamp),
 			ChannelID: channelID,
+			Files:     extractFiles(msg.Files),
 		})
 	}
 
-	targetIdx := len(messages) - 1 // The target should be the last of the "before" batch.
+	targetIdx := len(messages) - 1
 
 	// After messages also come newest-first, reverse them.
 	for i := len(afterResp.Messages) - 1; i >= 0; i-- {
@@ -333,6 +342,7 @@ func (c *slackClient) FetchHistoryAround(channelID string, timestamp string, con
 			Text:      msg.Text,
 			Timestamp: parseSlackTimestamp(msg.Timestamp),
 			ChannelID: channelID,
+			Files:     extractFiles(msg.Files),
 		})
 	}
 
@@ -501,6 +511,103 @@ func parseSlackTimestamp(ts string) (t time.Time) {
 	}
 
 	return time.Unix(sec, nsec)
+}
+
+// DownloadFile downloads a file from Slack's private URL to a local path.
+func (c *slackClient) DownloadFile(url, destPath string, progress func(downloaded, total int64)) error {
+	// Get the token for auth header.
+	token := ""
+	if c.primary != nil {
+		// Use the token from the primary client via a test call's header.
+		// slack-go doesn't expose the token directly, so we use GetFileInfoContext.
+		// Simpler: just do an HTTP request with the token we stored.
+	}
+	// We need to access the raw token. Since slack-go doesn't expose it,
+	// we'll use the primary client's authenticated download method.
+	err := c.tryWithFallback("download file", func(api *slack.Client) error {
+		token = getClientToken(api)
+		return nil
+	})
+	if err != nil || token == "" {
+		return fmt.Errorf("cannot get auth token for download")
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("creating download request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("downloading file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download HTTP %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("creating file %s: %w", destPath, err)
+	}
+	defer out.Close()
+
+	total := resp.ContentLength
+	var downloaded int64
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			_, writeErr := out.Write(buf[:n])
+			if writeErr != nil {
+				return fmt.Errorf("writing file: %w", writeErr)
+			}
+			downloaded += int64(n)
+			if progress != nil {
+				progress(downloaded, total)
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return fmt.Errorf("reading download: %w", readErr)
+		}
+	}
+
+	return nil
+}
+
+// getClientToken extracts the token from a slack.Client using reflection-free approach.
+// We store tokens ourselves since slack-go doesn't expose them.
+var clientTokens = make(map[*slack.Client]string)
+
+func registerClientToken(client *slack.Client, token string) {
+	clientTokens[client] = token
+}
+
+func getClientToken(client *slack.Client) string {
+	return clientTokens[client]
+}
+
+// extractFiles converts slack.File attachments to types.FileInfo.
+func extractFiles(files []slack.File) []types.FileInfo {
+	if len(files) == 0 {
+		return nil
+	}
+	result := make([]types.FileInfo, 0, len(files))
+	for _, f := range files {
+		result = append(result, types.FileInfo{
+			ID:       f.ID,
+			Name:     f.Name,
+			Size:     int64(f.Size),
+			MimeType: f.Mimetype,
+			URL:      f.URLPrivateDownload,
+		})
+	}
+	return result
 }
 
 func isNotInChannel(err error) bool {
