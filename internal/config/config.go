@@ -24,6 +24,7 @@ type Config struct {
 	LastChannelID   string            `json:"last_channel_id,omitempty"`
 	DownloadPath    string            `json:"download_path,omitempty"`
 	CollapsedGroups []string          `json:"collapsed_groups,omitempty"`
+	MouseEnabled    bool              `json:"mouse_enabled,omitempty"`
 	InputHistory    []string          `json:"input_history,omitempty"`
 	InputHistoryMax int               `json:"input_history_max,omitempty"`
 	PollInterval    int               `json:"poll_interval,omitempty"`

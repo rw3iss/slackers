@@ -57,6 +57,13 @@ func NewSettingsModel(cfg *config.Config) SettingsModel {
 				description: "Go time format for message timestamps (e.g. 15:04, 3:04 PM)",
 			},
 			{
+				label:       "Mouse",
+				key:         "mouse_enabled",
+				value:       boolToOnOff(cfg.MouseEnabled),
+				description: "Enable mouse click/scroll (restart required, Shift+click to select text)",
+				options:     []string{"on", "off"},
+			},
+			{
 				label:       "Notifications",
 				key:         "notifications",
 				value:       boolToOnOff(cfg.Notifications),
@@ -277,6 +284,15 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 	case "timestamp_format":
 		m.cfg.TimestampFormat = value
 		m.message = "Timestamp format updated"
+
+	case "mouse_enabled":
+		v := strings.ToLower(strings.TrimSpace(value))
+		m.cfg.MouseEnabled = (v == "on")
+		if m.cfg.MouseEnabled {
+			m.message = "Mouse enabled (restart to apply)"
+		} else {
+			m.message = "Mouse disabled (restart to apply)"
+		}
 
 	case "notifications":
 		v := strings.ToLower(strings.TrimSpace(value))

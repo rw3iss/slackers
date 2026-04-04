@@ -175,6 +175,35 @@ func (m *MessageViewModel) SetFocused(focused bool) {
 	m.focused = focused
 }
 
+// FileAtClick returns the file at the given Y coordinate in the viewport, or nil.
+func (m *MessageViewModel) FileAtClick(y int) *types.FileInfo {
+	// Get the rendered content and find which line was clicked.
+	content := m.viewport.View()
+	lines := strings.Split(content, "\n")
+
+	// y is relative to the message pane. Account for border (1) + header line (1) + 1.
+	lineIdx := y - 1
+	if lineIdx < 0 || lineIdx >= len(lines) {
+		return nil
+	}
+
+	clickedLine := lines[lineIdx]
+
+	// Check if this line contains a [FILE:...] pattern.
+	if !strings.Contains(clickedLine, "[FILE:") {
+		return nil
+	}
+
+	// Match it to a selectable file by name.
+	for _, s := range m.selectables {
+		if strings.Contains(clickedLine, "[FILE:"+s.file.Name+"]") {
+			f := s.file
+			return &f
+		}
+	}
+	return nil
+}
+
 // ExitSelectMode leaves file selection mode.
 func (m *MessageViewModel) ExitSelectMode() {
 	if m.selectMode {

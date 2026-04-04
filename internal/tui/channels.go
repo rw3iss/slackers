@@ -242,6 +242,39 @@ func (m *ChannelListModel) visibleChannels() []types.Channel {
 	return filtered
 }
 
+// SelectByRow selects the row at the given Y position within the sidebar viewport.
+// Returns the selected channel (nil for headers), whether a channel was clicked,
+// and the header key if a header was clicked.
+func (m *ChannelListModel) SelectByRow(y int) (*types.Channel, bool, string) {
+	// Map the Y coordinate to a display line, accounting for blank lines before headers.
+	targetLine := m.scrollOff + y
+
+	// Walk through rows counting actual display lines (including blank spacers).
+	displayLine := 0
+	for i, row := range m.rows {
+		if row.isHeader && i > 0 {
+			// Blank line before non-first headers.
+			if displayLine == targetLine {
+				// Clicked on the blank line — treat as no-op.
+				return nil, false, ""
+			}
+			displayLine++
+		}
+		if displayLine == targetLine {
+			m.selected = i
+			if row.isHeader {
+				return nil, false, row.headerKey
+			}
+			if row.channel != nil {
+				return row.channel, true, ""
+			}
+			return nil, false, ""
+		}
+		displayLine++
+	}
+	return nil, false, ""
+}
+
 func sectionKey(ch types.Channel) string {
 	switch {
 	case ch.IsDM:

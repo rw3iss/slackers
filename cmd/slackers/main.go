@@ -36,7 +36,7 @@ func resetTerminal() {
 	fmt.Fprint(os.Stdout, "\r\n")
 }
 
-var version = "0.6.0"
+var version = "0.7.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "slackers",
@@ -90,7 +90,11 @@ var rootCmd = &cobra.Command{
 		socketSvc := slack.NewSocketClient(cfg.BotToken, cfg.AppToken)
 
 		model := tui.NewModel(slackSvc, socketSvc, cfg)
-		p := tea.NewProgram(model, tea.WithAltScreen())
+		opts := []tea.ProgramOption{tea.WithAltScreen()}
+		if cfg.MouseEnabled {
+			opts = append(opts, tea.WithMouseCellMotion())
+		}
+		p := tea.NewProgram(model, opts...)
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}

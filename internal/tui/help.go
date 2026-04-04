@@ -44,6 +44,16 @@ var helpSections = []struct {
 			{"Ctrl-G", "View and unhide hidden channels"},
 			{"Ctrl-O", "Toggle hidden channels visible"},
 			{"Ctrl-A", "Rename/alias selected channel"},
+			{"Enter / Space", "Collapse/expand channel group"},
+		},
+	},
+	{
+		title: "Mouse (enable in settings)",
+		items: []struct{ key, desc string }{
+			{"Click", "Focus panel, select channel, download file"},
+			{"Scroll wheel", "Scroll messages or channels"},
+			{"Ctrl/Shift+scroll", "Fast scroll (5x)"},
+			{"Shift+click", "Select text (bypass mouse capture)"},
 		},
 	},
 	{
@@ -81,16 +91,9 @@ func renderHelp(width, height int) string {
 		Foreground(ColorMuted).
 		Italic(true)
 
-	creditStyle := lipgloss.NewStyle().
-		Foreground(ColorMuted).
-		Width(boxWidth).
-		Align(lipgloss.Center)
-
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("Slackers"))
-	b.WriteString("\n")
-	b.WriteString(creditStyle.Render(" (by Wet Dream)"))
+	b.WriteString(titleStyle.Render("Slackers Help"))
 	b.WriteString("\n\n")
 
 	for _, section := range helpSections {

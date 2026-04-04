@@ -16,7 +16,9 @@ A lightweight, terminal-based Slack client.
 - Read and send messages as yourself across channels, DMs, and group chats
 - Real-time message polling with configurable interval
 - Channel search (`Ctrl-K`) and message search (`Ctrl-F`) with context view
+- Collapsible channel groups -- Enter/Space on section headers to toggle
 - Hide, rename, and sort channels
+- Mouse support -- click channels, panels, files; scroll wheel; Ctrl/Shift for fast scroll
 - Jump to next unread (`Ctrl-N`)
 - Terminal notifications (bell, desktop, urgency hints)
 - File uploads (`Ctrl-U`) with built-in file browser and `[FILE:<path>]` syntax

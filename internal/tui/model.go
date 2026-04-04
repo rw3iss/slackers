@@ -127,10 +127,13 @@ type Model struct {
 	eventChan chan slackpkg.SocketEvent
 
 	// Layout
-	width   int
-	height  int
-	ready   bool
-	splash  bool
+	width        int
+	height       int
+	sidebarWidth int // computed sidebar width for click detection
+	msgTop       int // top Y of message area
+	inputTop     int // top Y of input area
+	ready        bool
+	splash       bool
 }
 
 // NewModel creates a new root TUI model.
@@ -187,6 +190,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.settings.SetSize(msg.Width, msg.Height)
 		m.resizeComponents()
 		return m, nil
+
+	case tea.MouseMsg:
+		if m.overlay != overlayNone || m.splash {
+			return m, nil
+		}
+		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
 		// Clear urgency on any user interaction.
@@ -837,9 +846,104 @@ func (m *Model) resizeComponents() {
 		msgWidth = 1
 	}
 
+	m.sidebarWidth = sidebarWidth
+	m.msgTop = 0
+	m.inputTop = topHeight + 2 // after sidebar/messages + borders
+
 	m.channels.SetSize(sidebarWidth, topHeight)
 	m.messages.SetSize(msgWidth, topHeight)
 	m.input.SetSize(m.width - 2)
+}
+
+// handleMouse processes mouse click and scroll events.
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	x, y := msg.X, msg.Y
+
+	switch msg.Action {
+	case tea.MouseActionPress:
+		if msg.Button == tea.MouseButtonLeft {
+			// Determine which panel was clicked based on layout.
+			// Check input bar first since it spans full width.
+			if y >= m.inputTop {
+				m.focus = types.FocusInput
+				m.updateFocus()
+			} else if x < m.sidebarWidth+1 {
+				// Sidebar clicked.
+				m.focus = types.FocusSidebar
+				m.updateFocus()
+
+				ch, isChannel, headerKey := m.channels.SelectByRow(y)
+				if headerKey != "" {
+					// Header clicked — toggle collapse.
+					m.channels.ToggleCollapse(headerKey)
+					m.channels.buildRows()
+					m.cfg.CollapsedGroups = m.channels.CollapsedGroups()
+					go config.Save(m.cfg)
+				} else if isChannel && ch != nil {
+					m.currentCh = ch
+					m.channels.ClearUnread(ch.ID)
+					m.messages.SetChannelName("#" + m.channels.displayName(*ch))
+					m.saveLastChannel(ch.ID)
+					return m, loadHistoryCmd(m.slackSvc, ch.ID)
+				}
+			} else {
+				// Messages area clicked.
+				m.focus = types.FocusMessages
+				m.updateFocus()
+
+				// Check if a file was clicked.
+				file := m.messages.FileAtClick(y)
+				if file != nil {
+					downloadPath := m.cfg.DownloadPath
+					if downloadPath == "" {
+						home, _ := os.UserHomeDir()
+						downloadPath = filepath.Join(home, "Downloads")
+					}
+					destPath := filepath.Join(downloadPath, file.Name)
+					m.warning = fmt.Sprintf("Downloading %s...", file.Name)
+					return m, downloadFileCmd(m.slackSvc, *file, destPath)
+				}
+			}
+
+		} else if msg.Button == tea.MouseButtonWheelUp {
+			lines := 3
+			if msg.Ctrl || msg.Shift {
+				lines = 15
+			}
+			if m.focus == types.FocusMessages {
+				for i := 0; i < lines; i++ {
+					m.messages, _ = m.messages.Update(tea.KeyMsg{Type: tea.KeyUp})
+				}
+				return m, nil
+			} else if m.focus == types.FocusSidebar {
+				m.channels.selected -= lines
+				if m.channels.selected < 0 {
+					m.channels.selected = 0
+				}
+				m.channels.ensureVisible()
+			}
+
+		} else if msg.Button == tea.MouseButtonWheelDown {
+			lines := 3
+			if msg.Ctrl || msg.Shift {
+				lines = 15
+			}
+			if m.focus == types.FocusMessages {
+				for i := 0; i < lines; i++ {
+					m.messages, _ = m.messages.Update(tea.KeyMsg{Type: tea.KeyDown})
+				}
+				return m, nil
+			} else if m.focus == types.FocusSidebar {
+				m.channels.selected += lines
+				if m.channels.selected >= len(m.channels.rows) {
+					m.channels.selected = len(m.channels.rows) - 1
+				}
+				m.channels.ensureVisible()
+			}
+		}
+	}
+
+	return m, nil
 }
 
 func (m *Model) cycleFocusForward() {
