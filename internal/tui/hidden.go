@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,9 +26,41 @@ func NewHiddenChannelsModel(channels []types.Channel, aliases map[string]string)
 	if aliases == nil {
 		aliases = make(map[string]string)
 	}
+
+	// Sort by type: public, private, DM, group.
+	sort.SliceStable(channels, func(i, j int) bool {
+		return hiddenSortOrder(channels[i]) < hiddenSortOrder(channels[j])
+	})
+
 	return HiddenChannelsModel{
 		channels: channels,
 		aliases:  aliases,
+	}
+}
+
+func hiddenSortOrder(ch types.Channel) int {
+	switch {
+	case !ch.IsPrivate && !ch.IsDM && !ch.IsGroup:
+		return 0
+	case ch.IsPrivate && !ch.IsDM && !ch.IsGroup:
+		return 1
+	case ch.IsDM:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func hiddenSectionHeader(ch types.Channel) string {
+	switch {
+	case ch.IsDM:
+		return "@ Direct Messages"
+	case ch.IsGroup:
+		return "Group Chats"
+	case ch.IsPrivate:
+		return "# Private"
+	default:
+		return "# Channels"
 	}
 }
 
@@ -53,7 +86,6 @@ func (m HiddenChannelsModel) Update(msg tea.Msg) (HiddenChannelsModel, tea.Cmd) 
 		case "enter":
 			if len(m.channels) > 0 && m.selected < len(m.channels) {
 				ch := m.channels[m.selected]
-				// Remove from local list
 				m.channels = append(m.channels[:m.selected], m.channels[m.selected+1:]...)
 				if m.selected >= len(m.channels) && m.selected > 0 {
 					m.selected--
@@ -86,7 +118,18 @@ func (m HiddenChannelsModel) View() string {
 	if len(m.channels) == 0 {
 		b.WriteString(dimStyle.Render("  No hidden channels"))
 	} else {
+		lastHeader := ""
 		for i, ch := range m.channels {
+			header := hiddenSectionHeader(ch)
+			if header != lastHeader {
+				if lastHeader != "" {
+					b.WriteString("\n")
+				}
+				b.WriteString(SectionHeaderStyle.Render(header))
+				b.WriteString("\n")
+				lastHeader = header
+			}
+
 			name := ch.Name
 			if alias, ok := m.aliases[ch.ID]; ok && alias != "" {
 				name = alias

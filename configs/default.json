@@ -7,7 +7,7 @@
   "sidebar_width": 30,
   "timestamp_format": "15:04",
   "notifications": false,
-  "poll_interval": 10,
+  "poll_interval": 5,
   "channel_sort_by": "type",
   "channel_sort_asc": true,
   "hidden_channels": [],

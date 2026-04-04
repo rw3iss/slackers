@@ -26,8 +26,9 @@ type SocketService interface {
 
 // socketClient implements SocketService using Slack's Socket Mode.
 type socketClient struct {
-	botToken string
-	appToken string
+	botToken   string
+	appToken   string
+	lastStatus types.ConnectionStatus
 }
 
 // NewSocketClient creates a new SocketService for real-time event listening.
@@ -84,15 +85,24 @@ func (s *socketClient) handleEvent(client *socketmode.Client, evt socketmode.Eve
 		s.handleEventsAPI(eventsAPIEvent, eventCh)
 
 	case socketmode.EventTypeConnected:
-		eventCh <- SocketEvent{Type: "status", Status: types.StatusConnected}
+		if s.lastStatus != types.StatusConnected {
+			s.lastStatus = types.StatusConnected
+			eventCh <- SocketEvent{Type: "status", Status: types.StatusConnected}
+		}
 
 	case socketmode.EventTypeConnecting:
-		eventCh <- SocketEvent{Type: "status", Status: types.StatusConnecting}
+		// Only show "connecting" on initial connect, not during keepalive reconnects.
+		if s.lastStatus == types.StatusDisconnected || s.lastStatus == 0 {
+			s.lastStatus = types.StatusConnecting
+			eventCh <- SocketEvent{Type: "status", Status: types.StatusConnecting}
+		}
 
 	case socketmode.EventTypeDisconnect:
+		s.lastStatus = types.StatusDisconnected
 		eventCh <- SocketEvent{Type: "status", Status: types.StatusDisconnected}
 
 	case socketmode.EventTypeConnectionError:
+		s.lastStatus = types.StatusError
 		eventCh <- SocketEvent{Type: "status", Status: types.StatusError}
 
 	default:

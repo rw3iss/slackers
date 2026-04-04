@@ -45,7 +45,7 @@ func defaults() *Config {
 	return &Config{
 		SidebarWidth:    25,
 		TimestampFormat: "15:04",
-		PollInterval:    10,
+		PollInterval:    5,
 		ConfigPath:      DefaultConfigPath(),
 	}
 }
