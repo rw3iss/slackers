@@ -103,7 +103,7 @@ func RunOAuthFlow(cfg OAuthConfig) (*OAuthResult, error) {
 	var listener net.Listener
 	var port int
 	for _, p := range ports {
-		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		l, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", p))
 		if err == nil {
 			listener = l
 			port = p
@@ -113,7 +113,7 @@ func RunOAuthFlow(cfg OAuthConfig) (*OAuthResult, error) {
 	if listener == nil {
 		return nil, fmt.Errorf("failed to start local server: ports %v all in use", ports)
 	}
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
 
 	// Channel to receive the auth code.
 	codeCh := make(chan string, 1)

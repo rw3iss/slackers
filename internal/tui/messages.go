@@ -60,6 +60,18 @@ func (m *MessageViewModel) SetMessages(msgs []types.Message) {
 	}
 }
 
+// SetMessagesSilent updates messages without resetting scroll position.
+// Used for background polling updates.
+func (m *MessageViewModel) SetMessagesSilent(msgs []types.Message) {
+	wasAtBottom := m.viewport.AtBottom()
+	m.messages = msgs
+	m.contextMode = false
+	m.rebuildContent()
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
+}
+
 func (m *MessageViewModel) AppendMessage(msg types.Message) {
 	if m.contextMode {
 		return

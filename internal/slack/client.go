@@ -387,54 +387,47 @@ func (c *slackClient) SearchMessages(query, channelID string, limit int) ([]type
 	return results, nil
 }
 
-// CheckNewMessages polls conversations.list and returns channel IDs that have
-// messages newer than the timestamps in lastSeen (keyed by channel ID).
-// This is a single API call that covers all channels.
+// CheckNewMessages checks each channel in lastSeen for new messages by
+// fetching the latest message via conversations.history (limit=1).
+// Returns channel IDs with new messages and a map of all latest timestamps.
 func (c *slackClient) CheckNewMessages(lastSeen map[string]string) ([]string, map[string]string, error) {
+
 	api := c.primary
 	if api == nil {
 		api = c.fallback
 	}
 
-	params := &slack.GetConversationsParameters{
-		Types:           []string{"public_channel", "private_channel", "im", "mpim"},
-		Limit:           200,
-		ExcludeArchived: true,
-	}
-
 	var updated []string
 	allLatest := make(map[string]string)
 
-	for {
-		convs, nextCursor, err := api.GetConversations(params)
+	for channelID, seenTS := range lastSeen {
+		params := &slack.GetConversationHistoryParameters{
+			ChannelID: channelID,
+			Limit:     1,
+		}
+
+		resp, err := api.GetConversationHistory(params)
 		if err != nil {
+			// Try fallback
 			if c.fallback != nil && api != c.fallback {
-				convs, nextCursor, err = c.fallback.GetConversations(params)
+				resp, err = c.fallback.GetConversationHistory(params)
 			}
 			if err != nil {
-				return nil, nil, fmt.Errorf("check new messages: %w", err)
+				// Skip this channel, don't fail the whole poll.
+				continue
 			}
 		}
 
-		for _, conv := range convs {
-			if conv.Latest == nil {
-				continue
-			}
-			latestTS := conv.Latest.Timestamp
-			if latestTS == "" {
-				continue
-			}
-			allLatest[conv.ID] = latestTS
-			seen, ok := lastSeen[conv.ID]
-			if !ok || latestTS > seen {
-				updated = append(updated, conv.ID)
-			}
+		if len(resp.Messages) == 0 {
+			continue
 		}
 
-		if nextCursor == "" {
-			break
+		latestTS := resp.Messages[0].Timestamp
+		allLatest[channelID] = latestTS
+
+		if latestTS > seenTS {
+			updated = append(updated, channelID)
 		}
-		params.Cursor = nextCursor
 	}
 
 	return updated, allLatest, nil

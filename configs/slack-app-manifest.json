@@ -12,9 +12,9 @@
   },
   "oauth_config": {
     "redirect_urls": [
-      "http://127.0.0.1:9876/callback",
-      "http://127.0.0.1:9877/callback",
-      "http://127.0.0.1:9878/callback"
+      "http://localhost:9876/callback",
+      "http://localhost:9877/callback",
+      "http://localhost:9878/callback"
     ],
     "scopes": {
       "bot": [

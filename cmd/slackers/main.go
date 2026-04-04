@@ -1,11 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rw3iss/slackers/internal/auth"
@@ -15,7 +20,23 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "0.2.0"
+// resetTerminal forces the terminal back to a sane state.
+func resetTerminal() {
+	// Exit alternate screen buffer.
+	fmt.Fprint(os.Stdout, "\033[?1049l")
+	// Show cursor.
+	fmt.Fprint(os.Stdout, "\033[?25h")
+	// Reset all attributes (colors, bold, etc).
+	fmt.Fprint(os.Stdout, "\033[0m")
+	// Reset title.
+	fmt.Fprint(os.Stdout, "\033]0;\a")
+	// Disable mouse tracking (in case it was enabled).
+	fmt.Fprint(os.Stdout, "\033[?1000l\033[?1002l\033[?1003l\033[?1006l")
+	// Clear line.
+	fmt.Fprint(os.Stdout, "\r\n")
+}
+
+var version = "0.3.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "slackers",
@@ -52,6 +73,18 @@ var rootCmd = &cobra.Command{
 				return setupErr
 			}
 		}
+
+		// Ensure terminal is restored no matter how we exit.
+		defer resetTerminal()
+
+		// Catch signals to reset terminal before exit.
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		go func() {
+			<-sigCh
+			resetTerminal()
+			os.Exit(0)
+		}()
 
 		slackSvc := slack.NewSlackClient(cfg.BotToken, cfg.UserToken)
 		socketSvc := slack.NewSocketClient(cfg.BotToken, cfg.AppToken)
@@ -110,6 +143,7 @@ via flags. The Slack app admin can share these with teammates.`,
 
 		clientID, _ := cmd.Flags().GetString("client-id")
 		clientSecret, _ := cmd.Flags().GetString("client-secret")
+		appToken, _ := cmd.Flags().GetString("app-token")
 
 		if clientID != "" {
 			cfg.ClientID = clientID
@@ -117,6 +151,62 @@ via flags. The Slack app admin can share these with teammates.`,
 		if clientSecret != "" {
 			cfg.ClientSecret = clientSecret
 		}
+		if appToken != "" {
+			cfg.AppToken = appToken
+		}
+
+		if err := runOAuthFlow(cfg); err != nil {
+			return err
+		}
+
+		return nil
+	},
+}
+
+var joinCmd = &cobra.Command{
+	Use:   "join <team-config-url>",
+	Short: "Join a workspace using a team config URL",
+	Long: `One-command onboarding for teammates. The workspace admin hosts a small
+JSON config file containing the Client ID, Client Secret, and App-Level Token.
+This command fetches that config, then opens the browser for OAuth authorization.
+
+Example:
+  slackers join https://example.com/slackers-team.json
+  slackers join https://gist.githubusercontent.com/user/abc123/raw/team.json
+
+The team config JSON format:
+  {
+    "client_id": "1234567890.1234567890",
+    "client_secret": "abc123...",
+    "app_token": "xapp-..."
+  }`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		teamURL := args[0]
+
+		cfg, err := config.Load(config.DefaultConfigPath())
+		if err != nil {
+			cfg, _ = config.Load(config.DefaultConfigPath())
+		}
+
+		fmt.Printf("Fetching team config from %s...\n", teamURL)
+
+		teamCfg, err := fetchTeamConfig(teamURL)
+		if err != nil {
+			return fmt.Errorf("failed to fetch team config: %w", err)
+		}
+
+		if teamCfg.ClientID != "" {
+			cfg.ClientID = teamCfg.ClientID
+		}
+		if teamCfg.ClientSecret != "" {
+			cfg.ClientSecret = teamCfg.ClientSecret
+		}
+		if teamCfg.AppToken != "" {
+			cfg.AppToken = teamCfg.AppToken
+		}
+
+		fmt.Println("Team config loaded.")
 
 		if err := runOAuthFlow(cfg); err != nil {
 			return err
@@ -198,6 +288,7 @@ func init() {
 
 	loginCmd.Flags().String("client-id", "", "Slack app Client ID")
 	loginCmd.Flags().String("client-secret", "", "Slack app Client Secret")
+	loginCmd.Flags().String("app-token", "", "Slack app-level token (xapp-...)")
 
 	scriptsCmd.AddCommand(scriptsInstallCmd)
 	scriptsCmd.AddCommand(scriptsUninstallCmd)
@@ -205,6 +296,7 @@ func init() {
 
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(loginCmd)
+	rootCmd.AddCommand(joinCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(scriptsCmd)
@@ -218,6 +310,17 @@ func main() {
 
 // runSetupFlow presents the user with a choice between manual and OAuth setup.
 func runSetupFlow(cfg *config.Config) error {
+	// Ensure Ctrl-C exits during setup prompts.
+	setupSig := make(chan os.Signal, 1)
+	signal.Notify(setupSig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-setupSig
+		fmt.Println("\nSetup cancelled.")
+		os.Exit(0)
+	}()
+	defer signal.Stop(setupSig)
+
+	fmt.Println(tui.BannerText())
 	fmt.Println("How would you like to set up Slackers?")
 	fmt.Println()
 	fmt.Println("  1) Manual  - paste tokens directly")
@@ -305,6 +408,42 @@ func runOAuthFlow(cfg *config.Config) error {
 	fmt.Println()
 	fmt.Println("Setup complete! Run 'slackers' to start the TUI.")
 	return nil
+}
+
+// teamConfig is the JSON format for team config URLs.
+type teamConfig struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	AppToken     string `json:"app_token"`
+}
+
+// fetchTeamConfig downloads and parses a team config JSON file from a URL.
+func fetchTeamConfig(url string) (*teamConfig, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	var tc teamConfig
+	if err := json.Unmarshal(body, &tc); err != nil {
+		return nil, fmt.Errorf("invalid team config JSON: %w", err)
+	}
+
+	if tc.ClientID == "" || tc.ClientSecret == "" {
+		return nil, fmt.Errorf("team config must include client_id and client_secret")
+	}
+
+	return &tc, nil
 }
 
 func maskToken(token string) string {

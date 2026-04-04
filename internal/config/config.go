@@ -21,6 +21,7 @@ type Config struct {
 	ChannelAliases  map[string]string `json:"channel_aliases,omitempty"`
 	ChannelSortBy   string            `json:"channel_sort_by,omitempty"`
 	ChannelSortAsc  *bool             `json:"channel_sort_asc,omitempty"`
+	LastChannelID   string            `json:"last_channel_id,omitempty"`
 	PollInterval    int               `json:"poll_interval,omitempty"`
 	Notifications   bool              `json:"notifications,omitempty"`
 	ConfigPath      string            `json:"-"`

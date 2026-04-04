@@ -39,6 +39,9 @@ type ConnStatusMsg struct {
 }
 type ErrMsg struct{ Err error }
 
+// SilentHistoryMsg is like HistoryLoadedMsg but doesn't change focus or scroll position.
+type SilentHistoryMsg struct{ Messages []types.Message }
+
 // ContextHistoryMsg carries messages around a search result for context viewing.
 type ContextHistoryMsg struct {
 	Messages    []types.Message
@@ -91,9 +94,10 @@ type Model struct {
 	eventChan chan slackpkg.SocketEvent
 
 	// Layout
-	width  int
-	height int
-	ready  bool
+	width   int
+	height  int
+	ready   bool
+	splash  bool
 }
 
 // NewModel creates a new root TUI model.
@@ -111,6 +115,7 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		users:     make(map[string]types.User),
 		lastSeen:  make(map[string]string),
 		cfg:       cfg,
+		splash:    true,
 		slackSvc:  slackSvc,
 		socketSvc: socketSvc,
 		eventChan: make(chan slackpkg.SocketEvent, 100),
@@ -121,6 +126,7 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		tea.EnterAltScreen,
+		splashTimerCmd(),
 		loadUsersCmd(m.slackSvc),
 		connectSocketCmd(m.socketSvc, m.eventChan),
 		waitForSocketEvent(m.eventChan),
@@ -297,6 +303,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentCh = ch
 				m.channels.ClearUnread(ch.ID)
 				m.messages.SetChannelName("#" + m.channels.displayName(*ch))
+				m.saveLastChannel(ch.ID)
 				return m, loadHistoryCmd(m.slackSvc, ch.ID)
 			}
 			return m, nil
@@ -338,6 +345,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.currentCh = ch
 					m.channels.ClearUnread(ch.ID)
 					m.messages.SetChannelName("#" + ch.Name)
+					m.saveLastChannel(ch.ID)
 					return m, loadHistoryCmd(m.slackSvc, ch.ID)
 				}
 				return m, nil
@@ -376,7 +384,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgSearchSelectMsg:
 		m.overlay = overlayNone
-		// Switch to the target channel if needed.
 		channelName := ""
 		if m.currentCh == nil || m.currentCh.ID != msg.ChannelID {
 			for _, ch := range m.channels.AllChannels() {
@@ -385,6 +392,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.channels.SelectByID(ch.ID)
 					m.channels.ClearUnread(ch.ID)
 					channelName = "#" + m.channels.displayName(ch)
+					m.saveLastChannel(ch.ID)
 					break
 				}
 			}
@@ -414,14 +422,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SearchSelectMsg:
 		m.overlay = overlayNone
-		// Find channel and select it
 		for _, ch := range m.channels.AllChannels() {
 			if ch.ID == msg.ChannelID {
 				m.currentCh = &ch
 				m.channels.SelectByID(ch.ID)
 				m.channels.ClearUnread(ch.ID)
-				m.channels.UnhideChannel(ch.ID) // unhide if hidden
+				m.channels.UnhideChannel(ch.ID)
 				m.messages.SetChannelName("#" + m.channels.displayName(ch))
+				m.saveLastChannel(ch.ID)
 				return m, loadHistoryCmd(m.slackSvc, ch.ID)
 			}
 		}
@@ -464,6 +472,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.channels.SetSort(sortBy, sortAsc)
 		drainWarnings(&m)
+
+		// Restore last viewed channel on first load.
+		if m.currentCh == nil && m.cfg.LastChannelID != "" {
+			for _, ch := range msg.Channels {
+				if ch.ID == m.cfg.LastChannelID {
+					m.currentCh = &ch
+					m.channels.SelectByID(ch.ID)
+					m.messages.SetChannelName("#" + m.channels.displayName(ch))
+					return m, loadHistoryCmd(m.slackSvc, ch.ID)
+				}
+			}
+		}
+		return m, nil
+
+	case SilentHistoryMsg:
+		// Always update the view — the poll already confirmed new messages exist.
+		m.messages.SetMessagesSilent(msg.Messages)
+		if m.currentCh != nil && len(msg.Messages) > 0 {
+			latest := msg.Messages[len(msg.Messages)-1]
+			m.lastSeen[m.currentCh.ID] = fmt.Sprintf("%d.%06d", latest.Timestamp.Unix(), latest.Timestamp.Nanosecond()/1000)
+		}
 		return m, nil
 
 	case HistoryLoadedMsg:
@@ -471,7 +500,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Record the latest message timestamp so the poller won't re-flag this channel.
 		if m.currentCh != nil && len(msg.Messages) > 0 {
 			latest := msg.Messages[len(msg.Messages)-1]
-			m.lastSeen[m.currentCh.ID] = fmt.Sprintf("%d.000000", latest.Timestamp.Unix())
+			m.lastSeen[m.currentCh.ID] = fmt.Sprintf("%d.%06d", latest.Timestamp.Unix(), latest.Timestamp.Nanosecond()/1000)
 		}
 		m.focus = types.FocusInput
 		m.updateFocus()
@@ -522,16 +551,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case PollTickMsg:
+		// Ensure the current channel is always polled even if not yet in lastSeen.
+		if m.currentCh != nil {
+			if _, ok := m.lastSeen[m.currentCh.ID]; !ok {
+				m.lastSeen[m.currentCh.ID] = "0"
+			}
+		}
 		return m, checkNewMessagesCmd(m.slackSvc, m.lastSeen, m.cfg.PollInterval)
 
 	case UnreadChannelsMsg:
-		// Update latest timestamps for "recent" sort.
 		if msg.LatestTS != nil {
 			m.channels.SetLatestTimestamps(msg.LatestTS)
 		}
 		newUnread := 0
+		refreshCurrent := false
 		for _, id := range msg.ChannelIDs {
 			if m.currentCh != nil && id == m.currentCh.ID {
+				refreshCurrent = true
 				continue
 			}
 			m.channels.MarkUnread(id)
@@ -541,7 +577,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			sendNotification("multiple channels", newUnread)
 			setWindowUrgent()
 		}
+		if refreshCurrent && m.currentCh != nil && !m.messages.InContextMode() {
+			return m, tea.Batch(
+				pollTickCmd(m.cfg.PollInterval),
+				silentLoadHistoryCmd(m.slackSvc, m.currentCh.ID),
+			)
+		}
 		return m, pollTickCmd(m.cfg.PollInterval)
+
+	case SplashDoneMsg:
+		m.splash = false
+		return m, nil
 
 	case ErrMsg:
 		m.err = msg.Err
@@ -554,9 +600,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View renders the full TUI layout.
 func (m Model) View() string {
 	if !m.ready {
-		return lipgloss.Place(m.width, m.height,
-			lipgloss.Center, lipgloss.Center,
-			"Loading...")
+		return ""
+	}
+
+	if m.splash {
+		return renderSplash(m.width, m.height)
 	}
 
 	// Render overlays on top
@@ -652,6 +700,12 @@ func (m *Model) cycleFocusBackward() {
 	case types.FocusInput:
 		m.focus = types.FocusMessages
 	}
+}
+
+// saveLastChannel persists the currently viewed channel ID to config.
+func (m *Model) saveLastChannel(channelID string) {
+	m.cfg.LastChannelID = channelID
+	go config.Save(m.cfg) // fire-and-forget, don't block the UI
 }
 
 func drainWarnings(m *Model) {
@@ -789,6 +843,16 @@ func loadMoreContextCmd(svc slackpkg.SlackService, channelID, oldestTS string) t
 			}
 		}
 		return MoreContextLoadedMsg{Messages: filtered}
+	}
+}
+
+func silentLoadHistoryCmd(svc slackpkg.SlackService, channelID string) tea.Cmd {
+	return func() tea.Msg {
+		msgs, err := svc.FetchHistory(channelID, 50)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return SilentHistoryMsg{Messages: msgs}
 	}
 }
 
