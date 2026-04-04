@@ -430,7 +430,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.saveLastChannel(ch.ID)
 					return m, loadHistoryCmd(m.slackSvc, ch.ID)
 				}
-				return m, nil
+				// Header selected — fall through to channel list Update for collapse toggle.
 			}
 			if m.focus == types.FocusInput {
 				text := m.input.Value()
@@ -501,6 +501,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateFocus()
 		return m, nil
 
+	case ToggleCollapseMsg:
+		m.cfg.CollapsedGroups = m.channels.CollapsedGroups()
+		go config.Save(m.cfg)
+		return m, nil
+
 	case SettingsSavedMsg:
 		m.applySettings()
 		return m, nil
@@ -547,6 +552,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.channels.SetChannels(msg.Channels)
 		m.channels.SetHiddenChannels(m.cfg.HiddenChannels)
 		m.channels.SetAliases(m.cfg.ChannelAliases)
+		m.channels.SetCollapsedGroups(m.cfg.CollapsedGroups)
 		sortAsc := true
 		if m.cfg.ChannelSortAsc != nil {
 			sortAsc = *m.cfg.ChannelSortAsc
@@ -908,7 +914,7 @@ func (m Model) renderStatusBar() string {
 		extra += " | " + StatusDisconnected.Render(m.err.Error())
 	}
 
-	hints := HelpStyle.Render("Ctrl-H: help | Ctrl-S: settings")
+	hints := HelpStyle.Render("Ctrl-H: help | Ctrl-S: settings | Ctrl-C: quit")
 
 	status := fmt.Sprintf(" %s | %s | %s%s",
 		StatusBarStyle.Render(team), connStr, hints, extra)

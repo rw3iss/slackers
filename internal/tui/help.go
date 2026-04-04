@@ -14,27 +14,36 @@ var helpSections = []struct {
 		title: "Navigation",
 		items: []struct{ key, desc string }{
 			{"Tab / Shift-Tab", "Cycle focus between panels"},
+			{"Esc", "Toggle between sidebar and input"},
 			{"Up / Down / k / j", "Navigate channels or scroll messages"},
+			{"Up / Down (input)", "Browse sent message history"},
 			{"PgUp / PgDn", "Scroll messages by page"},
 			{"Ctrl-U / Ctrl-D", "Half-page scroll"},
 			{"Home / End", "Jump to top / bottom of messages"},
 		},
 	},
 	{
-		title: "Actions",
+		title: "Messages & Files",
 		items: []struct{ key, desc string }{
 			{"Enter", "Select channel (sidebar) or send message (input)"},
 			{"i  or  /", "Focus the message input"},
-			{"Esc", "Cancel input / return to sidebar"},
 			{"Ctrl-F", "Search messages (Tab toggles scope)"},
-			{"Ctrl-U", "Attach file to send"},
-			{"Ctrl-R", "Refresh channel list"},
+			{"Ctrl-U", "Attach file to send (opens file browser)"},
+			{"f (messages)", "Toggle file select mode"},
+			{"Ctrl-Up", "Enter file select mode from anywhere"},
+			{"Ctrl-Down", "Exit file select, focus input"},
+		},
+	},
+	{
+		title: "Channels",
+		items: []struct{ key, desc string }{
 			{"Ctrl-K", "Search and jump to a channel"},
-			{"Ctrl-X", "Hide selected channel from sidebar"},
-			{"Ctrl-G", "View and unhide hidden channels"},
-			{"Ctrl-O", "Toggle hidden channels visible in sidebar"},
-			{"Ctrl-A", "Rename/alias selected channel"},
 			{"Ctrl-N", "Jump to next unread channel"},
+			{"Ctrl-R", "Refresh channel list"},
+			{"Ctrl-X", "Hide selected channel"},
+			{"Ctrl-G", "View and unhide hidden channels"},
+			{"Ctrl-O", "Toggle hidden channels visible"},
+			{"Ctrl-A", "Rename/alias selected channel"},
 		},
 	},
 	{
@@ -48,10 +57,13 @@ var helpSections = []struct {
 }
 
 func renderHelp(width, height int) string {
+	boxWidth := min(85, width-4) - 8 // account for border + padding
+
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(ColorPrimary).
-		MarginBottom(1)
+		Width(boxWidth).
+		Align(lipgloss.Center)
 
 	sectionTitleStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -69,9 +81,16 @@ func renderHelp(width, height int) string {
 		Foreground(ColorMuted).
 		Italic(true)
 
+	creditStyle := lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Width(boxWidth).
+		Align(lipgloss.Center)
+
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("Slackers Help"))
+	b.WriteString(titleStyle.Render("Slackers"))
+	b.WriteString("\n")
+	b.WriteString(creditStyle.Render(" (by Wet Dream)"))
 	b.WriteString("\n\n")
 
 	for _, section := range helpSections {

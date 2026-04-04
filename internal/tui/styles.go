@@ -25,7 +25,7 @@ var (
 	ChannelItemStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	ChannelSelectedStyle = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
 	ChannelUnreadStyle   = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	SectionHeaderStyle   = lipgloss.NewStyle().Foreground(ColorMuted).Bold(true).MarginTop(1)
+	SectionHeaderStyle   = lipgloss.NewStyle().Foreground(ColorMuted).Bold(true)
 
 	// Messages
 	MessagePaneStyle = lipgloss.NewStyle().

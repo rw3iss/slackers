@@ -1,23 +1,15 @@
-# Slackers
+```
+ ██████╗ ██╗      ██████╗  ██████╗██╗  ██╗███████╗██████╗  ██████╗
+██╔════╝ ██║     ██╔═══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗██╔════╝
+╚█████╗  ██║     ████████║██║     █████╔╝ █████╗  ██████╔╝╚█████╗
+ ╚═══██╗ ██║     ██╔═══██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗ ╚═══██╗
+██████╔╝ ███████╗██║   ██║╚██████╗██║  ██╗███████╗██║  ██║██████╔╝
+╚═════╝  ╚══════╝╚═╝   ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝
+```
 
 A lightweight, terminal-based Slack client.
 
-```
-+---------------------+------------------------------------------+
-|  # Channels         |  #general                    Today        |
-|  > #general         |  -- Apr 3, 2026 --                        |
-|    #engineering     |                                           |
-|    #random          |  alice  Apr 3 10:32                       |
-|                     |    Hey everyone, standup in 5 min          |
-|  @ Direct Messages  |                                           |
-|    alice            |  bob  Apr 3 10:33                          |
-|    bob              |    Thanks for the heads up!                |
-|                     |                                           |
-+---------------------+------------------------------------------+
-| > Type a message...                                             |
-+---------------------+------------------------------------------+
-  slackers | Connected | Ctrl-H: help | Ctrl-S: settings
-```
+<a href=".github/screenshot.png"><img src=".github/screenshot.png" alt="Slackers screenshot" width="600"></a>
 
 ## Features
 

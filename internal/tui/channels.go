@@ -18,16 +18,26 @@ const (
 	SortByRecent  = "recent"  // most recent message first (falls back to type)
 )
 
+// sidebarRow represents either a section header or a channel in the sidebar.
+type sidebarRow struct {
+	isHeader    bool
+	headerKey   string // "channels", "private", "dm", "group"
+	headerLabel string
+	channel     *types.Channel
+}
+
 // ChannelListModel represents the sidebar channel list.
 type ChannelListModel struct {
 	channels    []types.Channel
+	rows        []sidebarRow // computed: headers + channels interleaved
 	selected    int
-	scrollOff   int // scroll offset (first visible line)
+	scrollOff   int
 	unread      map[string]bool
 	hidden      map[string]bool
-	showHidden  bool // toggle to show hidden channels inline
+	showHidden  bool
 	aliases     map[string]string
-	latestTS    map[string]string // channelID -> latest message timestamp for "recent" sort
+	latestTS    map[string]string
+	collapsed   map[string]bool // headerKey -> collapsed
 	sortBy      string
 	sortAsc     bool
 	focused     bool
@@ -38,21 +48,19 @@ type ChannelListModel struct {
 // NewChannelList creates a new channel list model.
 func NewChannelList() ChannelListModel {
 	return ChannelListModel{
-		unread:   make(map[string]bool),
-		hidden:   make(map[string]bool),
-		aliases:  make(map[string]string),
-		latestTS: make(map[string]string),
-		sortBy:   SortByType,
-		sortAsc:  true,
+		unread:    make(map[string]bool),
+		hidden:    make(map[string]bool),
+		aliases:   make(map[string]string),
+		latestTS:  make(map[string]string),
+		collapsed: make(map[string]bool),
+		sortBy:    SortByType,
+		sortAsc:   true,
 	}
 }
 
 func (m *ChannelListModel) SetChannels(channels []types.Channel) {
 	m.channels = channels
-	visible := m.visibleChannels()
-	if m.selected >= len(visible) {
-		m.selected = 0
-	}
+	m.buildRows()
 }
 
 func (m *ChannelListModel) SetSize(w, h int) {
@@ -92,6 +100,31 @@ func (m *ChannelListModel) UpdateLatestTimestamp(channelID, ts string) {
 	m.latestTS[channelID] = ts
 }
 
+// SetCollapsedGroups sets which section groups are collapsed.
+func (m *ChannelListModel) SetCollapsedGroups(keys []string) {
+	m.collapsed = make(map[string]bool, len(keys))
+	for _, k := range keys {
+		m.collapsed[k] = true
+	}
+	m.buildRows()
+}
+
+// CollapsedGroups returns the list of collapsed section keys.
+func (m *ChannelListModel) CollapsedGroups() []string {
+	var keys []string
+	for k, v := range m.collapsed {
+		if v {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+// ToggleCollapse toggles a section header's collapsed state.
+func (m *ChannelListModel) ToggleCollapse(headerKey string) {
+	m.collapsed[headerKey] = !m.collapsed[headerKey]
+}
+
 func (m *ChannelListModel) SetSort(sortBy string, ascending bool) {
 	m.sortBy = sortBy
 	m.sortAsc = ascending
@@ -100,13 +133,7 @@ func (m *ChannelListModel) SetSort(sortBy string, ascending bool) {
 // ToggleShowHidden toggles whether hidden channels are shown inline.
 func (m *ChannelListModel) ToggleShowHidden() {
 	m.showHidden = !m.showHidden
-	visible := m.visibleChannels()
-	if m.selected >= len(visible) {
-		m.selected = len(visible) - 1
-	}
-	if m.selected < 0 {
-		m.selected = 0
-	}
+	m.buildRows()
 }
 
 // ShowingHidden returns whether hidden channels are currently shown.
@@ -116,14 +143,12 @@ func (m *ChannelListModel) ShowingHidden() bool {
 
 func (m *ChannelListModel) HideChannel(id string) {
 	m.hidden[id] = true
-	visible := m.visibleChannels()
-	if m.selected >= len(visible) && m.selected > 0 {
-		m.selected = len(visible) - 1
-	}
+	m.buildRows()
 }
 
 func (m *ChannelListModel) UnhideChannel(id string) {
 	delete(m.hidden, id)
+	m.buildRows()
 }
 
 func (m *ChannelListModel) HiddenChannelIDs() []string {
@@ -156,48 +181,11 @@ func (m *ChannelListModel) ClearUnread(channelID string) {
 	delete(m.unread, channelID)
 }
 
-func (m *ChannelListModel) SelectedChannel() *types.Channel {
-	visible := m.visibleChannels()
-	if len(visible) == 0 || m.selected < 0 || m.selected >= len(visible) {
-		return nil
-	}
-	return &visible[m.selected]
-}
-
-func (m *ChannelListModel) SelectByID(id string) {
-	visible := m.visibleChannels()
-	for i, ch := range visible {
-		if ch.ID == id {
-			m.selected = i
-			return
-		}
-	}
-}
-
 func (m *ChannelListModel) displayName(ch types.Channel) string {
 	if alias, ok := m.aliases[ch.ID]; ok && alias != "" {
 		return alias
 	}
 	return ch.Name
-}
-
-// NextUnreadChannel returns the next unread channel after the current selection,
-// wrapping around. Returns nil if no unread channels exist.
-func (m *ChannelListModel) NextUnreadChannel() *types.Channel {
-	visible := m.visibleChannels()
-	if len(visible) == 0 {
-		return nil
-	}
-	n := len(visible)
-	for i := 1; i <= n; i++ {
-		idx := (m.selected + i) % n
-		if m.unread[visible[idx].ID] {
-			m.selected = idx
-			m.ensureVisible()
-			return &visible[idx]
-		}
-	}
-	return nil
 }
 
 // visibleChannels returns channels in display order, respecting hide/sort.
@@ -254,6 +242,104 @@ func (m *ChannelListModel) visibleChannels() []types.Channel {
 	return filtered
 }
 
+func sectionKey(ch types.Channel) string {
+	switch {
+	case ch.IsDM:
+		return "dm"
+	case ch.IsGroup:
+		return "group"
+	case ch.IsPrivate:
+		return "private"
+	default:
+		return "channels"
+	}
+}
+
+func sectionLabel(key string) string {
+	switch key {
+	case "channels":
+		return "# Channels"
+	case "private":
+		return "# Private"
+	case "dm":
+		return "@ Direct Messages"
+	case "group":
+		return "Group Chats"
+	}
+	return key
+}
+
+// buildRows constructs the interleaved list of headers and channels.
+func (m *ChannelListModel) buildRows() {
+	visible := m.visibleChannels()
+	m.rows = nil
+
+	prevKey := ""
+	for i := range visible {
+		ch := visible[i]
+		key := sectionKey(ch)
+		if key != prevKey {
+			m.rows = append(m.rows, sidebarRow{
+				isHeader:    true,
+				headerKey:   key,
+				headerLabel: sectionLabel(key),
+			})
+			prevKey = key
+		}
+		if !m.collapsed[key] {
+			chCopy := ch
+			m.rows = append(m.rows, sidebarRow{channel: &chCopy})
+		}
+	}
+
+	if m.selected >= len(m.rows) {
+		m.selected = len(m.rows) - 1
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+}
+
+// SelectedChannel returns the channel at the current selection, or nil if a header is selected.
+func (m *ChannelListModel) SelectedChannel() *types.Channel {
+	if m.selected < 0 || m.selected >= len(m.rows) {
+		return nil
+	}
+	row := m.rows[m.selected]
+	if row.isHeader {
+		return nil
+	}
+	return row.channel
+}
+
+// SelectByID moves the cursor to the channel with the given ID.
+func (m *ChannelListModel) SelectByID(id string) {
+	for i, row := range m.rows {
+		if !row.isHeader && row.channel != nil && row.channel.ID == id {
+			m.selected = i
+			return
+		}
+	}
+}
+
+// NextUnreadChannel returns the next unread channel after the current selection.
+func (m *ChannelListModel) NextUnreadChannel() *types.Channel {
+	if len(m.rows) == 0 {
+		return nil
+	}
+	n := len(m.rows)
+	for i := 1; i <= n; i++ {
+		idx := (m.selected + i) % n
+		row := m.rows[idx]
+		if !row.isHeader && row.channel != nil && m.unread[row.channel.ID] {
+			m.selected = idx
+			m.ensureVisible()
+			return row.channel
+		}
+	}
+	return nil
+}
+
 func channelSortOrder(ch types.Channel) int {
 	switch {
 	case !ch.IsPrivate && !ch.IsDM && !ch.IsGroup:
@@ -267,6 +353,9 @@ func channelSortOrder(ch types.Channel) int {
 	}
 }
 
+// ToggleCollapseMsg signals the model to persist collapsed state.
+type ToggleCollapseMsg struct{}
+
 // Update handles key events when focused.
 func (m ChannelListModel) Update(msg tea.Msg) (ChannelListModel, tea.Cmd) {
 	if !m.focused {
@@ -274,8 +363,7 @@ func (m ChannelListModel) Update(msg tea.Msg) (ChannelListModel, tea.Cmd) {
 	}
 
 	km := DefaultKeyMap()
-	visible := m.visibleChannels()
-	total := len(visible)
+	total := len(m.rows)
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -302,103 +390,72 @@ func (m ChannelListModel) Update(msg tea.Msg) (ChannelListModel, tea.Cmd) {
 			m.selected = 0
 		case key.Matches(msg, km.End):
 			m.selected = total - 1
+
+		case key.Matches(msg, km.Enter), msg.String() == " ":
+			// If a header is selected, toggle collapse.
+			if m.selected >= 0 && m.selected < len(m.rows) && m.rows[m.selected].isHeader {
+				hk := m.rows[m.selected].headerKey
+				m.ToggleCollapse(hk)
+				m.buildRows()
+				return m, func() tea.Msg { return ToggleCollapseMsg{} }
+			}
 		}
 	}
 
-	// Keep selection in view
 	m.ensureVisible()
-
 	return m, nil
 }
 
-// ensureVisible adjusts scrollOff so the selected item is visible.
 func (m *ChannelListModel) ensureVisible() {
-	viewHeight := m.height - 2 // account for border/padding
+	viewHeight := m.height - 2
 	if viewHeight < 1 {
 		viewHeight = 1
 	}
-
-	// Account for section headers in line count
-	// Approximate: selected item's line position = selected + number_of_headers_before_it
-	linePos := m.selectedLinePos()
-
-	if linePos < m.scrollOff {
-		m.scrollOff = linePos
+	if m.selected < m.scrollOff {
+		m.scrollOff = m.selected
 	}
-	if linePos >= m.scrollOff+viewHeight {
-		m.scrollOff = linePos - viewHeight + 1
+	if m.selected >= m.scrollOff+viewHeight {
+		m.scrollOff = m.selected - viewHeight + 1
 	}
 	if m.scrollOff < 0 {
 		m.scrollOff = 0
 	}
 }
 
-// selectedLinePos returns the approximate line position of the selected item
-// including section headers.
-func (m *ChannelListModel) selectedLinePos() int {
-	visible := m.visibleChannels()
-	linePos := 0
-	idx := 0
-	prevType := -1
-
-	for _, ch := range visible {
-		t := channelSortOrder(ch)
-		if t != prevType {
-			if linePos > 0 {
-				linePos++ // blank line / header
-			}
-			linePos++ // header line
-			prevType = t
-		}
-		if idx == m.selected {
-			return linePos
-		}
-		linePos++
-		idx++
-	}
-	return linePos
-}
-
 // View renders the channel list.
 func (m ChannelListModel) View() string {
-	visible := m.visibleChannels()
-
-	// Build all lines with section headers
-	type lineItem struct {
-		text    string
-		isHeader bool
-	}
-	var lines []lineItem
-
-	prevType := -1
-	idx := 0
 	maxNameLen := m.width - 6
 
-	for _, ch := range visible {
-		t := channelSortOrder(ch)
-		if t != prevType {
-			var header string
-			switch t {
-			case 0:
-				header = "# Channels"
-			case 1:
-				header = "# Private"
-			case 2:
-				header = "@ Direct Messages"
-			case 3:
-				header = "Group Chats"
-			}
-			lines = append(lines, lineItem{text: SectionHeaderStyle.Render(header), isHeader: true})
-			prevType = t
-		}
+	// Build display lines from rows.
+	type displayLine struct {
+		text string
+	}
+	var lines []displayLine
 
-		isHidden := m.hidden[ch.ID]
-		name := m.renderItem(ch, idx, maxNameLen, isHidden)
-		lines = append(lines, lineItem{text: name})
-		idx++
+	for i, row := range m.rows {
+		if row.isHeader {
+			// Add blank line before headers (except the first).
+			if i > 0 {
+				lines = append(lines, displayLine{text: ""})
+			}
+			arrow := "▼"
+			if m.collapsed[row.headerKey] {
+				arrow = "►"
+			}
+			label := arrow + " " + row.headerLabel
+			if i == m.selected {
+				lines = append(lines, displayLine{text: ChannelSelectedStyle.Render("> " + label)})
+			} else {
+				lines = append(lines, displayLine{text: SectionHeaderStyle.Render("  " + label)})
+			}
+		} else if row.channel != nil {
+			ch := *row.channel
+			isHidden := m.hidden[ch.ID]
+			lines = append(lines, displayLine{text: m.renderItem(ch, i, maxNameLen, isHidden)})
+		}
 	}
 
-	// Apply scrolling
+	// Apply scrolling.
 	viewHeight := m.height - 2
 	if viewHeight < 1 {
 		viewHeight = 1
@@ -433,9 +490,9 @@ func (m ChannelListModel) View() string {
 		Render(content)
 }
 
-func (m ChannelListModel) renderItem(ch types.Channel, idx int, maxLen int, isHidden bool) string {
+func (m ChannelListModel) renderItem(ch types.Channel, rowIdx int, maxLen int, isHidden bool) string {
 	prefix := "  "
-	if idx == m.selected {
+	if rowIdx == m.selected {
 		prefix = "> "
 	}
 
@@ -454,7 +511,7 @@ func (m ChannelListModel) renderItem(ch types.Channel, idx int, maxLen int, isHi
 
 	var style lipgloss.Style
 	switch {
-	case idx == m.selected:
+	case rowIdx == m.selected:
 		style = ChannelSelectedStyle
 	case m.unread[ch.ID]:
 		name = "* " + name
