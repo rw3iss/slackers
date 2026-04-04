@@ -1,0 +1,111 @@
+{
+  "display_information": {
+    "name": "Slackers TUI",
+    "description": "Terminal-based Slack client",
+    "background_color": "#1a1a2e"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Slackers",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "channels:read",
+        "channels:history",
+        "channels:join",
+        "channels:manage",
+        "groups:read",
+        "groups:history",
+        "groups:write",
+        "im:read",
+        "im:history",
+        "im:write",
+        "mpim:read",
+        "mpim:history",
+        "mpim:write",
+        "chat:write",
+        "chat:write.customize",
+        "chat:write.public",
+        "reactions:read",
+        "reactions:write",
+        "pins:read",
+        "pins:write",
+        "files:read",
+        "files:write",
+        "users:read",
+        "users:read.email",
+        "users.profile:read",
+        "users:write",
+        "bookmarks:read",
+        "bookmarks:write",
+        "usergroups:read",
+        "usergroups:write",
+        "team:read",
+        "emoji:read",
+        "commands"
+      ],
+      "user": [
+        "channels:read",
+        "channels:history",
+        "channels:write",
+        "groups:read",
+        "groups:history",
+        "im:read",
+        "im:history",
+        "mpim:read",
+        "mpim:history",
+        "chat:write",
+        "reactions:read",
+        "reactions:write",
+        "files:read",
+        "files:write",
+        "search:read",
+        "stars:read",
+        "stars:write",
+        "users:read",
+        "users.profile:read",
+        "users.profile:write",
+        "dnd:read",
+        "dnd:write",
+        "reminders:read",
+        "reminders:write",
+        "identify",
+        "emoji:read",
+        "team:read",
+        "pins:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "reaction_added",
+        "reaction_removed",
+        "channel_created",
+        "channel_archive",
+        "channel_unarchive",
+        "member_joined_channel",
+        "member_left_channel",
+        "user_status_changed",
+        "team_join",
+        "pin_added",
+        "pin_removed",
+        "file_shared",
+        "emoji_changed"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": false
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}

@@ -1,0 +1,148 @@
+package config
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// Config holds all application configuration values.
+type Config struct {
+	BotToken        string `json:"bot_token"`
+	AppToken        string `json:"app_token"`
+	UserToken       string `json:"user_token,omitempty"`
+	SidebarWidth    int    `json:"sidebar_width,omitempty"`
+	TimestampFormat string `json:"timestamp_format,omitempty"`
+	ConfigPath      string `json:"-"`
+}
+
+// DefaultConfigDir returns the default configuration directory (~/.config/slackers/).
+func DefaultConfigDir() string {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		base = filepath.Join(os.Getenv("HOME"), ".config")
+	}
+	return filepath.Join(base, "slackers")
+}
+
+// DefaultConfigPath returns the default path to the config.json file.
+func DefaultConfigPath() string {
+	return filepath.Join(DefaultConfigDir(), "config.json")
+}
+
+func defaults() *Config {
+	return &Config{
+		SidebarWidth:    25,
+		TimestampFormat: "15:04",
+		ConfigPath:      DefaultConfigPath(),
+	}
+}
+
+// Load reads configuration from the given JSON file path.
+// If the file does not exist, default values are returned.
+func Load(path string) (*Config, error) {
+	cfg := defaults()
+	cfg.ConfigPath = path
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return cfg, nil
+		}
+		return nil, fmt.Errorf("reading config file: %w", err)
+	}
+
+	if err := json.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parsing config file: %w", err)
+	}
+
+	if cfg.SidebarWidth == 0 {
+		cfg.SidebarWidth = 25
+	}
+	if cfg.TimestampFormat == "" {
+		cfg.TimestampFormat = "15:04"
+	}
+	cfg.ConfigPath = path
+
+	return cfg, nil
+}
+
+// Save writes the configuration to its ConfigPath as formatted JSON,
+// creating parent directories if they do not exist.
+func Save(cfg *Config) error {
+	dir := filepath.Dir(cfg.ConfigPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	if err := os.WriteFile(cfg.ConfigPath, data, 0o644); err != nil {
+		return fmt.Errorf("writing config file: %w", err)
+	}
+
+	return nil
+}
+
+// Merge applies non-zero override values into c.
+func (c *Config) Merge(overrides *Config) {
+	if overrides.BotToken != "" {
+		c.BotToken = overrides.BotToken
+	}
+	if overrides.AppToken != "" {
+		c.AppToken = overrides.AppToken
+	}
+	if overrides.SidebarWidth != 0 {
+		c.SidebarWidth = overrides.SidebarWidth
+	}
+	if overrides.TimestampFormat != "" {
+		c.TimestampFormat = overrides.TimestampFormat
+	}
+	if overrides.UserToken != "" {
+		c.UserToken = overrides.UserToken
+	}
+	if overrides.ConfigPath != "" {
+		c.ConfigPath = overrides.ConfigPath
+	}
+}
+
+// Validate checks that required configuration fields are present.
+func (c *Config) Validate() error {
+	if c.BotToken == "" {
+		return errors.New("bot_token is required")
+	}
+	if c.AppToken == "" {
+		return errors.New("app_token is required")
+	}
+	return nil
+}
+
+// PromptTokens interactively prompts the user for missing tokens via stdin.
+// This should be called before the TUI starts.
+func PromptTokens() (*Config, error) {
+	cfg := &Config{}
+
+	fmt.Print("Enter Bot Token (xoxb-...): ")
+	if _, err := fmt.Scanln(&cfg.BotToken); err != nil {
+		return nil, fmt.Errorf("reading bot token: %w", err)
+	}
+
+	fmt.Print("Enter App Token (xapp-...): ")
+	if _, err := fmt.Scanln(&cfg.AppToken); err != nil {
+		return nil, fmt.Errorf("reading app token: %w", err)
+	}
+
+	fmt.Print("Enter User Token (xoxp-..., optional, press Enter to skip): ")
+	var userToken string
+	fmt.Scanln(&userToken)
+	if userToken != "" {
+		cfg.UserToken = userToken
+	}
+
+	return cfg, nil
+}
