@@ -2,6 +2,22 @@
 
 A lightweight, terminal-based Slack client. Read and send messages, switch channels, and get real-time notifications -- all from your terminal.
 
+## Features
+
+- **Three-panel TUI** -- channel sidebar, message viewport, and input bar with focus cycling
+- **Real-time messages** via Slack Socket Mode -- incoming messages appear instantly
+- **Send as yourself** -- uses your user token so messages come from you, not a bot
+- **Channel search** (`Ctrl-K`) -- fuzzy-filter and jump to any channel instantly
+- **Hide channels** (`Ctrl-X`) -- declutter the sidebar; view and unhide with `Ctrl-G`
+- **Channel aliases** (`Ctrl-A`) -- rename any channel or group chat with a custom display name
+- **Unread indicators** -- channels with new messages are marked with `*`
+- **Configurable sidebar width** -- adjust via the settings menu (`Ctrl-S`)
+- **Slack mrkdwn rendering** -- bold, italic, user mentions, links, and code blocks converted to plain text
+- **Interactive settings** (`Ctrl-S`) -- edit config live, changes persist immediately
+- **Built-in help** (`Ctrl-H`) -- full shortcut reference overlay
+- **Cross-platform** -- single static binary for Linux, macOS, and Windows
+- **Persistent config** -- tokens, hidden channels, aliases, and preferences saved to `~/.config/slackers/`
+
 ```
 +---------------------+------------------------------------------+
 |                     |  #general                                |
@@ -176,9 +192,16 @@ slackers
 | `Enter` | Select channel (sidebar) or send message (input) |
 | `i` or `/` | Focus the message input |
 | `Esc` | Cancel input, return to sidebar |
-| `Ctrl-r` | Refresh channel list |
+| `Ctrl-K` | Search and jump to a channel |
+| `Ctrl-X` | Hide selected channel from sidebar |
+| `Ctrl-G` | View and unhide hidden channels |
+| `Ctrl-O` | Toggle hidden channels visible in sidebar |
+| `Ctrl-A` | Rename/alias selected channel |
+| `Ctrl-R` | Refresh channel list |
+| `Ctrl-H` | Toggle help page |
+| `Ctrl-S` | Open settings |
 | `PgUp` / `PgDn` | Scroll messages by page |
-| `Ctrl-c` or `Ctrl-q` | Quit |
+| `Ctrl-C` or `Ctrl-Q` | Quit |
 
 ### CLI commands
 

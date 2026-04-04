@@ -61,7 +61,7 @@ var rootCmd = &cobra.Command{
 		slackSvc := slack.NewSlackClient(cfg.BotToken, cfg.UserToken)
 		socketSvc := slack.NewSocketClient(cfg.BotToken, cfg.AppToken)
 
-		model := tui.NewModel(slackSvc, socketSvc)
+		model := tui.NewModel(slackSvc, socketSvc, cfg)
 		p := tea.NewProgram(model, tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("TUI error: %w", err)

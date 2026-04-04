@@ -12,10 +12,14 @@ import (
 type Config struct {
 	BotToken        string `json:"bot_token"`
 	AppToken        string `json:"app_token"`
-	UserToken       string `json:"user_token,omitempty"`
-	SidebarWidth    int    `json:"sidebar_width,omitempty"`
-	TimestampFormat string `json:"timestamp_format,omitempty"`
-	ConfigPath      string `json:"-"`
+	UserToken       string            `json:"user_token,omitempty"`
+	SidebarWidth    int               `json:"sidebar_width,omitempty"`
+	TimestampFormat string            `json:"timestamp_format,omitempty"`
+	HiddenChannels  []string          `json:"hidden_channels,omitempty"`
+	ChannelAliases  map[string]string `json:"channel_aliases,omitempty"`
+	ChannelSortBy   string            `json:"channel_sort_by,omitempty"`
+	ChannelSortAsc  *bool             `json:"channel_sort_asc,omitempty"`
+	ConfigPath      string            `json:"-"`
 }
 
 // DefaultConfigDir returns the default configuration directory (~/.config/slackers/).

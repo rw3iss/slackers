@@ -27,6 +27,11 @@ var helpSections = []struct {
 			{"i  or  /", "Focus the message input"},
 			{"Esc", "Cancel input / return to sidebar"},
 			{"Ctrl-R", "Refresh channel list"},
+			{"Ctrl-K", "Search and jump to a channel"},
+			{"Ctrl-X", "Hide selected channel from sidebar"},
+			{"Ctrl-G", "View and unhide hidden channels"},
+			{"Ctrl-O", "Toggle hidden channels visible in sidebar"},
+			{"Ctrl-A", "Rename/alias selected channel"},
 		},
 	},
 	{

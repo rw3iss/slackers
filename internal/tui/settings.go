@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -53,6 +52,18 @@ func NewSettingsModel(cfg *config.Config) SettingsModel {
 				description: "Go time format for message timestamps (e.g. 15:04, 3:04 PM)",
 			},
 			{
+				label:       "Sort By",
+				key:         "channel_sort_by",
+				value:       channelSortValue(cfg.ChannelSortBy),
+				description: "Channel sort: type, name (enter one)",
+			},
+			{
+				label:       "Sort Direction",
+				key:         "channel_sort_asc",
+				value:       boolToDir(cfg.ChannelSortAsc),
+				description: "Sort direction: asc or desc",
+			},
+			{
 				label:       "Bot Token",
 				key:         "bot_token",
 				value:       maskToken(cfg.BotToken),
@@ -74,6 +85,20 @@ func NewSettingsModel(cfg *config.Config) SettingsModel {
 		cfg:   cfg,
 		input: ti,
 	}
+}
+
+func channelSortValue(s string) string {
+	if s == "" {
+		return "type"
+	}
+	return s
+}
+
+func boolToDir(b *bool) string {
+	if b == nil || *b {
+		return "asc"
+	}
+	return "desc"
 }
 
 func maskToken(t string) string {
@@ -169,6 +194,35 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 	case "timestamp_format":
 		m.cfg.TimestampFormat = value
 		m.message = "Timestamp format updated"
+
+	case "channel_sort_by":
+		v := strings.ToLower(strings.TrimSpace(value))
+		switch v {
+		case "type", "name":
+			m.cfg.ChannelSortBy = v
+			m.message = "Sort mode updated"
+		default:
+			m.message = "Sort must be: type, name"
+			m.fields[m.selected].value = channelSortValue(m.cfg.ChannelSortBy)
+			return nil
+		}
+
+	case "channel_sort_asc":
+		v := strings.ToLower(strings.TrimSpace(value))
+		switch v {
+		case "asc":
+			b := true
+			m.cfg.ChannelSortAsc = &b
+			m.message = "Sort direction: ascending"
+		case "desc":
+			b := false
+			m.cfg.ChannelSortAsc = &b
+			m.message = "Sort direction: descending"
+		default:
+			m.message = "Direction must be: asc or desc"
+			m.fields[m.selected].value = boolToDir(m.cfg.ChannelSortAsc)
+			return nil
+		}
 	}
 
 	// Save to disk

@@ -7,34 +7,34 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rw3iss/slackers/internal/config"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
 	"github.com/rw3iss/slackers/internal/types"
 )
 
+// Overlay represents which overlay is currently shown.
+type overlay int
+
+const (
+	overlayNone overlay = iota
+	overlayHelp
+	overlaySettings
+	overlaySearch
+	overlayHidden
+	overlayRename
+)
+
 // Custom message types for the TUI update loop.
 
-// ChannelsLoadedMsg is sent when the channel list has been fetched.
 type ChannelsLoadedMsg struct{ Channels []types.Channel }
-
-// HistoryLoadedMsg is sent when message history has been fetched.
 type HistoryLoadedMsg struct{ Messages []types.Message }
-
-// UsersLoadedMsg is sent when the user list has been fetched.
 type UsersLoadedMsg struct{ Users map[string]types.User }
-
-// MessageSentMsg is sent when a message has been successfully sent.
 type MessageSentMsg struct{}
-
-// SlackEventMsg wraps a real-time event from the socket connection.
 type SlackEventMsg struct{ Event slackpkg.SocketEvent }
-
-// ConnStatusMsg reports the connection status of the socket.
 type ConnStatusMsg struct {
 	Status types.ConnectionStatus
 	Err    error
 }
-
-// ErrMsg wraps an error from any async command.
 type ErrMsg struct{ Err error }
 
 // Model is the root TUI model composing all sub-components.
@@ -44,9 +44,14 @@ type Model struct {
 	messages MessageViewModel
 	input    InputModel
 	keymap   KeyMap
+	settings SettingsModel
+	search   SearchModel
+	hidden   HiddenChannelsModel
+	rename   RenameModel
 
 	// State
 	focus      types.Focus
+	overlay    overlay
 	currentCh  *types.Channel
 	users      map[string]types.User
 	connStatus types.ConnectionStatus
@@ -54,6 +59,9 @@ type Model struct {
 	teamName   string
 	err        error
 	warning    string
+
+	// Config
+	cfg *config.Config
 
 	// Dependencies (interfaces for SOLID)
 	slackSvc  slackpkg.SlackService
@@ -67,14 +75,16 @@ type Model struct {
 }
 
 // NewModel creates a new root TUI model.
-func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService) Model {
+func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, cfg *config.Config) Model {
 	return Model{
 		channels:  NewChannelList(),
 		messages:  NewMessageView(),
 		input:     NewInput(),
 		keymap:    DefaultKeyMap(),
+		settings:  NewSettingsModel(cfg),
 		focus:     types.FocusSidebar,
 		users:     make(map[string]types.User),
+		cfg:       cfg,
 		slackSvc:  slackSvc,
 		socketSvc: socketSvc,
 		eventChan: make(chan slackpkg.SocketEvent, 100),
@@ -86,7 +96,6 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		tea.EnterAltScreen,
 		loadUsersCmd(m.slackSvc),
-		loadChannelsCmd(m.slackSvc),
 		connectSocketCmd(m.socketSvc, m.eventChan),
 		waitForSocketEvent(m.eventChan),
 	)
@@ -101,14 +110,103 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ready = true
+		m.settings.SetSize(msg.Width, msg.Height)
 		m.resizeComponents()
 		return m, nil
 
 	case tea.KeyMsg:
+		// Global shortcuts that work even in overlays
 		switch {
 		case key.Matches(msg, m.keymap.Quit):
 			return m, tea.Quit
 
+		case key.Matches(msg, m.keymap.Help):
+			if m.overlay == overlayHelp {
+				m.overlay = overlayNone
+			} else {
+				m.overlay = overlayHelp
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keymap.Settings):
+			if m.overlay == overlaySettings {
+				m.overlay = overlayNone
+				m.applySettings()
+			} else {
+				m.settings = NewSettingsModel(m.cfg)
+				m.settings.SetSize(m.width, m.height)
+				m.overlay = overlaySettings
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keymap.Search):
+			if m.overlay == overlaySearch {
+				m.overlay = overlayNone
+			} else {
+				m.search = NewSearchModel(m.channels.AllChannels(), m.cfg.ChannelAliases)
+				m.search.SetSize(m.width, m.height)
+				m.overlay = overlaySearch
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keymap.ShowHidden):
+			if m.overlay == overlayHidden {
+				m.overlay = overlayNone
+			} else {
+				m.hidden = NewHiddenChannelsModel(m.channels.HiddenChannelsList(), m.cfg.ChannelAliases)
+				m.hidden.SetSize(m.width, m.height)
+				m.overlay = overlayHidden
+			}
+			return m, nil
+		}
+
+		// If an overlay is open, handle its input
+		if m.overlay == overlayHelp {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+			}
+			return m, nil
+		}
+		if m.overlay == overlaySettings {
+			if msg.String() == "esc" && !m.settings.editing {
+				m.overlay = overlayNone
+				m.applySettings()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.settings, cmd = m.settings.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlaySearch {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.search, cmd = m.search.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayHidden {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.hidden, cmd = m.hidden.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayRename {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.rename, cmd = m.rename.Update(msg)
+			return m, cmd
+		}
+
+		// Normal key handling (no overlay)
+		switch {
 		case key.Matches(msg, m.keymap.Tab):
 			m.cycleFocusForward()
 			m.updateFocus()
@@ -134,6 +232,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keymap.Refresh):
 			return m, loadChannelsCmd(m.slackSvc)
+
+		case key.Matches(msg, m.keymap.ToggleHidden):
+			m.channels.ToggleShowHidden()
+			return m, nil
+
+		case key.Matches(msg, m.keymap.HideChannel):
+			if m.focus == types.FocusSidebar {
+				ch := m.channels.SelectedChannel()
+				if ch != nil {
+					m.channels.HideChannel(ch.ID)
+					m.cfg.HiddenChannels = m.channels.HiddenChannelIDs()
+					_ = config.Save(m.cfg)
+				}
+				return m, nil
+			}
+
+		case key.Matches(msg, m.keymap.RenameGroup):
+			if m.focus == types.FocusSidebar {
+				ch := m.channels.SelectedChannel()
+				if ch != nil {
+					currentAlias := ""
+					if m.cfg.ChannelAliases != nil {
+						currentAlias = m.cfg.ChannelAliases[ch.ID]
+					}
+					m.rename = NewRenameModel(ch.ID, ch.Name, currentAlias)
+					m.rename.SetSize(m.width, m.height)
+					m.overlay = overlayRename
+					return m, nil
+				}
+			}
 
 		case key.Matches(msg, m.keymap.Enter):
 			if m.focus == types.FocusSidebar {
@@ -174,8 +302,61 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, tea.Batch(cmds...)
 
+	case SettingsSavedMsg:
+		m.applySettings()
+		return m, nil
+
+	case SearchSelectMsg:
+		m.overlay = overlayNone
+		// Find channel and select it
+		for _, ch := range m.channels.AllChannels() {
+			if ch.ID == msg.ChannelID {
+				m.currentCh = &ch
+				m.channels.SelectByID(ch.ID)
+				m.channels.ClearUnread(ch.ID)
+				m.channels.UnhideChannel(ch.ID) // unhide if hidden
+				m.messages.SetChannelName("#" + m.channels.displayName(ch))
+				return m, loadHistoryCmd(m.slackSvc, ch.ID)
+			}
+		}
+		return m, nil
+
+	case UnhideChannelMsg:
+		m.channels.UnhideChannel(msg.ChannelID)
+		m.cfg.HiddenChannels = m.channels.HiddenChannelIDs()
+		_ = config.Save(m.cfg)
+		if len(m.channels.HiddenChannelsList()) == 0 {
+			m.overlay = overlayNone
+		}
+		return m, nil
+
+	case RenameChannelMsg:
+		m.overlay = overlayNone
+		if m.cfg.ChannelAliases == nil {
+			m.cfg.ChannelAliases = make(map[string]string)
+		}
+		if msg.Alias == "" {
+			delete(m.cfg.ChannelAliases, msg.ChannelID)
+		} else {
+			m.cfg.ChannelAliases[msg.ChannelID] = msg.Alias
+		}
+		m.channels.SetAliases(m.cfg.ChannelAliases)
+		_ = config.Save(m.cfg)
+		return m, nil
+
 	case ChannelsLoadedMsg:
 		m.channels.SetChannels(msg.Channels)
+		m.channels.SetHiddenChannels(m.cfg.HiddenChannels)
+		m.channels.SetAliases(m.cfg.ChannelAliases)
+		sortAsc := true
+		if m.cfg.ChannelSortAsc != nil {
+			sortAsc = *m.cfg.ChannelSortAsc
+		}
+		sortBy := m.cfg.ChannelSortBy
+		if sortBy == "" {
+			sortBy = SortByType
+		}
+		m.channels.SetSort(sortBy, sortAsc)
 		drainWarnings(&m)
 		return m, nil
 
@@ -196,10 +377,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.messages.SetUsers(userMap)
 		drainWarnings(&m)
-		return m, nil
+		// Now that users are cached, load channels so DM names resolve properly.
+		return m, loadChannelsCmd(m.slackSvc)
 
 	case MessageSentMsg:
 		drainWarnings(&m)
+		// Refresh history to show the sent message (socket events may not
+		// arrive if the bot isn't in the channel).
+		if m.currentCh != nil {
+			return m, loadHistoryCmd(m.slackSvc, m.currentCh.ID)
+		}
 		return m, nil
 
 	case SlackEventMsg:
@@ -214,7 +401,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "status":
 			m.connStatus = msg.Event.Status
 		}
-		// Re-subscribe for the next event
 		return m, waitForSocketEvent(m.eventChan)
 
 	case ConnStatusMsg:
@@ -238,12 +424,25 @@ func (m Model) View() string {
 			"Loading...")
 	}
 
+	// Render overlays on top
+	switch m.overlay {
+	case overlayHelp:
+		return renderHelp(m.width, m.height)
+	case overlaySettings:
+		return m.settings.View()
+	case overlaySearch:
+		return m.search.View()
+	case overlayHidden:
+		return m.hidden.View()
+	case overlayRename:
+		return m.rename.View()
+	}
+
 	sidebar := m.channels.View()
 	msgView := m.messages.View()
 
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, msgView)
 	inputBar := m.input.View()
-
 	statusLine := m.renderStatusBar()
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -253,18 +452,36 @@ func (m Model) View() string {
 	)
 }
 
+// applySettings reads the current config and resizes components.
+func (m *Model) applySettings() {
+	m.cfg = m.settings.Config()
+	sortAsc := true
+	if m.cfg.ChannelSortAsc != nil {
+		sortAsc = *m.cfg.ChannelSortAsc
+	}
+	sortBy := m.cfg.ChannelSortBy
+	if sortBy == "" {
+		sortBy = SortByType
+	}
+	m.channels.SetSort(sortBy, sortAsc)
+	m.resizeComponents()
+}
+
 // resizeComponents calculates and sets sizes for all sub-models.
 func (m *Model) resizeComponents() {
-	sidebarWidth := 25
-	if sidebarWidth > m.width/3 {
-		sidebarWidth = m.width / 3
+	sidebarWidth := m.cfg.SidebarWidth
+	if sidebarWidth < 10 {
+		sidebarWidth = 10
+	}
+	if sidebarWidth > m.width/2 {
+		sidebarWidth = m.width / 2
 	}
 
 	inputHeight := 3
 	statusHeight := 1
-	topHeight := m.height - inputHeight - statusHeight - 2 // account for borders
+	topHeight := m.height - inputHeight - statusHeight - 2
 
-	msgWidth := m.width - sidebarWidth - 2 // account for borders
+	msgWidth := m.width - sidebarWidth - 2
 
 	if topHeight < 1 {
 		topHeight = 1
@@ -278,7 +495,6 @@ func (m *Model) resizeComponents() {
 	m.input.SetSize(m.width - 2)
 }
 
-// cycleFocusForward advances focus: Sidebar -> Messages -> Input -> Sidebar.
 func (m *Model) cycleFocusForward() {
 	switch m.focus {
 	case types.FocusSidebar:
@@ -290,7 +506,6 @@ func (m *Model) cycleFocusForward() {
 	}
 }
 
-// cycleFocusBackward reverses focus: Sidebar -> Input -> Messages -> Sidebar.
 func (m *Model) cycleFocusBackward() {
 	switch m.focus {
 	case types.FocusSidebar:
@@ -302,23 +517,20 @@ func (m *Model) cycleFocusBackward() {
 	}
 }
 
-// drainWarnings pulls any fallback warnings from the slack service into the model.
 func drainWarnings(m *Model) {
 	if warns := m.slackSvc.Warnings(); len(warns) > 0 {
-		m.warning = warns[len(warns)-1] // show the most recent
+		m.warning = warns[len(warns)-1]
 	} else {
 		m.warning = ""
 	}
 }
 
-// updateFocus propagates the focus state to all sub-models.
 func (m *Model) updateFocus() {
 	m.channels.SetFocused(m.focus == types.FocusSidebar)
 	m.messages.SetFocused(m.focus == types.FocusMessages)
 	m.input.SetFocused(m.focus == types.FocusInput)
 }
 
-// renderStatusBar renders the bottom status line.
 func (m Model) renderStatusBar() string {
 	team := m.teamName
 	if team == "" {
@@ -349,8 +561,10 @@ func (m Model) renderStatusBar() string {
 		extra += " | " + StatusDisconnected.Render(m.err.Error())
 	}
 
-	status := fmt.Sprintf(" %s | %s | Tab: switch focus | Ctrl-q: quit%s",
-		StatusBarStyle.Render(team), connStr, extra)
+	hints := HelpStyle.Render("Ctrl-H: help | Ctrl-S: settings")
+
+	status := fmt.Sprintf(" %s | %s | %s%s",
+		StatusBarStyle.Render(team), connStr, hints, extra)
 
 	return StatusBarStyle.Width(m.width).Render(status)
 }

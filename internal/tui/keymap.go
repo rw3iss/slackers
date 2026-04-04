@@ -21,6 +21,11 @@ type KeyMap struct {
 	End          key.Binding
 	Help         key.Binding
 	Settings     key.Binding
+	Search       key.Binding
+	HideChannel  key.Binding
+	ShowHidden   key.Binding
+	RenameGroup    key.Binding
+	ToggleHidden   key.Binding
 }
 
 // DefaultKeyMap returns the default key bindings.
@@ -93,6 +98,26 @@ func DefaultKeyMap() KeyMap {
 		Settings: key.NewBinding(
 			key.WithKeys("ctrl+s"),
 			key.WithHelp("ctrl+s", "settings"),
+		),
+		Search: key.NewBinding(
+			key.WithKeys("ctrl+k"),
+			key.WithHelp("ctrl+k", "search channels"),
+		),
+		HideChannel: key.NewBinding(
+			key.WithKeys("ctrl+x"),
+			key.WithHelp("ctrl+x", "hide channel"),
+		),
+		ShowHidden: key.NewBinding(
+			key.WithKeys("ctrl+g"),
+			key.WithHelp("ctrl+g", "show hidden"),
+		),
+		RenameGroup: key.NewBinding(
+			key.WithKeys("ctrl+a"),
+			key.WithHelp("ctrl+a", "rename group"),
+		),
+		ToggleHidden: key.NewBinding(
+			key.WithKeys("ctrl+o"),
+			key.WithHelp("ctrl+o", "toggle hidden channels"),
 		),
 	}
 }
