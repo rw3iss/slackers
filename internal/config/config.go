@@ -22,6 +22,9 @@ type Config struct {
 	ChannelSortBy   string            `json:"channel_sort_by,omitempty"`
 	ChannelSortAsc  *bool             `json:"channel_sort_asc,omitempty"`
 	LastChannelID   string            `json:"last_channel_id,omitempty"`
+	DownloadPath    string            `json:"download_path,omitempty"`
+	InputHistory    []string          `json:"input_history,omitempty"`
+	InputHistoryMax int               `json:"input_history_max,omitempty"`
 	PollInterval    int               `json:"poll_interval,omitempty"`
 	Notifications   bool              `json:"notifications,omitempty"`
 	ConfigPath      string            `json:"-"`

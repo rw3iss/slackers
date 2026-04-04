@@ -2,6 +2,8 @@ package slack
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +27,8 @@ type SlackService interface {
 	FetchHistoryAround(channelID string, timestamp string, contextSize int) ([]types.Message, int, error)
 	// SearchMessages searches for messages matching query. If channelID is non-empty, scopes to that channel.
 	SearchMessages(query, channelID string, limit int) ([]types.SearchResult, error)
+	// UploadFile uploads a file to a channel.
+	UploadFile(channelID, filePath string) error
 	// CheckNewMessages returns channel IDs with new messages and a map of all latest timestamps.
 	CheckNewMessages(lastSeen map[string]string) ([]string, map[string]string, error)
 	// Warnings returns and clears any accumulated fallback warnings.
@@ -385,6 +389,30 @@ func (c *slackClient) SearchMessages(query, channelID string, limit int) ([]type
 	}
 
 	return results, nil
+}
+
+// UploadFile uploads a local file to a Slack channel using the v2 API.
+func (c *slackClient) UploadFile(channelID, filePath string) error {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("cannot stat file %s: %w", filePath, err)
+	}
+
+	params := slack.UploadFileV2Parameters{
+		Channel:  channelID,
+		File:     filePath,
+		FileSize: int(info.Size()),
+		Filename: filepath.Base(filePath),
+	}
+
+	uploadErr := c.tryWithFallback("upload file", func(api *slack.Client) error {
+		_, e := api.UploadFileV2(params)
+		return e
+	})
+	if uploadErr != nil {
+		return fmt.Errorf("slack upload file %s: %w", filePath, uploadErr)
+	}
+	return nil
 }
 
 // CheckNewMessages checks each channel in lastSeen for new messages by

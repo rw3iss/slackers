@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"strconv"
 	"strings"
 
@@ -12,6 +13,9 @@ import (
 
 // SettingsSavedMsg is sent when settings have been persisted to disk.
 type SettingsSavedMsg struct{}
+
+// SettingsOpenFileBrowserMsg requests the model to open a file browser for settings.
+type SettingsOpenFileBrowserMsg struct{ CurrentPath string }
 
 // SettingsModel provides an interactive config editor overlay.
 type SettingsModel struct {
@@ -66,6 +70,18 @@ func NewSettingsModel(cfg *config.Config) SettingsModel {
 				description: "Seconds between new-message checks (1-300)",
 			},
 			{
+				label:       "Input History",
+				key:         "input_history_max",
+				value:       strconv.Itoa(inputHistMax(cfg.InputHistoryMax)),
+				description: "Max sent messages to remember (1-200)",
+			},
+			{
+				label:       "Download Path",
+				key:         "download_path",
+				value:       downloadPathValue(cfg.DownloadPath),
+				description: "File download location (Enter to browse)",
+			},
+			{
 				label:       "Sort By",
 				key:         "channel_sort_by",
 				value:       channelSortValue(cfg.ChannelSortBy),
@@ -115,6 +131,21 @@ func boolToDir(b *bool) string {
 		return "asc"
 	}
 	return "desc"
+}
+
+func inputHistMax(n int) int {
+	if n <= 0 {
+		return 20
+	}
+	return n
+}
+
+func downloadPathValue(p string) string {
+	if p == "" {
+		home, _ := os.UserHomeDir()
+		return home + "/Downloads"
+	}
+	return p
 }
 
 func boolToOnOff(b bool) string {
@@ -169,6 +200,13 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		if f.key == "bot_token" || f.key == "app_token" || f.key == "user_token" {
 			m.message = "Run 'slackers setup' to change tokens"
 			return m, nil
+		}
+
+		// Download path opens a folder browser.
+		if f.key == "download_path" {
+			return m, func() tea.Msg {
+				return SettingsOpenFileBrowserMsg{CurrentPath: f.value}
+			}
 		}
 
 		// Fields with options: cycle to next option.
@@ -248,6 +286,16 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 		} else {
 			m.message = "Notifications disabled"
 		}
+
+	case "input_history_max":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > 200 {
+			m.message = "Must be 1-200"
+			m.fields[m.selected].value = strconv.Itoa(inputHistMax(m.cfg.InputHistoryMax))
+			return nil
+		}
+		m.cfg.InputHistoryMax = n
+		m.message = "History size updated"
 
 	case "poll_interval":
 		n, err := strconv.Atoi(value)

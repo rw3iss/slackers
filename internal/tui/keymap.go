@@ -28,6 +28,7 @@ type KeyMap struct {
 	ToggleHidden   key.Binding
 	NextUnread     key.Binding
 	SearchMessages key.Binding
+	AttachFile     key.Binding
 }
 
 // DefaultKeyMap returns the default key bindings.
@@ -128,6 +129,10 @@ func DefaultKeyMap() KeyMap {
 		SearchMessages: key.NewBinding(
 			key.WithKeys("ctrl+f"),
 			key.WithHelp("ctrl+f", "search messages"),
+		),
+		AttachFile: key.NewBinding(
+			key.WithKeys("ctrl+u"),
+			key.WithHelp("ctrl+u", "attach file"),
 		),
 	}
 }

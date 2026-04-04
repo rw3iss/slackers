@@ -27,6 +27,8 @@ A lightweight, terminal-based Slack client.
 - Hide, rename, and sort channels
 - Jump to next unread (`Ctrl-N`)
 - Terminal notifications (bell, desktop, urgency hints)
+- File uploads (`Ctrl-U`) with built-in file browser and `[FILE:<path>]` syntax
+- Input history — Up/Down in the input bar recalls sent messages
 - Interactive settings (`Ctrl-S`) and built-in help (`Ctrl-H`)
 - OAuth browser login for quick onboarding
 - Single binary, cross-platform (Linux, macOS, Windows)
@@ -100,6 +102,8 @@ Teammates then run: `slackers join https://your-url.com/team.json`
 | `Ctrl-G` | Unhide channels |
 | `Ctrl-O` | Toggle hidden visible |
 | `Ctrl-A` | Rename/alias channel |
+| `Ctrl-U` | Attach file to send |
+| `Up` / `Down` (input) | Browse sent message history |
 | `Ctrl-R` | Refresh channels |
 | `Ctrl-H` | Help |
 | `Ctrl-S` | Settings |
@@ -115,6 +119,8 @@ Teammates then run: `slackers join https://your-url.com/team.json`
 | Poll Interval | 1-300 | Seconds between message checks |
 | Sort By | type / name / recent | Channel sorting |
 | Sort Direction | asc / desc | Sort order |
+| Input History | 1-200 | Max sent messages to remember |
+| Download Path | folder | File download/upload location |
 
 Fields with fixed options cycle with Enter/Tab.
 

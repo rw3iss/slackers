@@ -27,6 +27,7 @@ var helpSections = []struct {
 			{"i  or  /", "Focus the message input"},
 			{"Esc", "Cancel input / return to sidebar"},
 			{"Ctrl-F", "Search messages (Tab toggles scope)"},
+			{"Ctrl-U", "Attach file to send"},
 			{"Ctrl-R", "Refresh channel list"},
 			{"Ctrl-K", "Search and jump to a channel"},
 			{"Ctrl-X", "Hide selected channel from sidebar"},

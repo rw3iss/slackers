@@ -3,6 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -24,6 +27,15 @@ const (
 	overlayHidden
 	overlayRename
 	overlayMsgSearch
+	overlayFileBrowser
+)
+
+// fileBrowserPurpose tracks why the file browser is open.
+type fileBrowserPurpose int
+
+const (
+	fbPurposeAttach   fileBrowserPurpose = iota // selecting a file to send
+	fbPurposeSettings                           // selecting a download folder
 )
 
 // Custom message types for the TUI update loop.
@@ -41,6 +53,11 @@ type ErrMsg struct{ Err error }
 
 // SilentHistoryMsg is like HistoryLoadedMsg but doesn't change focus or scroll position.
 type SilentHistoryMsg struct{ Messages []types.Message }
+
+// FileUploadedMsg is sent when file uploads complete.
+type FileUploadedMsg struct{ Count int }
+
+var filePattern = regexp.MustCompile(`\[FILE:([^\]]+)\]`)
 
 // ContextHistoryMsg carries messages around a search result for context viewing.
 type ContextHistoryMsg struct {
@@ -68,8 +85,10 @@ type Model struct {
 	settings SettingsModel
 	search   SearchModel
 	hidden   HiddenChannelsModel
-	rename    RenameModel
-	msgSearch MsgSearchModel
+	rename      RenameModel
+	msgSearch   MsgSearchModel
+	fileBrowser FileBrowserModel
+	fbPurpose   fileBrowserPurpose
 
 	// State
 	focus      types.Focus
@@ -105,17 +124,25 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	ch := NewChannelList()
 	ch.SetFocused(true)
 
+	inp := NewInput()
+	inp.SetHistory(cfg.InputHistory)
+	histMax := cfg.InputHistoryMax
+	if histMax <= 0 {
+		histMax = 20
+	}
+	inp.SetMaxHistory(histMax)
+
 	return Model{
 		channels:  ch,
 		messages:  NewMessageView(),
-		input:     NewInput(),
+		input:     inp,
 		keymap:    DefaultKeyMap(),
 		settings:  NewSettingsModel(cfg),
 		focus:     types.FocusSidebar,
 		users:     make(map[string]types.User),
 		lastSeen:  make(map[string]string),
 		cfg:       cfg,
-		splash:    true,
+		splash: true,
 		slackSvc:  slackSvc,
 		socketSvc: socketSvc,
 		eventChan: make(chan slackpkg.SocketEvent, 100),
@@ -187,6 +214,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.msgSearch = NewMsgSearchModel(m.slackSvc, chID)
 				m.msgSearch.SetSize(m.width, m.height)
 				m.overlay = overlayMsgSearch
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keymap.AttachFile):
+			if m.currentCh != nil {
+				startDir := m.cfg.DownloadPath
+				if startDir == "" {
+					startDir, _ = os.UserHomeDir()
+				}
+				m.fileBrowser = NewFileBrowser(FileBrowserConfig{
+					StartDir:    startDir,
+					Title:       "Select File to Send",
+					ShowFiles:   true,
+					ShowFolders: true,
+				})
+				m.fileBrowser.SetSize(m.width, m.height)
+				m.fbPurpose = fbPurposeAttach
+				m.overlay = overlayFileBrowser
 			}
 			return m, nil
 
@@ -262,6 +307,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.msgSearch, cmd = m.msgSearch.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayFileBrowser {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.fileBrowser, cmd = m.fileBrowser.Update(msg)
 			return m, cmd
 		}
 
@@ -353,8 +407,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == types.FocusInput {
 				text := m.input.Value()
 				if text != "" && m.currentCh != nil {
+					m.input.PushHistory(text)
+					m.cfg.InputHistory = m.input.History()
+					go config.Save(m.cfg)
 					m.input.Reset()
-					return m, sendMessageCmd(m.slackSvc, m.currentCh.ID, text)
+					return m, sendMessageWithFilesCmd(m.slackSvc, m.currentCh.ID, text)
 				}
 				return m, nil
 			}
@@ -585,6 +642,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, pollTickCmd(m.cfg.PollInterval)
 
+	case SettingsOpenFileBrowserMsg:
+		m.fileBrowser = NewFileBrowser(FileBrowserConfig{
+			StartDir:    msg.CurrentPath,
+			Title:       "Select Download Folder",
+			ShowFiles:   false,
+			ShowFolders: true,
+		})
+		m.fileBrowser.SetSize(m.width, m.height)
+		m.fbPurpose = fbPurposeSettings
+		m.overlay = overlayFileBrowser
+		return m, nil
+
+	case FileBrowserSelectMsg:
+		m.overlay = overlayNone
+		switch m.fbPurpose {
+		case fbPurposeAttach:
+			if !msg.IsDir {
+				// Insert [FILE:<path>] into the input bar.
+				current := m.input.Value()
+				if current != "" && !strings.HasSuffix(current, " ") {
+					current += " "
+				}
+				m.input.SetValue(current + "[FILE:" + msg.Path + "]")
+				m.focus = types.FocusInput
+				m.updateFocus()
+			}
+		case fbPurposeSettings:
+			if msg.IsDir {
+				m.cfg.DownloadPath = msg.Path
+				_ = config.Save(m.cfg)
+				// Update the settings field value and reopen settings.
+				m.settings = NewSettingsModel(m.cfg)
+				m.settings.SetSize(m.width, m.height)
+				m.overlay = overlaySettings
+				return m, nil
+			}
+		}
+		return m, nil
+
+	case FileUploadedMsg:
+		return m, nil
+
 	case SplashDoneMsg:
 		m.splash = false
 		return m, nil
@@ -621,6 +720,8 @@ func (m Model) View() string {
 		return m.rename.View()
 	case overlayMsgSearch:
 		return m.msgSearch.View()
+	case overlayFileBrowser:
+		return m.fileBrowser.View()
 	}
 
 	sidebar := m.channels.View()
@@ -867,6 +968,38 @@ func fetchContextCmd(svc slackpkg.SlackService, channelID, timestamp, channelNam
 			TargetIdx:   targetIdx,
 			ChannelName: channelName,
 		}
+	}
+}
+
+// sendMessageWithFilesCmd parses [FILE:<path>] patterns from the message,
+// uploads any files, and sends the remaining text as a message.
+func sendMessageWithFilesCmd(svc slackpkg.SlackService, channelID, text string) tea.Cmd {
+	return func() tea.Msg {
+		matches := filePattern.FindAllStringSubmatch(text, -1)
+		cleanText := strings.TrimSpace(filePattern.ReplaceAllString(text, ""))
+
+		// Upload files
+		uploadCount := 0
+		for _, match := range matches {
+			if len(match) >= 2 {
+				path := match[1]
+				if err := svc.UploadFile(channelID, path); err == nil {
+					uploadCount++
+				}
+			}
+		}
+
+		// Send remaining text if any
+		if cleanText != "" {
+			if err := svc.SendMessage(channelID, cleanText); err != nil {
+				return ErrMsg{Err: err}
+			}
+		}
+
+		if uploadCount > 0 {
+			return FileUploadedMsg{Count: uploadCount}
+		}
+		return MessageSentMsg{}
 	}
 }
 
