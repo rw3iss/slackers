@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -22,6 +23,7 @@ const (
 	overlaySearch
 	overlayHidden
 	overlayRename
+	overlayMsgSearch
 )
 
 // Custom message types for the TUI update loop.
@@ -37,6 +39,22 @@ type ConnStatusMsg struct {
 }
 type ErrMsg struct{ Err error }
 
+// ContextHistoryMsg carries messages around a search result for context viewing.
+type ContextHistoryMsg struct {
+	Messages    []types.Message
+	TargetIdx   int
+	ChannelName string
+}
+
+// PollTickMsg triggers a new-message poll.
+type PollTickMsg struct{}
+
+// UnreadChannelsMsg carries channel IDs with new messages and all latest timestamps.
+type UnreadChannelsMsg struct {
+	ChannelIDs []string
+	LatestTS   map[string]string
+}
+
 // Model is the root TUI model composing all sub-components.
 type Model struct {
 	// Sub-models
@@ -47,7 +65,8 @@ type Model struct {
 	settings SettingsModel
 	search   SearchModel
 	hidden   HiddenChannelsModel
-	rename   RenameModel
+	rename    RenameModel
+	msgSearch MsgSearchModel
 
 	// State
 	focus      types.Focus
@@ -59,6 +78,9 @@ type Model struct {
 	teamName   string
 	err        error
 	warning    string
+
+	// Polling
+	lastSeen map[string]string // channelID -> latest message timestamp
 
 	// Config
 	cfg *config.Config
@@ -76,14 +98,18 @@ type Model struct {
 
 // NewModel creates a new root TUI model.
 func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, cfg *config.Config) Model {
+	ch := NewChannelList()
+	ch.SetFocused(true)
+
 	return Model{
-		channels:  NewChannelList(),
+		channels:  ch,
 		messages:  NewMessageView(),
 		input:     NewInput(),
 		keymap:    DefaultKeyMap(),
 		settings:  NewSettingsModel(cfg),
 		focus:     types.FocusSidebar,
 		users:     make(map[string]types.User),
+		lastSeen:  make(map[string]string),
 		cfg:       cfg,
 		slackSvc:  slackSvc,
 		socketSvc: socketSvc,
@@ -98,6 +124,7 @@ func (m Model) Init() tea.Cmd {
 		loadUsersCmd(m.slackSvc),
 		connectSocketCmd(m.socketSvc, m.eventChan),
 		waitForSocketEvent(m.eventChan),
+		pollTickCmd(m.cfg.PollInterval),
 	)
 }
 
@@ -115,9 +142,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Clear urgency on any user interaction.
+		clearWindowUrgent()
+
 		// Global shortcuts that work even in overlays
 		switch {
 		case key.Matches(msg, m.keymap.Quit):
+			clearWindowUrgent()
 			return m, tea.Quit
 
 		case key.Matches(msg, m.keymap.Help):
@@ -136,6 +167,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.settings = NewSettingsModel(m.cfg)
 				m.settings.SetSize(m.width, m.height)
 				m.overlay = overlaySettings
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keymap.SearchMessages):
+			if m.overlay == overlayMsgSearch {
+				m.overlay = overlayNone
+			} else {
+				chID := ""
+				if m.currentCh != nil {
+					chID = m.currentCh.ID
+				}
+				m.msgSearch = NewMsgSearchModel(m.slackSvc, chID)
+				m.msgSearch.SetSize(m.width, m.height)
+				m.overlay = overlayMsgSearch
 			}
 			return m, nil
 
@@ -204,6 +249,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rename, cmd = m.rename.Update(msg)
 			return m, cmd
 		}
+		if m.overlay == overlayMsgSearch {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.msgSearch, cmd = m.msgSearch.Update(msg)
+			return m, cmd
+		}
 
 		// Normal key handling (no overlay)
 		switch {
@@ -218,8 +272,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keymap.Escape):
-			m.focus = types.FocusSidebar
-			m.input.Reset()
+			if m.focus == types.FocusSidebar {
+				// Toggle back to input if already on sidebar
+				m.focus = types.FocusInput
+			} else {
+				m.focus = types.FocusSidebar
+			}
 			m.updateFocus()
 			return m, nil
 
@@ -232,6 +290,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keymap.Refresh):
 			return m, loadChannelsCmd(m.slackSvc)
+
+		case key.Matches(msg, m.keymap.NextUnread):
+			ch := m.channels.NextUnreadChannel()
+			if ch != nil {
+				m.currentCh = ch
+				m.channels.ClearUnread(ch.ID)
+				m.messages.SetChannelName("#" + m.channels.displayName(*ch))
+				return m, loadHistoryCmd(m.slackSvc, ch.ID)
+			}
+			return m, nil
 
 		case key.Matches(msg, m.keymap.ToggleHidden):
 			m.channels.ToggleShowHidden()
@@ -302,6 +370,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, tea.Batch(cmds...)
 
+	case MsgSearchResultsMsg:
+		m.msgSearch, _ = m.msgSearch.Update(msg)
+		return m, nil
+
+	case MsgSearchSelectMsg:
+		m.overlay = overlayNone
+		// Switch to the target channel if needed.
+		channelName := ""
+		if m.currentCh == nil || m.currentCh.ID != msg.ChannelID {
+			for _, ch := range m.channels.AllChannels() {
+				if ch.ID == msg.ChannelID {
+					m.currentCh = &ch
+					m.channels.SelectByID(ch.ID)
+					m.channels.ClearUnread(ch.ID)
+					channelName = "#" + m.channels.displayName(ch)
+					break
+				}
+			}
+		} else {
+			channelName = m.messages.channelName
+		}
+		// Load context around the search result.
+		ts := fmt.Sprintf("%d.%06d", msg.Timestamp.Unix(), msg.Timestamp.Nanosecond()/1000)
+		return m, fetchContextCmd(m.slackSvc, msg.ChannelID, ts, channelName)
+
+	case LoadMoreContextMsg:
+		return m, loadMoreContextCmd(m.slackSvc, msg.ChannelID, msg.OldestTS)
+
+	case MoreContextLoadedMsg:
+		m.messages.PrependContextMessages(msg.Messages)
+		return m, nil
+
+	case ContextHistoryMsg:
+		m.messages.SetContextMessages(msg.Messages, msg.TargetIdx, msg.ChannelName)
+		m.focus = types.FocusMessages
+		m.updateFocus()
+		return m, nil
+
 	case SettingsSavedMsg:
 		m.applySettings()
 		return m, nil
@@ -362,6 +468,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case HistoryLoadedMsg:
 		m.messages.SetMessages(msg.Messages)
+		// Record the latest message timestamp so the poller won't re-flag this channel.
+		if m.currentCh != nil && len(msg.Messages) > 0 {
+			latest := msg.Messages[len(msg.Messages)-1]
+			m.lastSeen[m.currentCh.ID] = fmt.Sprintf("%d.000000", latest.Timestamp.Unix())
+		}
+		m.focus = types.FocusInput
+		m.updateFocus()
 		drainWarnings(&m)
 		return m, nil
 
@@ -408,6 +521,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.connErr = msg.Err
 		return m, nil
 
+	case PollTickMsg:
+		return m, checkNewMessagesCmd(m.slackSvc, m.lastSeen, m.cfg.PollInterval)
+
+	case UnreadChannelsMsg:
+		// Update latest timestamps for "recent" sort.
+		if msg.LatestTS != nil {
+			m.channels.SetLatestTimestamps(msg.LatestTS)
+		}
+		newUnread := 0
+		for _, id := range msg.ChannelIDs {
+			if m.currentCh != nil && id == m.currentCh.ID {
+				continue
+			}
+			m.channels.MarkUnread(id)
+			newUnread++
+		}
+		if newUnread > 0 && m.cfg.Notifications {
+			sendNotification("multiple channels", newUnread)
+			setWindowUrgent()
+		}
+		return m, pollTickCmd(m.cfg.PollInterval)
+
 	case ErrMsg:
 		m.err = msg.Err
 		return m, nil
@@ -436,6 +571,8 @@ func (m Model) View() string {
 		return m.hidden.View()
 	case overlayRename:
 		return m.rename.View()
+	case overlayMsgSearch:
+		return m.msgSearch.View()
 	}
 
 	sidebar := m.channels.View()
@@ -626,5 +763,69 @@ func waitForSocketEvent(ch chan slackpkg.SocketEvent) tea.Cmd {
 	return func() tea.Msg {
 		event := <-ch
 		return SlackEventMsg{Event: event}
+	}
+}
+
+func loadMoreContextCmd(svc slackpkg.SlackService, channelID, oldestTS string) tea.Cmd {
+	return func() tea.Msg {
+		params := 25
+		msgs, err := svc.FetchHistory(channelID, params)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		// FetchHistory returns chronological. We need messages BEFORE oldestTS.
+		// Use FetchHistoryAround with the oldest timestamp to get earlier messages.
+		olderMsgs, _, err := svc.FetchHistoryAround(channelID, oldestTS, 50)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		// Filter to only messages older than oldestTS.
+		_ = msgs // unused, we use FetchHistoryAround directly
+		var filtered []types.Message
+		for _, m := range olderMsgs {
+			ts := fmt.Sprintf("%d.%06d", m.Timestamp.Unix(), m.Timestamp.Nanosecond()/1000)
+			if ts < oldestTS {
+				filtered = append(filtered, m)
+			}
+		}
+		return MoreContextLoadedMsg{Messages: filtered}
+	}
+}
+
+func fetchContextCmd(svc slackpkg.SlackService, channelID, timestamp, channelName string) tea.Cmd {
+	return func() tea.Msg {
+		msgs, targetIdx, err := svc.FetchHistoryAround(channelID, timestamp, 50)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return ContextHistoryMsg{
+			Messages:    msgs,
+			TargetIdx:   targetIdx,
+			ChannelName: channelName,
+		}
+	}
+}
+
+func pollTickCmd(intervalSec int) tea.Cmd {
+	if intervalSec < 1 {
+		intervalSec = 10
+	}
+	return tea.Tick(time.Duration(intervalSec)*time.Second, func(t time.Time) tea.Msg {
+		return PollTickMsg{}
+	})
+}
+
+func checkNewMessagesCmd(svc slackpkg.SlackService, lastSeen map[string]string, intervalSec int) tea.Cmd {
+	seen := make(map[string]string, len(lastSeen))
+	for k, v := range lastSeen {
+		seen[k] = v
+	}
+
+	return func() tea.Msg {
+		ids, latestTS, err := svc.CheckNewMessages(seen)
+		if err != nil {
+			return UnreadChannelsMsg{LatestTS: latestTS}
+		}
+		return UnreadChannelsMsg{ChannelIDs: ids, LatestTS: latestTS}
 	}
 }

@@ -30,6 +30,7 @@ type settingsField struct {
 	key         string
 	value       string
 	description string
+	options     []string // if non-empty, Enter cycles through these instead of opening text input
 }
 
 // NewSettingsModel creates a settings editor from the current config.
@@ -52,16 +53,31 @@ func NewSettingsModel(cfg *config.Config) SettingsModel {
 				description: "Go time format for message timestamps (e.g. 15:04, 3:04 PM)",
 			},
 			{
+				label:       "Notifications",
+				key:         "notifications",
+				value:       boolToOnOff(cfg.Notifications),
+				description: "Terminal bell and desktop notifications",
+				options:     []string{"on", "off"},
+			},
+			{
+				label:       "Poll Interval",
+				key:         "poll_interval",
+				value:       strconv.Itoa(cfg.PollInterval),
+				description: "Seconds between new-message checks (1-300)",
+			},
+			{
 				label:       "Sort By",
 				key:         "channel_sort_by",
 				value:       channelSortValue(cfg.ChannelSortBy),
-				description: "Channel sort: type, name (enter one)",
+				description: "Channel list sorting mode",
+				options:     []string{"type", "name", "recent"},
 			},
 			{
 				label:       "Sort Direction",
 				key:         "channel_sort_asc",
 				value:       boolToDir(cfg.ChannelSortAsc),
-				description: "Sort direction: asc or desc",
+				description: "Channel list sorting direction",
+				options:     []string{"asc", "desc"},
 			},
 			{
 				label:       "Bot Token",
@@ -99,6 +115,13 @@ func boolToDir(b *bool) string {
 		return "asc"
 	}
 	return "desc"
+}
+
+func boolToOnOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 func maskToken(t string) string {
@@ -139,13 +162,21 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		if m.selected < len(m.fields)-1 {
 			m.selected++
 		}
-	case "enter":
+	case "enter", "tab":
 		f := m.fields[m.selected]
-		// Don't allow editing masked token fields inline
+
+		// Token fields can't be edited inline.
 		if f.key == "bot_token" || f.key == "app_token" || f.key == "user_token" {
 			m.message = "Run 'slackers setup' to change tokens"
 			return m, nil
 		}
+
+		// Fields with options: cycle to next option.
+		if len(f.options) > 0 {
+			return m.cycleOption()
+		}
+
+		// Free-text fields: open text input.
 		m.editing = true
 		m.input.SetValue(f.value)
 		m.input.Focus()
@@ -155,6 +186,22 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 	return m, nil
 }
 
+// cycleOption advances the current field to the next option and saves.
+func (m SettingsModel) cycleOption() (SettingsModel, tea.Cmd) {
+	f := &m.fields[m.selected]
+	current := f.value
+	nextIdx := 0
+	for i, opt := range f.options {
+		if opt == current {
+			nextIdx = (i + 1) % len(f.options)
+			break
+		}
+	}
+	f.value = f.options[nextIdx]
+	cmd := m.applyField(f.key, f.value)
+	return m, cmd
+}
+
 func (m SettingsModel) updateEditing(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
@@ -162,8 +209,6 @@ func (m SettingsModel) updateEditing(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 		m.fields[m.selected].value = newVal
 		m.editing = false
 		m.input.Blur()
-
-		// Apply to config
 		cmd := m.applyField(m.fields[m.selected].key, newVal)
 		return m, cmd
 
@@ -195,37 +240,40 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 		m.cfg.TimestampFormat = value
 		m.message = "Timestamp format updated"
 
-	case "channel_sort_by":
+	case "notifications":
 		v := strings.ToLower(strings.TrimSpace(value))
-		switch v {
-		case "type", "name":
-			m.cfg.ChannelSortBy = v
-			m.message = "Sort mode updated"
-		default:
-			m.message = "Sort must be: type, name"
-			m.fields[m.selected].value = channelSortValue(m.cfg.ChannelSortBy)
+		m.cfg.Notifications = (v == "on")
+		if m.cfg.Notifications {
+			m.message = "Notifications enabled"
+		} else {
+			m.message = "Notifications disabled"
+		}
+
+	case "poll_interval":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > 300 {
+			m.message = "Poll interval must be 1-300 seconds"
+			m.fields[m.selected].value = strconv.Itoa(m.cfg.PollInterval)
 			return nil
 		}
+		m.cfg.PollInterval = n
+		m.message = "Poll interval updated"
+
+	case "channel_sort_by":
+		m.cfg.ChannelSortBy = value
+		m.message = "Sort: " + value
 
 	case "channel_sort_asc":
-		v := strings.ToLower(strings.TrimSpace(value))
-		switch v {
-		case "asc":
+		if value == "asc" {
 			b := true
 			m.cfg.ChannelSortAsc = &b
-			m.message = "Sort direction: ascending"
-		case "desc":
+		} else {
 			b := false
 			m.cfg.ChannelSortAsc = &b
-			m.message = "Sort direction: descending"
-		default:
-			m.message = "Direction must be: asc or desc"
-			m.fields[m.selected].value = boolToDir(m.cfg.ChannelSortAsc)
-			return nil
 		}
+		m.message = "Direction: " + value
 	}
 
-	// Save to disk
 	cfg := m.cfg
 	return func() tea.Msg {
 		if err := config.Save(cfg); err != nil {
@@ -267,6 +315,13 @@ func (m SettingsModel) View() string {
 		Foreground(ColorMuted).
 		Italic(true)
 
+	optionActiveStyle := lipgloss.NewStyle().
+		Foreground(ColorAccent).
+		Bold(true)
+
+	optionInactiveStyle := lipgloss.NewStyle().
+		Foreground(ColorMuted)
+
 	var b strings.Builder
 
 	b.WriteString(titleStyle.Render("Settings"))
@@ -285,6 +340,18 @@ func (m SettingsModel) View() string {
 
 		if m.editing && i == m.selected {
 			b.WriteString(m.input.View())
+		} else if len(f.options) > 0 && i == m.selected {
+			// Show all options with the active one highlighted.
+			for j, opt := range f.options {
+				if j > 0 {
+					b.WriteString("  ")
+				}
+				if opt == f.value {
+					b.WriteString(optionActiveStyle.Render("[" + opt + "]"))
+				} else {
+					b.WriteString(optionInactiveStyle.Render(" " + opt + " "))
+				}
+			}
 		} else {
 			b.WriteString(valueStyle.Render(f.value))
 		}
@@ -306,7 +373,12 @@ func (m SettingsModel) View() string {
 	if m.editing {
 		b.WriteString(dimStyle.Render("  Enter: save | Esc: cancel"))
 	} else {
-		b.WriteString(dimStyle.Render("  Enter: edit | Esc/Ctrl-S: close"))
+		f := m.fields[m.selected]
+		if len(f.options) > 0 {
+			b.WriteString(dimStyle.Render("  Enter/Tab: cycle | Esc/Ctrl-S: close"))
+		} else {
+			b.WriteString(dimStyle.Render("  Enter: edit | Esc/Ctrl-S: close"))
+		}
 	}
 
 	content := b.String()
@@ -326,11 +398,6 @@ func (m SettingsModel) View() string {
 		lipgloss.WithWhitespaceChars(" "),
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
 	)
-}
-
-// settingsFieldCount returns the number of editable fields.
-func settingsFieldCount() int {
-	return 5
 }
 
 func max(a, b int) int {

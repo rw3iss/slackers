@@ -26,6 +26,8 @@ type KeyMap struct {
 	ShowHidden   key.Binding
 	RenameGroup    key.Binding
 	ToggleHidden   key.Binding
+	NextUnread     key.Binding
+	SearchMessages key.Binding
 }
 
 // DefaultKeyMap returns the default key bindings.
@@ -118,6 +120,14 @@ func DefaultKeyMap() KeyMap {
 		ToggleHidden: key.NewBinding(
 			key.WithKeys("ctrl+o"),
 			key.WithHelp("ctrl+o", "toggle hidden channels"),
+		),
+		NextUnread: key.NewBinding(
+			key.WithKeys("ctrl+n"),
+			key.WithHelp("ctrl+n", "next unread channel"),
+		),
+		SearchMessages: key.NewBinding(
+			key.WithKeys("ctrl+f"),
+			key.WithHelp("ctrl+f", "search messages"),
 		),
 	}
 }

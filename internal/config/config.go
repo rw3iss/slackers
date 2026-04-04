@@ -13,12 +13,16 @@ type Config struct {
 	BotToken        string `json:"bot_token"`
 	AppToken        string `json:"app_token"`
 	UserToken       string            `json:"user_token,omitempty"`
+	ClientID        string            `json:"client_id,omitempty"`
+	ClientSecret    string            `json:"client_secret,omitempty"`
 	SidebarWidth    int               `json:"sidebar_width,omitempty"`
 	TimestampFormat string            `json:"timestamp_format,omitempty"`
 	HiddenChannels  []string          `json:"hidden_channels,omitempty"`
 	ChannelAliases  map[string]string `json:"channel_aliases,omitempty"`
 	ChannelSortBy   string            `json:"channel_sort_by,omitempty"`
 	ChannelSortAsc  *bool             `json:"channel_sort_asc,omitempty"`
+	PollInterval    int               `json:"poll_interval,omitempty"`
+	Notifications   bool              `json:"notifications,omitempty"`
 	ConfigPath      string            `json:"-"`
 }
 
@@ -40,6 +44,7 @@ func defaults() *Config {
 	return &Config{
 		SidebarWidth:    25,
 		TimestampFormat: "15:04",
+		PollInterval:    10,
 		ConfigPath:      DefaultConfigPath(),
 	}
 }
@@ -67,6 +72,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.TimestampFormat == "" {
 		cfg.TimestampFormat = "15:04"
+	}
+	if cfg.PollInterval == 0 {
+		cfg.PollInterval = 10
 	}
 	cfg.ConfigPath = path
 
@@ -109,6 +117,12 @@ func (c *Config) Merge(overrides *Config) {
 	}
 	if overrides.UserToken != "" {
 		c.UserToken = overrides.UserToken
+	}
+	if overrides.ClientID != "" {
+		c.ClientID = overrides.ClientID
+	}
+	if overrides.ClientSecret != "" {
+		c.ClientSecret = overrides.ClientSecret
 	}
 	if overrides.ConfigPath != "" {
 		c.ConfigPath = overrides.ConfigPath

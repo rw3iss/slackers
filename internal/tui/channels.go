@@ -27,6 +27,7 @@ type ChannelListModel struct {
 	hidden      map[string]bool
 	showHidden  bool // toggle to show hidden channels inline
 	aliases     map[string]string
+	latestTS    map[string]string // channelID -> latest message timestamp for "recent" sort
 	sortBy      string
 	sortAsc     bool
 	focused     bool
@@ -37,11 +38,12 @@ type ChannelListModel struct {
 // NewChannelList creates a new channel list model.
 func NewChannelList() ChannelListModel {
 	return ChannelListModel{
-		unread:  make(map[string]bool),
-		hidden:  make(map[string]bool),
-		aliases: make(map[string]string),
-		sortBy:  SortByType,
-		sortAsc: true,
+		unread:   make(map[string]bool),
+		hidden:   make(map[string]bool),
+		aliases:  make(map[string]string),
+		latestTS: make(map[string]string),
+		sortBy:   SortByType,
+		sortAsc:  true,
 	}
 }
 
@@ -75,6 +77,19 @@ func (m *ChannelListModel) SetAliases(aliases map[string]string) {
 	} else {
 		m.aliases = aliases
 	}
+}
+
+// SetLatestTimestamps updates the latest message timestamps for channels (used by "recent" sort).
+func (m *ChannelListModel) SetLatestTimestamps(ts map[string]string) {
+	m.latestTS = ts
+}
+
+// UpdateLatestTimestamp updates a single channel's latest timestamp.
+func (m *ChannelListModel) UpdateLatestTimestamp(channelID, ts string) {
+	if m.latestTS == nil {
+		m.latestTS = make(map[string]string)
+	}
+	m.latestTS[channelID] = ts
 }
 
 func (m *ChannelListModel) SetSort(sortBy string, ascending bool) {
@@ -166,6 +181,25 @@ func (m *ChannelListModel) displayName(ch types.Channel) string {
 	return ch.Name
 }
 
+// NextUnreadChannel returns the next unread channel after the current selection,
+// wrapping around. Returns nil if no unread channels exist.
+func (m *ChannelListModel) NextUnreadChannel() *types.Channel {
+	visible := m.visibleChannels()
+	if len(visible) == 0 {
+		return nil
+	}
+	n := len(visible)
+	for i := 1; i <= n; i++ {
+		idx := (m.selected + i) % n
+		if m.unread[visible[idx].ID] {
+			m.selected = idx
+			m.ensureVisible()
+			return &visible[idx]
+		}
+	}
+	return nil
+}
+
 // visibleChannels returns channels in display order, respecting hide/sort.
 func (m *ChannelListModel) visibleChannels() []types.Channel {
 	var filtered []types.Channel
@@ -187,8 +221,20 @@ func (m *ChannelListModel) visibleChannels() []types.Channel {
 			return a > b
 		})
 	case SortByRecent:
-		// We don't have last-message timestamps in Channel, so fall through to type sort
-		fallthrough
+		sort.SliceStable(filtered, func(i, j int) bool {
+			tsI := m.latestTS[filtered[i].ID]
+			tsJ := m.latestTS[filtered[j].ID]
+			if tsI == "" {
+				tsI = "0"
+			}
+			if tsJ == "" {
+				tsJ = "0"
+			}
+			if m.sortAsc {
+				return tsI < tsJ // oldest first
+			}
+			return tsI > tsJ // newest first (most useful default)
+		})
 	default: // SortByType
 		sort.SliceStable(filtered, func(i, j int) bool {
 			oi := channelSortOrder(filtered[i])

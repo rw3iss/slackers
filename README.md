@@ -141,29 +141,63 @@ Slackers connects to Slack through a Slack App that you create in your workspace
 
 </details>
 
-### 2. Collect your tokens
+### 2. Generate an App-Level Token
 
-After creating the app, you need three tokens:
+This is needed for real-time messaging (Socket Mode):
+
+1. In your Slack app settings, go to **Basic Information** > **App-Level Tokens**
+2. Click **Generate Token and Scopes**, name it anything, and add the `connections:write` scope
+3. Copy the token (`xapp-...`)
+
+### 3. Configure Slackers
+
+There are two ways to set up. Both are offered when you run `slackers setup`.
+
+#### Option A: OAuth browser flow (recommended)
+
+This opens your browser to authorize with Slack and automatically obtains your bot and user tokens:
+
+```bash
+slackers setup    # choose option 2 when prompted
+# -- or directly --
+slackers login
+```
+
+You'll need the **Client ID** and **Client Secret** from your Slack app's Basic Information page (only on first run -- they're saved to config for future use). The app admin can share these with teammates so they can run `slackers login` to get their own tokens.
+
+#### Option B: Manual token entry
+
+```bash
+slackers setup    # choose option 1 when prompted
+```
+
+You'll need to paste three tokens:
 
 | Token | Where to find it | Looks like |
 |-------|-----------------|------------|
 | **Bot Token** | OAuth & Permissions > Bot User OAuth Token | `xoxb-...` |
-| **App Token** | Basic Information > App-Level Tokens (generate one with `connections:write` scope) | `xapp-...` |
+| **App Token** | Basic Information > App-Level Tokens | `xapp-...` |
 | **User Token** | OAuth & Permissions > User OAuth Token | `xoxp-...` |
 
-The **User Token** is what lets you send messages as yourself instead of as the bot. If you skip it, messages will appear as coming from "Slackers" rather than your name.
+The **User Token** is what lets you send messages as yourself instead of as the bot.
 
-### 3. Configure Slackers
+### For teammates
 
-Run the setup wizard:
+If someone on your team already set up the Slack app, they can share:
+- The **Client ID** and **Client Secret** (from the app's Basic Information page)
+- The **App-Level Token** (`xapp-...`)
+
+Then each teammate just runs:
 
 ```bash
-slackers setup
+slackers login --client-id YOUR_ID --client-secret YOUR_SECRET
 ```
 
-Paste each token when prompted. They are saved to `~/.config/slackers/config.json` and reused on every launch.
+This opens their browser, they authorize with their own Slack account, and their personal tokens are saved automatically. They only need to paste the App-Level Token once.
 
-You can also edit the config file directly:
+### Config file
+
+All tokens and settings are saved to `~/.config/slackers/config.json`:
 
 ```json
 {
@@ -207,7 +241,8 @@ slackers
 
 ```
 slackers              Launch the TUI
-slackers setup        Interactive token setup
+slackers setup        Interactive setup (manual or OAuth)
+slackers login        Authorize via browser (OAuth flow)
 slackers config       Show current configuration
 slackers version      Print version
 slackers --help       Show all options

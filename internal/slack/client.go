@@ -20,6 +20,13 @@ type SlackService interface {
 	FetchHistory(channelID string, limit int) ([]types.Message, error)
 	SendMessage(channelID, text string) error
 	ResolveUserName(userID string) string
+	// FetchHistoryAround fetches messages around a specific timestamp for context.
+	// Returns messages, the index of the target message (or -1), and any error.
+	FetchHistoryAround(channelID string, timestamp string, contextSize int) ([]types.Message, int, error)
+	// SearchMessages searches for messages matching query. If channelID is non-empty, scopes to that channel.
+	SearchMessages(query, channelID string, limit int) ([]types.SearchResult, error)
+	// CheckNewMessages returns channel IDs with new messages and a map of all latest timestamps.
+	CheckNewMessages(lastSeen map[string]string) ([]string, map[string]string, error)
 	// Warnings returns and clears any accumulated fallback warnings.
 	Warnings() []string
 }
@@ -254,6 +261,183 @@ func (c *slackClient) SendMessage(channelID, text string) error {
 		return fmt.Errorf("slack send message to %s: %w", channelID, err)
 	}
 	return nil
+}
+
+// FetchHistoryAround fetches messages before and after a specific timestamp.
+func (c *slackClient) FetchHistoryAround(channelID string, timestamp string, contextSize int) ([]types.Message, int, error) {
+	if contextSize < 5 {
+		contextSize = 25
+	}
+	half := contextSize / 2
+
+	// Fetch messages before (and including) the target.
+	beforeParams := &slack.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Latest:    timestamp,
+		Limit:     half + 1,
+		Inclusive: true,
+	}
+	var beforeResp *slack.GetConversationHistoryResponse
+	err := c.tryWithFallback("fetch context before", func(api *slack.Client) error {
+		var e error
+		beforeResp, e = api.GetConversationHistory(beforeParams)
+		return e
+	})
+	if err != nil {
+		return nil, -1, fmt.Errorf("fetch context for %s: %w", channelID, err)
+	}
+
+	// Fetch messages after the target.
+	afterParams := &slack.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Oldest:    timestamp,
+		Limit:     half,
+		Inclusive: false,
+	}
+	var afterResp *slack.GetConversationHistoryResponse
+	err = c.tryWithFallback("fetch context after", func(api *slack.Client) error {
+		var e error
+		afterResp, e = api.GetConversationHistory(afterParams)
+		return e
+	})
+	if err != nil {
+		// If after-fetch fails, just use before messages.
+		afterResp = &slack.GetConversationHistoryResponse{}
+	}
+
+	// Before messages come newest-first, reverse them.
+	var messages []types.Message
+	for i := len(beforeResp.Messages) - 1; i >= 0; i-- {
+		msg := beforeResp.Messages[i]
+		messages = append(messages, types.Message{
+			UserID:    msg.User,
+			UserName:  c.ResolveUserName(msg.User),
+			Text:      msg.Text,
+			Timestamp: parseSlackTimestamp(msg.Timestamp),
+			ChannelID: channelID,
+		})
+	}
+
+	targetIdx := len(messages) - 1 // The target should be the last of the "before" batch.
+
+	// After messages also come newest-first, reverse them.
+	for i := len(afterResp.Messages) - 1; i >= 0; i-- {
+		msg := afterResp.Messages[i]
+		messages = append(messages, types.Message{
+			UserID:    msg.User,
+			UserName:  c.ResolveUserName(msg.User),
+			Text:      msg.Text,
+			Timestamp: parseSlackTimestamp(msg.Timestamp),
+			ChannelID: channelID,
+		})
+	}
+
+	if targetIdx < 0 {
+		targetIdx = 0
+	}
+
+	return messages, targetIdx, nil
+}
+
+// SearchMessages searches for messages using Slack's search.messages API.
+// Requires a user token (search:read scope). If channelID is provided, the
+// query is scoped to that channel via "in:<channel>" modifier.
+func (c *slackClient) SearchMessages(query, channelID string, limit int) ([]types.SearchResult, error) {
+	if query == "" {
+		return nil, nil
+	}
+
+	searchQuery := query
+	if channelID != "" {
+		searchQuery = fmt.Sprintf("in:<#%s> %s", channelID, query)
+	}
+
+	params := slack.SearchParameters{
+		Sort:          "timestamp",
+		SortDirection: "desc",
+		Count:         limit,
+	}
+
+	var msgs *slack.SearchMessages
+	err := c.tryWithFallback("search messages", func(api *slack.Client) error {
+		var e error
+		msgs, e = api.SearchMessages(searchQuery, params)
+		return e
+	})
+	if err != nil {
+		return nil, fmt.Errorf("slack search: %w", err)
+	}
+
+	results := make([]types.SearchResult, 0, len(msgs.Matches))
+	for _, m := range msgs.Matches {
+		results = append(results, types.SearchResult{
+			Message: types.Message{
+				UserID:    m.User,
+				UserName:  c.ResolveUserName(m.User),
+				Text:      m.Text,
+				Timestamp: parseSlackTimestamp(m.Timestamp),
+				ChannelID: m.Channel.ID,
+			},
+			ChannelID:   m.Channel.ID,
+			ChannelName: m.Channel.Name,
+			Permalink:   m.Permalink,
+		})
+	}
+
+	return results, nil
+}
+
+// CheckNewMessages polls conversations.list and returns channel IDs that have
+// messages newer than the timestamps in lastSeen (keyed by channel ID).
+// This is a single API call that covers all channels.
+func (c *slackClient) CheckNewMessages(lastSeen map[string]string) ([]string, map[string]string, error) {
+	api := c.primary
+	if api == nil {
+		api = c.fallback
+	}
+
+	params := &slack.GetConversationsParameters{
+		Types:           []string{"public_channel", "private_channel", "im", "mpim"},
+		Limit:           200,
+		ExcludeArchived: true,
+	}
+
+	var updated []string
+	allLatest := make(map[string]string)
+
+	for {
+		convs, nextCursor, err := api.GetConversations(params)
+		if err != nil {
+			if c.fallback != nil && api != c.fallback {
+				convs, nextCursor, err = c.fallback.GetConversations(params)
+			}
+			if err != nil {
+				return nil, nil, fmt.Errorf("check new messages: %w", err)
+			}
+		}
+
+		for _, conv := range convs {
+			if conv.Latest == nil {
+				continue
+			}
+			latestTS := conv.Latest.Timestamp
+			if latestTS == "" {
+				continue
+			}
+			allLatest[conv.ID] = latestTS
+			seen, ok := lastSeen[conv.ID]
+			if !ok || latestTS > seen {
+				updated = append(updated, conv.ID)
+			}
+		}
+
+		if nextCursor == "" {
+			break
+		}
+		params.Cursor = nextCursor
+	}
+
+	return updated, allLatest, nil
 }
 
 // ResolveUserName returns a human-readable name for a user ID.

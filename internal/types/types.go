@@ -29,6 +29,14 @@ type User struct {
 	RealName    string
 }
 
+// SearchResult represents a single message search result.
+type SearchResult struct {
+	Message     Message
+	ChannelID   string
+	ChannelName string
+	Permalink   string
+}
+
 // ConnectionStatus represents the Socket Mode connection state.
 type ConnectionStatus int
 

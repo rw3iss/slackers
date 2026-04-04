@@ -26,12 +26,14 @@ var helpSections = []struct {
 			{"Enter", "Select channel (sidebar) or send message (input)"},
 			{"i  or  /", "Focus the message input"},
 			{"Esc", "Cancel input / return to sidebar"},
+			{"Ctrl-F", "Search messages (Tab toggles scope)"},
 			{"Ctrl-R", "Refresh channel list"},
 			{"Ctrl-K", "Search and jump to a channel"},
 			{"Ctrl-X", "Hide selected channel from sidebar"},
 			{"Ctrl-G", "View and unhide hidden channels"},
 			{"Ctrl-O", "Toggle hidden channels visible in sidebar"},
 			{"Ctrl-A", "Rename/alias selected channel"},
+			{"Ctrl-N", "Jump to next unread channel"},
 		},
 	},
 	{
@@ -91,7 +93,7 @@ func renderHelp(width, height int) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
-		Width(min(70, width-4)).
+		Width(min(85, width-4)).
 		MaxHeight(height - 4)
 
 	box := boxStyle.Render(content)
