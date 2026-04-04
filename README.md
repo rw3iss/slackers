@@ -23,7 +23,8 @@ A lightweight, terminal-based Slack client.
 - Terminal notifications (bell, desktop, urgency hints)
 - File uploads (`Ctrl-U`) with built-in file browser and `[FILE:<path>]` syntax
 - File downloads -- select files in chat history (`f` or `Ctrl-Up`) and download with Enter
-- Input history — Up/Down in the input bar recalls sent messages
+- Emoji rendering -- `:smiley:` `:thumbsup:` `:fire:` etc. rendered as real Unicode emoji
+- Input history -- Up/Down in the input bar recalls sent messages
 - Interactive settings (`Ctrl-S`) and built-in help (`Ctrl-H`)
 - OAuth browser login for quick onboarding
 - Single binary, cross-platform (Linux, macOS, Windows)
@@ -139,6 +140,18 @@ slackers version      Print version
 rm ~/.local/bin/slackers
 rm -rf ~/.config/slackers
 ```
+
+---
+
+## How it works
+
+Slackers uses the Slack Web API with a **user token** (`xoxp-`) as the primary client, falling back to a bot token (`xoxb-`) when needed. This means messages you send appear as you, and you see all channels you belong to -- not just the ones a bot has been added to.
+
+**Polling, not webhooks.** Slack's Socket Mode delivers real-time events only to channels the bot has joined. Since we don't want the bot joining your channels (it posts a system message each time), Slackers uses lightweight polling instead. Every N seconds (configurable, default 5), it fetches `conversations.history` with `limit=1` for each tracked channel. This returns just the latest message timestamp per channel -- a single small API call each. The app compares these timestamps against the last-seen timestamps stored locally. Only channels with genuinely new messages trigger a history refresh.
+
+**Efficient refresh.** The currently viewed channel gets a silent background update when new messages are detected -- new messages appear without disrupting your scroll position. Other channels are marked as unread (`*`) in the sidebar. No full history re-fetch happens unless you actually open the channel.
+
+**Configurable.** The poll interval, sidebar width, sort order, notifications, mouse mode, download path, and input history size are all adjustable in the interactive settings panel (`Ctrl-S`). All settings persist to `~/.config/slackers/config.json` and survive restarts. Channel-specific state (hidden channels, aliases, collapsed groups, last viewed channel) also persists.
 
 ---
 

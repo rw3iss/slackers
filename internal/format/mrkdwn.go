@@ -69,6 +69,9 @@ func FormatMessage(text string, users map[string]string) string {
 	text = strings.ReplaceAll(text, "&lt;", "<")
 	text = strings.ReplaceAll(text, "&gt;", ">")
 
+	// Replace :emoji: shortcodes with Unicode emoji.
+	text = ReplaceEmoji(text)
+
 	for i := len(inlineCodes) - 1; i >= 0; i-- {
 		text = strings.Replace(text, placeholder("IC", i), inlineCodes[i], 1)
 	}
