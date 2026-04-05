@@ -213,7 +213,7 @@ The team config JSON format:
 
 		fmt.Println("Team config loaded.")
 
-		if err := runOAuthFlow(cfg); err != nil {
+		if err := runOAuthFlowWithTeamID(cfg, teamCfg.TeamID); err != nil {
 			return err
 		}
 
@@ -503,6 +503,14 @@ func runManualFlow(cfg *config.Config) error {
 
 // runOAuthFlow handles the browser-based OAuth setup.
 func runOAuthFlow(cfg *config.Config) error {
+	return runOAuthFlowWithTeamID(cfg, "")
+}
+
+// runOAuthFlowWithTeamID handles the browser-based OAuth setup.
+// If expectedTeamID is non-empty, the workspace returned by Slack must match
+// or the flow is aborted — this prevents a malicious team config from routing
+// tokens through an attacker-controlled Slack app.
+func runOAuthFlowWithTeamID(cfg *config.Config, expectedTeamID string) error {
 	// Ensure we have client credentials.
 	if cfg.ClientID == "" {
 		fmt.Print("Enter Client ID (from your Slack app's Basic Information page): ")
@@ -519,8 +527,9 @@ func runOAuthFlow(cfg *config.Config) error {
 
 	// Run the OAuth flow.
 	result, err := auth.RunOAuthFlow(auth.OAuthConfig{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
+		ClientID:       cfg.ClientID,
+		ClientSecret:   cfg.ClientSecret,
+		ExpectedTeamID: expectedTeamID,
 	})
 	if err != nil {
 		return fmt.Errorf("OAuth failed: %w", err)
@@ -530,7 +539,8 @@ func runOAuthFlow(cfg *config.Config) error {
 	cfg.UserToken = result.UserToken
 
 	fmt.Println()
-	fmt.Printf("Authorized with workspace: %s\n", result.TeamName)
+	fmt.Printf("Authorized with workspace: %s (team ID: %s, app ID: %s)\n",
+		result.TeamName, result.TeamID, result.AppID)
 	fmt.Printf("  Bot token: %s\n", maskToken(cfg.BotToken))
 	fmt.Printf("  User token: %s\n", maskToken(cfg.UserToken))
 
@@ -559,18 +569,32 @@ type teamConfig struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
 	AppToken     string `json:"app_token"`
+	TeamID       string `json:"team_id"`
 }
 
 // fetchTeamConfig downloads and parses a team config JSON file from a URL.
-func fetchTeamConfig(url string) (*teamConfig, error) {
-	resp, err := http.Get(url)
+// Warns on insecure HTTP and missing team_id but lets the user proceed.
+func fetchTeamConfig(teamURL string) (*teamConfig, error) {
+	if !strings.HasPrefix(teamURL, "https://") {
+		fmt.Println()
+		fmt.Println("⚠ Warning: team config URL does not use HTTPS.")
+		fmt.Println("  Credentials (client_secret, app_token) will be transmitted in cleartext.")
+		fmt.Print("  Continue anyway? [y/N]: ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+			return nil, fmt.Errorf("aborted: use an HTTPS URL for secure credential transfer")
+		}
+	}
+
+	resp, err := http.Get(teamURL)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, teamURL)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -585,6 +609,19 @@ func fetchTeamConfig(url string) (*teamConfig, error) {
 
 	if tc.ClientID == "" || tc.ClientSecret == "" {
 		return nil, fmt.Errorf("team config must include client_id and client_secret")
+	}
+
+	if tc.TeamID == "" {
+		fmt.Println()
+		fmt.Println("⚠ Warning: team config does not include team_id.")
+		fmt.Println("  Workspace identity cannot be verified after OAuth.")
+		fmt.Println("  This means you are trusting that this config belongs to the workspace you expect.")
+		fmt.Print("  Continue anyway? [y/N]: ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+			return nil, fmt.Errorf("aborted: ask the workspace admin to add team_id to the config")
+		}
 	}
 
 	return &tc, nil
