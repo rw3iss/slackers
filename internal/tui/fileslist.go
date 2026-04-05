@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
@@ -22,17 +23,33 @@ type FilesListDownloadMsg struct {
 
 // FilesListModel provides an overlay showing all files across channels.
 type FilesListModel struct {
-	files    []types.FileInfo
-	selected int
-	loading  bool
-	width    int
-	height   int
+	allFiles       []types.FileInfo // unfiltered
+	files          []types.FileInfo // filtered view
+	selected       int
+	loading        bool
+	scopeAll       bool
+	channelID      string
+	filter         textinput.Model
+	filtering      bool
+	width          int
+	height         int
+	channelResolve func(string) string
+	slackSvc       slackpkg.SlackService
 }
 
 // NewFilesListModel creates a new files list overlay.
-func NewFilesListModel() FilesListModel {
+func NewFilesListModel(svc slackpkg.SlackService, channelID string, channelResolve func(string) string) FilesListModel {
+	ti := textinput.New()
+	ti.Placeholder = "Type to filter files..."
+	ti.CharLimit = 64
+
 	return FilesListModel{
-		loading: true,
+		loading:        true,
+		scopeAll:       channelID == "",
+		channelID:      channelID,
+		channelResolve: channelResolve,
+		slackSvc:       svc,
+		filter:         ti,
 	}
 }
 
@@ -46,26 +63,43 @@ func (m *FilesListModel) SetSize(w, h int) {
 func (m FilesListModel) Update(msg tea.Msg) (FilesListModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case FilesListLoadedMsg:
-		m.files = msg.Files
+		m.allFiles = msg.Files
 		m.loading = false
-		m.selected = 0
+		m.applyFilter()
 		return m, nil
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "up", "k":
+		case "tab":
+			if m.channelID != "" {
+				m.scopeAll = !m.scopeAll
+				m.loading = true
+				m.allFiles = nil
+				m.files = nil
+				m.selected = 0
+				m.filter.SetValue("")
+				chID := ""
+				if !m.scopeAll {
+					chID = m.channelID
+				}
+				return m, loadFilesCmd(m.slackSvc, chID)
+			}
+		case "up":
 			if m.selected > 0 {
 				m.selected--
 			}
-		case "down", "j":
+			return m, nil
+		case "down":
 			if m.selected < len(m.files)-1 {
 				m.selected++
 			}
+			return m, nil
 		case "pgup":
 			m.selected -= 10
 			if m.selected < 0 {
 				m.selected = 0
 			}
+			return m, nil
 		case "pgdown":
 			m.selected += 10
 			if m.selected >= len(m.files) {
@@ -74,6 +108,7 @@ func (m FilesListModel) Update(msg tea.Msg) (FilesListModel, tea.Cmd) {
 			if m.selected < 0 {
 				m.selected = 0
 			}
+			return m, nil
 		case "enter":
 			if len(m.files) > 0 && m.selected < len(m.files) {
 				f := m.files[m.selected]
@@ -81,9 +116,40 @@ func (m FilesListModel) Update(msg tea.Msg) (FilesListModel, tea.Cmd) {
 					return FilesListDownloadMsg{File: f}
 				}
 			}
+			return m, nil
 		}
+
+		// All other keys go to the filter input.
+		if !m.filtering && msg.String() != "esc" && msg.String() != "ctrl+l" {
+			m.filtering = true
+			m.filter.Focus()
+		}
+
+		prevVal := m.filter.Value()
+		var cmd tea.Cmd
+		m.filter, cmd = m.filter.Update(msg)
+		if m.filter.Value() != prevVal {
+			m.applyFilter()
+		}
+		return m, cmd
 	}
 	return m, nil
+}
+
+func (m *FilesListModel) applyFilter() {
+	query := strings.ToLower(strings.TrimSpace(m.filter.Value()))
+	if query == "" {
+		m.files = m.allFiles
+	} else {
+		m.files = nil
+		for _, f := range m.allFiles {
+			name := strings.ToLower(f.Name)
+			if strings.Contains(name, query) {
+				m.files = append(m.files, f)
+			}
+		}
+	}
+	m.selected = 0
 }
 
 // View renders the files list overlay.
@@ -110,10 +176,39 @@ func (m FilesListModel) View() string {
 	channelStyle := lipgloss.NewStyle().
 		Foreground(ColorAccent)
 
+	scopeStyle := lipgloss.NewStyle().
+		Foreground(ColorAccent).
+		Bold(true)
+
+	inactiveScopeStyle := lipgloss.NewStyle().
+		Foreground(ColorMuted)
+
 	var b strings.Builder
 
 	b.WriteString(titleStyle.Render("Files"))
 	b.WriteString("\n\n")
+
+	if m.channelID != "" {
+		currentLabel := "Current Channel"
+		allLabel := "All Channels"
+		if m.scopeAll {
+			b.WriteString("  " + inactiveScopeStyle.Render(currentLabel) + "  " + scopeStyle.Render("["+allLabel+"]"))
+		} else {
+			b.WriteString("  " + scopeStyle.Render("["+currentLabel+"]") + "  " + inactiveScopeStyle.Render(allLabel))
+		}
+		b.WriteString("    " + dimStyle.Render("(Tab to toggle)"))
+		b.WriteString("\n\n")
+	}
+
+	// Filter input
+	if m.filtering || m.filter.Value() != "" {
+		b.WriteString("  ")
+		b.WriteString(m.filter.View())
+		b.WriteString("\n\n")
+	} else if !m.loading && len(m.allFiles) > 0 {
+		b.WriteString(dimStyle.Render("  Start typing to filter files..."))
+		b.WriteString("\n\n")
+	}
 
 	if m.loading {
 		b.WriteString(dimStyle.Render("  Loading files..."))
@@ -158,8 +253,14 @@ func (m FilesListModel) View() string {
 				metaStyle.Render(sizeStr),
 				metaStyle.Render(ts),
 			)
-			if f.ChannelName != "" {
-				line += "  " + channelStyle.Render("#"+f.ChannelName)
+			chDisplay := ""
+			if m.channelResolve != nil && f.ChannelName != "" {
+				chDisplay = m.channelResolve(f.ChannelName)
+			} else if f.ChannelName != "" {
+				chDisplay = "#" + f.ChannelName
+			}
+			if chDisplay != "" {
+				line += "  " + channelStyle.Render(chDisplay)
 			}
 			if f.UserName != "" {
 				line += "  " + metaStyle.Render("by "+f.UserName)
@@ -172,7 +273,11 @@ func (m FilesListModel) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  Enter: download | Esc: close"))
+	if m.channelID != "" {
+		b.WriteString(dimStyle.Render("  Enter: download | Tab: toggle scope | Esc: close"))
+	} else {
+		b.WriteString(dimStyle.Render("  Enter: download | Esc: close"))
+	}
 
 	content := b.String()
 
@@ -193,9 +298,9 @@ func (m FilesListModel) View() string {
 		box)
 }
 
-func loadFilesCmd(svc slackpkg.SlackService) tea.Cmd {
+func loadFilesCmd(svc slackpkg.SlackService, channelID string) tea.Cmd {
 	return func() tea.Msg {
-		files, err := svc.ListFiles(100)
+		files, err := svc.ListFiles(channelID, 100)
 		if err != nil {
 			return FilesListLoadedMsg{}
 		}

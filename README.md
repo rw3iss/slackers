@@ -9,7 +9,7 @@
 
 A lightweight, terminal-based Slack client.
 
-<a href=".github/screenshot.png"><img src=".github/screenshot.png" alt="Slackers screenshot" width="600"></a>
+<a href=".github/screenshot.png"><img src=".github/screenshot.png" alt="Slackers chat" width="280"></a> <a href=".github/screenshot-help.png"><img src=".github/screenshot-help.png" alt="Slackers help" width="280"></a>
 
 ## Features
 
@@ -23,7 +23,7 @@ A lightweight, terminal-based Slack client.
 - Terminal notifications (bell, desktop, urgency hints)
 - File uploads (`Ctrl-U`) with built-in file browser and `[FILE:<path>]` syntax
 - File downloads -- select files in chat history (`f` or `Ctrl-Up`) and download with Enter
-- Files browser (`Ctrl-L`) -- browse all files across all channels, download with Enter
+- Files browser (`Ctrl-L`) -- browse files with search filter, channel scope toggle, download with Enter
 - Emoji rendering -- `:smiley:` `:thumbsup:` `:fire:` etc. rendered as real Unicode emoji
 - Input history -- Up/Down in the input bar recalls sent messages
 - Full screen chat mode (`Ctrl-W`) -- hide sidebar, auto-show on focus
@@ -87,7 +87,8 @@ Teammates then run: `slackers join https://your-url.com/team.json`
 
 ## Usage
 
-### Keyboard shortcuts
+<details>
+<summary>Keyboard shortcuts</summary>
 
 | Key | Action |
 |-----|--------|
@@ -98,13 +99,15 @@ Teammates then run: `slackers join https://your-url.com/team.json`
 | `Ctrl-K` | Search channels |
 | `Ctrl-F` | Search messages (Tab toggles scope) |
 | `Ctrl-N` | Next unread channel |
+| `Ctrl-L` | Browse all files |
 | `Ctrl-X` | Hide channel |
 | `Ctrl-G` | Unhide channels |
 | `Ctrl-O` | Toggle hidden visible |
 | `Ctrl-A` | Rename/alias channel |
 | `Ctrl-U` | Attach file to send |
-| `f` (messages panel) | Toggle file select mode |
-| `Ctrl-Up` | Jump to file select mode from anywhere |
+| `Ctrl-W` | Toggle full screen chat |
+| `f` (messages) | Toggle file select mode |
+| `Ctrl-Up` | Enter file select mode |
 | `Ctrl-Down` | Exit file select, focus input |
 | `Up` / `Down` (input) | Browse sent message history |
 | `Ctrl-R` | Refresh channels |
@@ -112,12 +115,17 @@ Teammates then run: `slackers join https://your-url.com/team.json`
 | `Ctrl-S` | Settings |
 | `Ctrl-Q` | Quit |
 
-### Settings (Ctrl-S)
+</details>
+
+<details>
+<summary>Settings (Ctrl-S)</summary>
 
 | Setting | Options | Description |
 |---------|---------|-------------|
 | Sidebar Width | 10-80 | Sidebar width in characters |
 | Timestamp Format | Go format | e.g. `15:04`, `3:04 PM` |
+| Away Timeout | 0+ seconds | Auto-away after idle (0 = disabled) |
+| Mouse | on / off | Mouse click/scroll support (restart required) |
 | Notifications | on / off | Terminal bell + desktop notifications |
 | Poll Interval | 1-300 | Seconds between message checks |
 | Sort By | type / name / recent | Channel sorting |
@@ -126,6 +134,8 @@ Teammates then run: `slackers join https://your-url.com/team.json`
 | Download Path | folder | File download/upload location |
 
 Fields with fixed options cycle with Enter/Tab.
+
+</details>
 
 ### CLI
 

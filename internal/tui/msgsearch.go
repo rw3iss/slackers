@@ -35,21 +35,23 @@ type MsgSearchModel struct {
 	slackSvc  slackpkg.SlackService
 	width     int
 	height    int
-	debounce  time.Time
+	debounce       time.Time
+	channelResolve func(string) string
 }
 
 // NewMsgSearchModel creates a new message search overlay.
-func NewMsgSearchModel(svc slackpkg.SlackService, currentChannelID string) MsgSearchModel {
+func NewMsgSearchModel(svc slackpkg.SlackService, currentChannelID string, channelResolve func(string) string) MsgSearchModel {
 	ti := textinput.New()
 	ti.Placeholder = "Search messages..."
 	ti.Focus()
 	ti.CharLimit = 128
 
 	return MsgSearchModel{
-		input:     ti,
-		channelID: currentChannelID,
-		slackSvc:  svc,
-		scopeAll:  currentChannelID == "",
+		input:          ti,
+		channelID:      currentChannelID,
+		slackSvc:       svc,
+		scopeAll:       currentChannelID == "",
+		channelResolve: channelResolve,
 	}
 }
 
@@ -198,7 +200,11 @@ func (m MsgSearchModel) View() string {
 	if m.loading {
 		b.WriteString(dimStyle.Render("  Searching..."))
 	} else if m.noResults {
-		b.WriteString(dimStyle.Render("  No results found."))
+		hint := "  No results found."
+		if len(m.input.Value()) < 2 && m.scopeAll {
+			hint = "  No results. Try a longer query (Slack requires 2+ characters for global search)."
+		}
+		b.WriteString(dimStyle.Render(hint))
 	} else if len(m.results) > 0 {
 		// Each result takes ~3 lines (header + text + blank). Calculate how many fit.
 		linesPerResult := 3
@@ -246,7 +252,11 @@ func (m MsgSearchModel) View() string {
 				resultTimeStyle.Render(timeStr),
 			)
 			if m.scopeAll {
-				line += "  " + resultChannelStyle.Render("#"+r.ChannelName)
+				chDisplay := "#" + r.ChannelName
+				if m.channelResolve != nil {
+					chDisplay = m.channelResolve(r.ChannelID)
+				}
+				line += "  " + resultChannelStyle.Render(chDisplay)
 			}
 			b.WriteString(line)
 			b.WriteString("\n")

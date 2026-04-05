@@ -29,8 +29,8 @@ type SlackService interface {
 	FetchHistoryAround(channelID string, timestamp string, contextSize int) ([]types.Message, int, error)
 	// SearchMessages searches for messages matching query. If channelID is non-empty, scopes to that channel.
 	SearchMessages(query, channelID string, limit int) ([]types.SearchResult, error)
-	// ListFiles returns all files visible to the user.
-	ListFiles(count int) ([]types.FileInfo, error)
+	// ListFiles returns files visible to the user. If channelID is non-empty, scopes to that channel.
+	ListFiles(channelID string, count int) ([]types.FileInfo, error)
 	// UploadFile uploads a file to a channel.
 	UploadFile(channelID, filePath string) error
 	// DownloadFile downloads a file from Slack to the local path. Returns bytes written.
@@ -404,13 +404,14 @@ func (c *slackClient) SearchMessages(query, channelID string, limit int) ([]type
 }
 
 // ListFiles returns all files visible to the user across all channels.
-func (c *slackClient) ListFiles(count int) ([]types.FileInfo, error) {
+func (c *slackClient) ListFiles(channelID string, count int) ([]types.FileInfo, error) {
 	if count <= 0 {
 		count = 100
 	}
 
 	params := slack.ListFilesParameters{
-		Limit: count,
+		Limit:   count,
+		Channel: channelID,
 	}
 
 	var files []types.FileInfo

@@ -27,7 +27,7 @@ func splashTimerCmd() tea.Cmd {
 	})
 }
 
-func renderSplash(width, height int) string {
+func renderSplash(width, height int, version string) string {
 	bannerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("15")).
 		Bold(true)
@@ -36,10 +36,14 @@ func renderSplash(width, height int) string {
 		Foreground(ColorMuted).
 		Italic(true)
 
+	versionStyle := lipgloss.NewStyle().
+		Foreground(ColorMuted)
+
 	banner := bannerStyle.Render(splashBanner)
 	tagline := taglineStyle.Render("terminal slack client")
+	ver := versionStyle.Render("v" + version)
 
-	block := lipgloss.JoinVertical(lipgloss.Center, banner, "", tagline)
+	block := lipgloss.JoinVertical(lipgloss.Center, banner, "", tagline, ver)
 
 	return lipgloss.Place(width, height,
 		lipgloss.Center, lipgloss.Center,

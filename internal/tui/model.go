@@ -75,6 +75,12 @@ type FileDownloadProgressMsg struct {
 // ActivityCheckMsg triggers an away-status check.
 type ActivityCheckMsg struct{}
 
+// channelInfo stores the name and alias for a channel.
+type channelInfo struct {
+	name  string
+	alias string
+}
+
 var filePattern = regexp.MustCompile(`\[FILE:([^\]]+)\]`)
 
 // ContextHistoryMsg carries messages around a search result for context viewing.
@@ -120,8 +126,11 @@ type Model struct {
 	err        error
 	warning    string
 
+	// Channel index: ID -> {name, alias}
+	channelIndex map[string]channelInfo
+
 	// Polling
-	lastSeen map[string]string // channelID -> latest message timestamp
+	lastSeen map[string]string
 
 	// Config
 	cfg *config.Config
@@ -144,11 +153,12 @@ type Model struct {
 	ready        bool
 	splash       bool
 	initialLoad  bool
-	fullMode     bool // sidebar hidden, chat fullscreen
+	fullMode     bool
+	version      string
 }
 
 // NewModel creates a new root TUI model.
-func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, cfg *config.Config) Model {
+func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, cfg *config.Config, version string) Model {
 	ch := NewChannelList()
 	ch.SetFocused(true)
 
@@ -168,11 +178,13 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		settings:  NewSettingsModel(cfg),
 		focus:     types.FocusSidebar,
 		users:     make(map[string]types.User),
-		lastSeen:  make(map[string]string),
+		channelIndex: make(map[string]channelInfo),
+		lastSeen:     make(map[string]string),
 		cfg:       cfg,
 		lastActivity: time.Now(),
 		splash:       true,
 		initialLoad:  true,
+		version:      version,
 		slackSvc:     slackSvc,
 		socketSvc: socketSvc,
 		eventChan: make(chan slackpkg.SocketEvent, 100),
@@ -262,7 +274,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.currentCh != nil {
 					chID = m.currentCh.ID
 				}
-				m.msgSearch = NewMsgSearchModel(m.slackSvc, chID)
+				m.msgSearch = NewMsgSearchModel(m.slackSvc, chID, m.resolveChannelDisplay)
 				m.msgSearch.SetSize(m.width, m.height)
 				m.overlay = overlayMsgSearch
 			}
@@ -370,7 +382,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if m.overlay == overlayFilesList {
-			if msg.String() == "esc" {
+			if msg.String() == "esc" || msg.String() == "ctrl+l" {
 				m.overlay = overlayNone
 				return m, nil
 			}
@@ -409,10 +421,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keymap.FilesList):
-			m.filesList = NewFilesListModel()
+			if m.overlay == overlayFilesList {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			chID := ""
+			if m.currentCh != nil {
+				chID = m.currentCh.ID
+			}
+			m.filesList = NewFilesListModel(m.slackSvc, chID, m.resolveChannelDisplay)
 			m.filesList.SetSize(m.width, m.height)
 			m.overlay = overlayFilesList
-			return m, loadFilesCmd(m.slackSvc)
+			// Default to current channel if viewing one, otherwise all.
+			loadChID := chID
+			if chID == "" {
+				m.filesList.scopeAll = true
+			}
+			return m, loadFilesCmd(m.slackSvc, loadChID)
 
 		case key.Matches(msg, m.keymap.ToggleFullMode):
 			m.fullMode = !m.fullMode
@@ -602,6 +627,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cfg.ChannelAliases[msg.ChannelID] = msg.Alias
 		}
 		m.channels.SetAliases(m.cfg.ChannelAliases)
+		m.buildChannelIndex()
 		_ = config.Save(m.cfg)
 		return m, nil
 
@@ -610,6 +636,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.channels.SetHiddenChannels(m.cfg.HiddenChannels)
 		m.channels.SetAliases(m.cfg.ChannelAliases)
 		m.channels.SetCollapsedGroups(m.cfg.CollapsedGroups)
+		m.buildChannelIndex()
 		sortAsc := true
 		if m.cfg.ChannelSortAsc != nil {
 			sortAsc = *m.cfg.ChannelSortAsc
@@ -852,7 +879,7 @@ func (m Model) View() string {
 	}
 
 	if m.splash {
-		return renderSplash(m.width, m.height)
+		return renderSplash(m.width, m.height, m.version)
 	}
 
 	// Render overlays on top
@@ -1071,6 +1098,36 @@ func (m *Model) cycleFocusBackward() {
 func (m *Model) saveLastChannel(channelID string) {
 	m.cfg.LastChannelID = channelID
 	go config.Save(m.cfg) // fire-and-forget, don't block the UI
+}
+
+// buildChannelIndex populates the channel ID -> name/alias lookup.
+func (m *Model) buildChannelIndex() {
+	m.channelIndex = make(map[string]channelInfo, len(m.channels.channels))
+	for _, ch := range m.channels.channels {
+		ci := channelInfo{name: ch.Name}
+		if alias, ok := m.cfg.ChannelAliases[ch.ID]; ok && alias != "" {
+			ci.alias = alias
+		}
+		m.channelIndex[ch.ID] = ci
+	}
+}
+
+// resolveChannelDisplay returns "alias (#name)" or "#name" or "channelID" for display.
+func (m *Model) resolveChannelDisplay(channelID string) string {
+	ci, ok := m.channelIndex[channelID]
+	if !ok {
+		return channelID
+	}
+	if ci.alias != "" {
+		if ci.name != "" && ci.name != ci.alias {
+			return ci.alias + " (#" + ci.name + ")"
+		}
+		return ci.alias
+	}
+	if ci.name != "" {
+		return "#" + ci.name
+	}
+	return channelID
 }
 
 func drainWarnings(m *Model) {
