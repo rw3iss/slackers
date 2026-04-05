@@ -28,6 +28,7 @@ type SettingsModel struct {
 	width    int
 	height   int
 	message  string
+	version  string
 }
 
 type settingsField struct {
@@ -39,7 +40,7 @@ type settingsField struct {
 }
 
 // NewSettingsModel creates a settings editor from the current config.
-func NewSettingsModel(cfg *config.Config) SettingsModel {
+func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 	ti := textinput.New()
 	ti.CharLimit = 64
 
@@ -110,6 +111,12 @@ func NewSettingsModel(cfg *config.Config) SettingsModel {
 				options:     []string{"asc", "desc"},
 			},
 			{
+				label:       "Keyboard Shortcuts",
+				key:         "shortcuts",
+				value:       "Customize...",
+				description: "View and edit all keyboard shortcuts",
+			},
+			{
 				label:       "Bot Token",
 				key:         "bot_token",
 				value:       maskToken(cfg.BotToken),
@@ -128,8 +135,9 @@ func NewSettingsModel(cfg *config.Config) SettingsModel {
 				description: "Slack user token (xoxp-...) for sending as yourself",
 			},
 		},
-		cfg:   cfg,
-		input: ti,
+		cfg:     cfg,
+		input:   ti,
+		version: version,
 	}
 }
 
@@ -221,6 +229,13 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		if f.key == "bot_token" || f.key == "app_token" || f.key == "user_token" {
 			m.message = "Run 'slackers setup' to change tokens"
 			return m, nil
+		}
+
+		// Keyboard shortcuts opens the shortcuts editor.
+		if f.key == "shortcuts" {
+			return m, func() tea.Msg {
+				return ShortcutsEditorOpenMsg{}
+			}
 		}
 
 		// Download path opens a folder browser.
@@ -416,7 +431,15 @@ func (m SettingsModel) View() string {
 
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("Settings"))
+	verStyle := lipgloss.NewStyle().Foreground(ColorMuted)
+	settingsBoxWidth := min(65, m.width-4) - 8
+	titleLeft := titleStyle.Render("Settings")
+	titleRight := verStyle.Render("slackers v" + m.version)
+	titleGap := settingsBoxWidth - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
+	if titleGap < 1 {
+		titleGap = 1
+	}
+	b.WriteString(titleLeft + strings.Repeat(" ", titleGap) + titleRight)
 	b.WriteString("\n\n")
 
 	for i, f := range m.fields {

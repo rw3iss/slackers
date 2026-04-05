@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/config"
+	"github.com/rw3iss/slackers/internal/shortcuts"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
 	"github.com/rw3iss/slackers/internal/types"
 )
@@ -30,6 +31,7 @@ const (
 	overlayMsgSearch
 	overlayFileBrowser
 	overlayFilesList
+	overlayShortcuts
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -65,6 +67,9 @@ type FileDownloadCompleteMsg struct {
 	Err      error
 }
 
+// FileDownloadCancelledMsg signals a download was cancelled.
+type FileDownloadCancelledMsg struct{}
+
 // FileDownloadProgressMsg reports download progress.
 type FileDownloadProgressMsg struct {
 	FileName   string
@@ -74,6 +79,9 @@ type FileDownloadProgressMsg struct {
 
 // ActivityCheckMsg triggers an away-status check.
 type ActivityCheckMsg struct{}
+
+// ClearWarningMsg clears the status bar warning if the user was recently active.
+type ClearWarningMsg struct{}
 
 // channelInfo stores the name and alias for a channel.
 type channelInfo struct {
@@ -113,7 +121,8 @@ type Model struct {
 	msgSearch   MsgSearchModel
 	fileBrowser FileBrowserModel
 	fbPurpose   fileBrowserPurpose
-	filesList   FilesListModel
+	filesList       FilesListModel
+	shortcutsEditor ShortcutsEditorModel
 
 	// State
 	focus      types.Focus
@@ -125,6 +134,10 @@ type Model struct {
 	teamName   string
 	err        error
 	warning    string
+
+	// Shortcuts
+	shortcutMap       shortcuts.ShortcutMap
+	shortcutOverrides shortcuts.ShortcutMap
 
 	// Channel index: ID -> {name, alias}
 	channelIndex map[string]channelInfo
@@ -141,8 +154,12 @@ type Model struct {
 	eventChan chan slackpkg.SocketEvent
 
 	// Activity tracking
-	lastActivity time.Time
-	isAway       bool
+	lastActivity   time.Time
+	isAway         bool
+
+	// Download state
+	downloading    bool
+	downloadCancel context.CancelFunc
 
 	// Layout
 	width        int
@@ -170,12 +187,20 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	}
 	inp.SetMaxHistory(histMax)
 
+	// Load and merge shortcuts.
+	defaults := shortcuts.DefaultShortcuts()
+	overrides, _ := shortcuts.Load(shortcuts.UserConfigPath())
+	merged := shortcuts.Merge(defaults, overrides)
+	km := BuildKeyMap(merged)
+
 	return Model{
-		channels:  ch,
-		messages:  NewMessageView(),
-		input:     inp,
-		keymap:    DefaultKeyMap(),
-		settings:  NewSettingsModel(cfg),
+		channels:          ch,
+		messages:          NewMessageView(),
+		input:             inp,
+		keymap:            km,
+		shortcutMap:       merged,
+		shortcutOverrides: overrides,
+		settings:          NewSettingsModel(cfg, version),
 		focus:     types.FocusSidebar,
 		users:     make(map[string]types.User),
 		channelIndex: make(map[string]channelInfo),
@@ -218,6 +243,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		m.lastActivity = time.Now()
 		if m.overlay != overlayNone || m.splash {
 			return m, nil
 		}
@@ -227,6 +253,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Track activity for away detection.
 		m.lastActivity = time.Now()
 		clearWindowUrgent()
+
+		// When the shortcuts editor is capturing a key, bypass ALL other handlers.
+		// This prevents quit, help, settings, etc. from firing during rebind.
+		if m.overlay == overlayShortcuts && m.shortcutsEditor.IsCapturing() {
+			var cmd tea.Cmd
+			m.shortcutsEditor, cmd = m.shortcutsEditor.Update(msg)
+			return m, cmd
+		}
 
 		// If returning from away, trigger a full refresh.
 		if m.isAway {
@@ -260,7 +294,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.overlay = overlayNone
 				m.applySettings()
 			} else {
-				m.settings = NewSettingsModel(m.cfg)
+				m.settings = NewSettingsModel(m.cfg, m.version)
 				m.settings.SetSize(m.width, m.height)
 				m.overlay = overlaySettings
 			}
@@ -390,6 +424,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.filesList, cmd = m.filesList.Update(msg)
 			return m, cmd
 		}
+		if m.overlay == overlayShortcuts {
+			if msg.String() == "esc" && !m.shortcutsEditor.editing {
+				m.overlay = overlayNone
+				// Rebuild keymap from updated shortcuts.
+				m.keymap = BuildKeyMap(m.shortcutsEditor.Merged())
+				m.shortcutMap = m.shortcutsEditor.Merged()
+				m.shortcutOverrides = m.shortcutsEditor.Overrides()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.shortcutsEditor, cmd = m.shortcutsEditor.Update(msg)
+			return m, cmd
+		}
 
 		// Normal key handling (no overlay)
 		switch {
@@ -438,6 +485,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filesList.scopeAll = true
 			}
 			return m, loadFilesCmd(m.slackSvc, loadChID)
+
+		case key.Matches(msg, m.keymap.CancelDownload):
+			if m.downloading && m.downloadCancel != nil {
+				m.downloadCancel()
+				m.downloading = false
+				m.downloadCancel = nil
+				m.warning = "Download cancelled"
+				return m, nil
+			}
+
+		case key.Matches(msg, m.keymap.Escape):
+			if m.focus == types.FocusSidebar {
+				m.focus = types.FocusInput
+			} else {
+				m.focus = types.FocusSidebar
+			}
+			m.updateFocus()
+			return m, nil
 
 		case key.Matches(msg, m.keymap.ToggleFullMode):
 			m.fullMode = !m.fullMode
@@ -488,13 +553,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case msg.String() == "ctrl+down":
+		case key.Matches(msg, m.keymap.FocusInputGlobal):
 			m.messages.ExitSelectMode()
 			m.focus = types.FocusInput
 			m.updateFocus()
 			return m, nil
 
-		case msg.String() == "ctrl+up":
+		case key.Matches(msg, m.keymap.EnterFileSelect):
 			// From input or anywhere: jump to messages and enter file select mode.
 			if m.messages.EnterFileSelectMode() {
 				m.focus = types.FocusMessages
@@ -778,7 +843,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		destPath := filepath.Join(downloadPath, msg.File.Name)
 		m.warning = fmt.Sprintf("Downloading %s...", msg.File.Name)
-		return m, downloadFileCmd(m.slackSvc, msg.File, destPath)
+		return m, m.startDownload(msg.File, destPath)
+
+	case ShortcutsEditorOpenMsg:
+		m.shortcutsEditor = NewShortcutsEditorModel(m.shortcutMap, m.shortcutOverrides, m.version)
+		m.shortcutsEditor.SetSize(m.width, m.height)
+		m.overlay = overlayShortcuts
+		return m, nil
+
+	case ShortcutsSavedMsg:
+		// Immediately rebuild keymap from the editor's current state.
+		m.shortcutMap = m.shortcutsEditor.Merged()
+		m.shortcutOverrides = m.shortcutsEditor.Overrides()
+		m.keymap = BuildKeyMap(m.shortcutMap)
+		return m, nil
 
 	case SettingsOpenFileBrowserMsg:
 		m.fileBrowser = NewFileBrowser(FileBrowserConfig{
@@ -811,7 +889,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cfg.DownloadPath = msg.Path
 				_ = config.Save(m.cfg)
 				// Update the settings field value and reopen settings.
-				m.settings = NewSettingsModel(m.cfg)
+				m.settings = NewSettingsModel(m.cfg, m.version)
 				m.settings.SetSize(m.width, m.height)
 				m.overlay = overlaySettings
 				return m, nil
@@ -827,16 +905,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		destPath := filepath.Join(downloadPath, msg.File.Name)
 		m.warning = fmt.Sprintf("Downloading %s...", msg.File.Name)
-		return m, downloadFileCmd(m.slackSvc, msg.File, destPath)
+		return m, m.startDownload(msg.File, destPath)
+
+	case FileDownloadCancelledMsg:
+		m.downloading = false
+		m.downloadCancel = nil
+		m.warning = "Download cancelled"
+		return m, clearWarningCmd()
 
 	case FileDownloadCompleteMsg:
+		m.downloading = false
+		m.downloadCancel = nil
 		if msg.Err != nil {
 			m.err = msg.Err
 			m.warning = ""
 		} else {
 			m.warning = fmt.Sprintf("Downloaded: %s", msg.DestPath)
 		}
-		return m, nil
+		return m, clearWarningCmd()
 
 	case FileDownloadProgressMsg:
 		pct := 0
@@ -848,6 +934,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FileUploadedMsg:
 		return m, nil
+
+	case ClearWarningMsg:
+		if m.warning == "" {
+			return m, nil
+		}
+		// Only clear if user was active in the last 5 seconds.
+		if time.Since(m.lastActivity) < 5*time.Second {
+			m.warning = ""
+			return m, nil
+		}
+		// User inactive — check again in 5 seconds.
+		return m, clearWarningCmd()
 
 	case ActivityCheckMsg:
 		awayTimeout := m.cfg.AwayTimeout
@@ -885,7 +983,7 @@ func (m Model) View() string {
 	// Render overlays on top
 	switch m.overlay {
 	case overlayHelp:
-		return renderHelp(m.width, m.height)
+		return renderHelp(m.width, m.height, m.version)
 	case overlaySettings:
 		return m.settings.View()
 	case overlaySearch:
@@ -900,6 +998,8 @@ func (m Model) View() string {
 		return m.fileBrowser.View()
 	case overlayFilesList:
 		return m.filesList.View()
+	case overlayShortcuts:
+		return m.shortcutsEditor.View()
 	}
 
 	msgView := m.messages.View()
@@ -990,6 +1090,15 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if msg.Button == tea.MouseButtonLeft {
 			// Determine which panel was clicked based on layout.
 			// Check input bar first since it spans full width.
+			// Click on status bar (last line) cancels download.
+			if y >= m.height-1 && m.downloading && m.downloadCancel != nil {
+				m.downloadCancel()
+				m.downloading = false
+				m.downloadCancel = nil
+				m.warning = "Download cancelled"
+				return m, nil
+			}
+
 			if y >= m.inputTop {
 				m.focus = types.FocusInput
 				m.updateFocus()
@@ -1027,7 +1136,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					}
 					destPath := filepath.Join(downloadPath, file.Name)
 					m.warning = fmt.Sprintf("Downloading %s...", file.Name)
-					return m, downloadFileCmd(m.slackSvc, *file, destPath)
+					return m, m.startDownload(*file, destPath)
 				}
 			}
 
@@ -1180,8 +1289,15 @@ func (m Model) renderStatusBar() string {
 
 	hints := HelpStyle.Render("Ctrl-H: help | Ctrl-S: settings | Ctrl-C: quit")
 
-	status := fmt.Sprintf(" %s | %s | %s%s",
-		StatusBarStyle.Render(team), connStr, hints, extra)
+	left := fmt.Sprintf(" %s | %s%s", connStr, hints, extra)
+	right := StatusBarStyle.Render(fmt.Sprintf("slackers v%s ", m.version))
+
+	// Pad the middle to push right label to the edge.
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	status := left + strings.Repeat(" ", gap) + right
 
 	return StatusBarStyle.Width(m.width).Render(status)
 }
@@ -1296,9 +1412,22 @@ func fetchContextCmd(svc slackpkg.SlackService, channelID, timestamp, channelNam
 	}
 }
 
-func downloadFileCmd(svc slackpkg.SlackService, file types.FileInfo, destPath string) tea.Cmd {
+func (m *Model) startDownload(file types.FileInfo, destPath string) tea.Cmd {
+	if m.downloadCancel != nil {
+		m.downloadCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.downloadCancel = cancel
+	m.downloading = true
+	m.warning = fmt.Sprintf("Downloading %s... (Ctrl-D to cancel)", file.Name)
+
+	svc := m.slackSvc
 	return func() tea.Msg {
-		err := svc.DownloadFile(file.URL, destPath, nil)
+		err := svc.DownloadFile(ctx, file.URL, destPath)
+		if ctx.Err() != nil {
+			os.Remove(destPath)
+			return FileDownloadCancelledMsg{}
+		}
 		if err != nil {
 			return FileDownloadCompleteMsg{Err: err}
 		}
@@ -1336,6 +1465,12 @@ func sendMessageWithFilesCmd(svc slackpkg.SlackService, channelID, text string) 
 		}
 		return MessageSentMsg{}
 	}
+}
+
+func clearWarningCmd() tea.Cmd {
+	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+		return ClearWarningMsg{}
+	})
 }
 
 func activityCheckCmd(awayTimeoutSec int) tea.Cmd {

@@ -424,7 +424,7 @@ func (m ChannelListModel) Update(msg tea.Msg) (ChannelListModel, tea.Cmd) {
 		case key.Matches(msg, km.End):
 			m.selected = total - 1
 
-		case key.Matches(msg, km.Enter), msg.String() == " ":
+		case key.Matches(msg, km.Enter), key.Matches(msg, km.SidebarCollapse):
 			// If a header is selected, toggle collapse.
 			if m.selected >= 0 && m.selected < len(m.rows) && m.rows[m.selected].isHeader {
 				hk := m.rows[m.selected].headerKey

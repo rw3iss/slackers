@@ -88,7 +88,9 @@ Teammates then run: `slackers join https://your-url.com/team.json`
 ## Usage
 
 <details>
-<summary>Keyboard shortcuts</summary>
+<summary>Keyboard shortcuts (customizable)</summary>
+
+All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard Shortcuts** to rebind any key in-app (changes take effect immediately). You can also edit `~/.config/slackers/shortcuts.json` directly — only overridden keys need to be listed; defaults fill in the rest. See [internal/shortcuts/defaults.json](internal/shortcuts/defaults.json) for the full default mapping.
 
 | Key | Action |
 |-----|--------|

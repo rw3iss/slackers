@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,8 +34,8 @@ type SlackService interface {
 	ListFiles(channelID string, count int) ([]types.FileInfo, error)
 	// UploadFile uploads a file to a channel.
 	UploadFile(channelID, filePath string) error
-	// DownloadFile downloads a file from Slack to the local path. Returns bytes written.
-	DownloadFile(url, destPath string, progress func(downloaded, total int64)) error
+	// DownloadFile downloads a file from Slack to the local path. Pass a context for cancellation.
+	DownloadFile(ctx context.Context, url, destPath string) error
 	// CheckNewMessages returns channel IDs with new messages and a map of all latest timestamps.
 	CheckNewMessages(lastSeen map[string]string) ([]string, map[string]string, error)
 	// Warnings returns and clears any accumulated fallback warnings.
@@ -562,25 +563,18 @@ func parseSlackTimestamp(ts string) (t time.Time) {
 }
 
 // DownloadFile downloads a file from Slack's private URL to a local path.
-func (c *slackClient) DownloadFile(url, destPath string, progress func(downloaded, total int64)) error {
-	// Get the token for auth header.
+// The context can be cancelled to abort the download.
+func (c *slackClient) DownloadFile(ctx context.Context, url, destPath string) error {
 	token := ""
-	if c.primary != nil {
-		// Use the token from the primary client via a test call's header.
-		// slack-go doesn't expose the token directly, so we use GetFileInfoContext.
-		// Simpler: just do an HTTP request with the token we stored.
-	}
-	// We need to access the raw token. Since slack-go doesn't expose it,
-	// we'll use the primary client's authenticated download method.
-	err := c.tryWithFallback("download file", func(api *slack.Client) error {
+	_ = c.tryWithFallback("download file", func(api *slack.Client) error {
 		token = getClientToken(api)
 		return nil
 	})
-	if err != nil || token == "" {
+	if token == "" {
 		return fmt.Errorf("cannot get auth token for download")
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("creating download request: %w", err)
 	}
@@ -602,19 +596,16 @@ func (c *slackClient) DownloadFile(url, destPath string, progress func(downloade
 	}
 	defer out.Close()
 
-	total := resp.ContentLength
-	var downloaded int64
 	buf := make([]byte, 32*1024)
 	for {
+		// Check context before each read.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
-			_, writeErr := out.Write(buf[:n])
-			if writeErr != nil {
+			if _, writeErr := out.Write(buf[:n]); writeErr != nil {
 				return fmt.Errorf("writing file: %w", writeErr)
-			}
-			downloaded += int64(n)
-			if progress != nil {
-				progress(downloaded, total)
 			}
 		}
 		if readErr != nil {

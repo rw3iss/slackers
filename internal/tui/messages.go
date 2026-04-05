@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
@@ -231,7 +232,8 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		// Toggle file select mode with 'f'.
-		if keyMsg.String() == "f" {
+		km := DefaultKeyMap()
+		if key.Matches(keyMsg, km.ToggleFileSelect) {
 			if len(m.selectables) > 0 {
 				m.selectMode = !m.selectMode
 				if m.selectMode {
@@ -266,7 +268,10 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 						return FileDownloadMsg{File: f}
 					}
 				}
-			case "esc", "f":
+			case "esc":
+				m.selectMode = false
+				m.rebuildContent()
+				return m, nil
 				m.selectMode = false
 				m.rebuildContent()
 				return m, nil

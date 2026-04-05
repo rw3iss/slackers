@@ -33,6 +33,7 @@ var helpSections = []struct {
 			{"Ctrl-Up", "Enter file select mode from anywhere"},
 			{"Ctrl-Down", "Exit file select, focus input"},
 			{"Ctrl-L", "Browse all files across channels"},
+			{"Ctrl-D", "Cancel file download"},
 		},
 	},
 	{
@@ -67,7 +68,7 @@ var helpSections = []struct {
 	},
 }
 
-func renderHelp(width, height int) string {
+func renderHelp(width, height int, version string) string {
 	boxWidth := min(85, width-4) - 8 // account for border + padding
 
 	titleStyle := lipgloss.NewStyle().
@@ -92,9 +93,16 @@ func renderHelp(width, height int) string {
 		Foreground(ColorMuted).
 		Italic(true)
 
+	versionStyle := lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Width(boxWidth).
+		Align(lipgloss.Center)
+
 	var b strings.Builder
 
 	b.WriteString(titleStyle.Render("Slackers Help"))
+	b.WriteString("\n")
+	b.WriteString(versionStyle.Render("(v" + version + ")"))
 	b.WriteString("\n\n")
 
 	for _, section := range helpSections {
