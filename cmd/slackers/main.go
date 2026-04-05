@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -36,7 +37,7 @@ func resetTerminal() {
 	fmt.Fprint(os.Stdout, "\r\n")
 }
 
-var version = "0.9.0"
+var version = "0.10.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "slackers",
@@ -253,6 +254,144 @@ var configCmd = &cobra.Command{
 	},
 }
 
+var updateCmd = &cobra.Command{
+	Use:   "update",
+	Short: "Check for and install the latest version",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Printf("Current version: v%s\n", version)
+		fmt.Println("Checking for updates...")
+
+		latest, downloadURL, err := checkLatestRelease()
+		if err != nil {
+			return fmt.Errorf("failed to check for updates: %w", err)
+		}
+
+		if latest == version || latest == "v"+version {
+			fmt.Println("You're already on the latest version.")
+			return nil
+		}
+
+		fmt.Printf("New version available: %s\n\n", latest)
+		fmt.Print("Update now? [y/N]: ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+			fmt.Println("Update cancelled.")
+			return nil
+		}
+
+		exePath, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("cannot find current binary: %w", err)
+		}
+		exePath, err = filepath.EvalSymlinks(exePath)
+		if err != nil {
+			return fmt.Errorf("cannot resolve binary path: %w", err)
+		}
+
+		fmt.Printf("Downloading %s...\n", downloadURL)
+		tmpPath := exePath + ".new"
+		if err := downloadBinary(downloadURL, tmpPath); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("download failed: %w", err)
+		}
+
+		if err := os.Chmod(tmpPath, 0755); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("chmod failed: %w", err)
+		}
+
+		// Replace the binary atomically.
+		backupPath := exePath + ".bak"
+		os.Remove(backupPath)
+		if err := os.Rename(exePath, backupPath); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("backup failed: %w", err)
+		}
+		if err := os.Rename(tmpPath, exePath); err != nil {
+			// Try to restore backup.
+			os.Rename(backupPath, exePath)
+			return fmt.Errorf("replace failed: %w", err)
+		}
+		os.Remove(backupPath)
+
+		fmt.Printf("Updated to %s successfully.\n", latest)
+		return nil
+	},
+}
+
+// checkLatestRelease queries GitHub for the latest release tag and asset URL.
+func checkLatestRelease() (string, string, error) {
+	resp, err := http.Get("https://api.github.com/repos/rw3iss/slackers/releases/latest")
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", "", fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", err
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+		Assets  []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.Unmarshal(body, &release); err != nil {
+		return "", "", err
+	}
+
+	// Find the right asset for this platform.
+	assetName := platformAssetName()
+	for _, asset := range release.Assets {
+		if asset.Name == assetName {
+			return release.TagName, asset.BrowserDownloadURL, nil
+		}
+	}
+
+	return release.TagName, "", fmt.Errorf("no binary found for %s in release %s", assetName, release.TagName)
+}
+
+// platformAssetName returns the expected release asset name for the current OS/arch.
+func platformAssetName() string {
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	name := fmt.Sprintf("slackers-%s-%s", goos, goarch)
+	if goos == "windows" {
+		name += ".exe"
+	}
+	return name
+}
+
+// downloadBinary downloads a URL to a local file path.
+func downloadBinary(url, destPath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
 var scriptsCmd = &cobra.Command{
 	Use:   "scripts",
 	Short: "Run project scripts (install, uninstall, cleanup)",
@@ -301,6 +440,7 @@ func init() {
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(joinCmd)
+	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(scriptsCmd)

@@ -134,6 +134,7 @@ slackers              Launch the TUI
 slackers setup        Interactive setup
 slackers login        OAuth browser login
 slackers join <url>   One-command team onboarding
+slackers update       Check for and install latest version
 slackers config       Show current config
 slackers version      Print version
 ```
