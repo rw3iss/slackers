@@ -37,7 +37,7 @@ func resetTerminal() {
 	fmt.Fprint(os.Stdout, "\r\n")
 }
 
-var version = "0.11.0"
+var version = "0.12.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "slackers",

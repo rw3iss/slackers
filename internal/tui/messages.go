@@ -272,9 +272,6 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				m.selectMode = false
 				m.rebuildContent()
 				return m, nil
-				m.selectMode = false
-				m.rebuildContent()
-				return m, nil
 			}
 		}
 
