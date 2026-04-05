@@ -32,6 +32,7 @@ var helpSections = []struct {
 			{"f (messages)", "Toggle file select mode"},
 			{"Ctrl-Up", "Enter file select mode from anywhere"},
 			{"Ctrl-Down", "Exit file select, focus input"},
+			{"Ctrl-L", "Browse all files across channels"},
 		},
 	},
 	{

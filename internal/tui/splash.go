@@ -36,14 +36,10 @@ func renderSplash(width, height int) string {
 		Foreground(ColorMuted).
 		Italic(true)
 
-	creditStyle := lipgloss.NewStyle().
-		Foreground(ColorMuted)
-
 	banner := bannerStyle.Render(splashBanner)
 	tagline := taglineStyle.Render("terminal slack client")
-	credit := creditStyle.Render("(by Wet Dream)")
 
-	block := lipgloss.JoinVertical(lipgloss.Center, banner, "", tagline, "", credit)
+	block := lipgloss.JoinVertical(lipgloss.Center, banner, "", tagline)
 
 	return lipgloss.Place(width, height,
 		lipgloss.Center, lipgloss.Center,

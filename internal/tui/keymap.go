@@ -29,6 +29,8 @@ type KeyMap struct {
 	NextUnread     key.Binding
 	SearchMessages key.Binding
 	AttachFile     key.Binding
+	ToggleFullMode key.Binding
+	FilesList      key.Binding
 }
 
 // DefaultKeyMap returns the default key bindings.
@@ -133,6 +135,14 @@ func DefaultKeyMap() KeyMap {
 		AttachFile: key.NewBinding(
 			key.WithKeys("ctrl+u"),
 			key.WithHelp("ctrl+u", "attach file"),
+		),
+		ToggleFullMode: key.NewBinding(
+			key.WithKeys("ctrl+w"),
+			key.WithHelp("ctrl+w", "toggle full screen chat"),
+		),
+		FilesList: key.NewBinding(
+			key.WithKeys("ctrl+l"),
+			key.WithHelp("ctrl+l", "browse all files"),
 		),
 	}
 }

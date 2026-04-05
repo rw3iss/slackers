@@ -23,8 +23,12 @@ A lightweight, terminal-based Slack client.
 - Terminal notifications (bell, desktop, urgency hints)
 - File uploads (`Ctrl-U`) with built-in file browser and `[FILE:<path>]` syntax
 - File downloads -- select files in chat history (`f` or `Ctrl-Up`) and download with Enter
+- Files browser (`Ctrl-L`) -- browse all files across all channels, download with Enter
 - Emoji rendering -- `:smiley:` `:thumbsup:` `:fire:` etc. rendered as real Unicode emoji
 - Input history -- Up/Down in the input bar recalls sent messages
+- Full screen chat mode (`Ctrl-W`) -- hide sidebar, auto-show on focus
+- Auto-away detection -- configurable idle timeout with automatic refresh on return
+- Auto-reconnect -- socket connection recovers automatically from drops
 - Interactive settings (`Ctrl-S`) and built-in help (`Ctrl-H`)
 - OAuth browser login for quick onboarding
 - Single binary, cross-platform (Linux, macOS, Windows)

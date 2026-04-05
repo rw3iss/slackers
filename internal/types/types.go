@@ -15,11 +15,14 @@ type Channel struct {
 
 // FileInfo represents an attached file.
 type FileInfo struct {
-	ID       string
-	Name     string
-	Size     int64
-	MimeType string
-	URL      string // private download URL
+	ID          string
+	Name        string
+	Size        int64
+	MimeType    string
+	URL         string // private download URL
+	ChannelName string // channel where the file was shared
+	UserName    string // who uploaded it
+	Timestamp   time.Time
 }
 
 // Message represents a single Slack message.

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -55,6 +56,12 @@ func NewSettingsModel(cfg *config.Config) SettingsModel {
 				key:         "timestamp_format",
 				value:       cfg.TimestampFormat,
 				description: "Go time format for message timestamps (e.g. 15:04, 3:04 PM)",
+			},
+			{
+				label:       "Away Timeout",
+				key:         "away_timeout",
+				value:       awayTimeoutValue(cfg.AwayTimeout),
+				description: "Seconds of inactivity before 'away' status (0 = disabled)",
 			},
 			{
 				label:       "Mouse",
@@ -138,6 +145,13 @@ func boolToDir(b *bool) string {
 		return "asc"
 	}
 	return "desc"
+}
+
+func awayTimeoutValue(n int) string {
+	if n <= 0 {
+		return "0"
+	}
+	return strconv.Itoa(n)
 }
 
 func inputHistMax(n int) int {
@@ -284,6 +298,20 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 	case "timestamp_format":
 		m.cfg.TimestampFormat = value
 		m.message = "Timestamp format updated"
+
+	case "away_timeout":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 {
+			m.message = "Must be 0 (disabled) or positive seconds"
+			m.fields[m.selected].value = awayTimeoutValue(m.cfg.AwayTimeout)
+			return nil
+		}
+		m.cfg.AwayTimeout = n
+		if n == 0 {
+			m.message = "Away detection disabled"
+		} else {
+			m.message = fmt.Sprintf("Away after %ds of inactivity", n)
+		}
 
 	case "mouse_enabled":
 		v := strings.ToLower(strings.TrimSpace(value))

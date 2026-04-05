@@ -29,6 +29,8 @@ type SlackService interface {
 	FetchHistoryAround(channelID string, timestamp string, contextSize int) ([]types.Message, int, error)
 	// SearchMessages searches for messages matching query. If channelID is non-empty, scopes to that channel.
 	SearchMessages(query, channelID string, limit int) ([]types.SearchResult, error)
+	// ListFiles returns all files visible to the user.
+	ListFiles(count int) ([]types.FileInfo, error)
 	// UploadFile uploads a file to a channel.
 	UploadFile(channelID, filePath string) error
 	// DownloadFile downloads a file from Slack to the local path. Returns bytes written.
@@ -399,6 +401,51 @@ func (c *slackClient) SearchMessages(query, channelID string, limit int) ([]type
 	}
 
 	return results, nil
+}
+
+// ListFiles returns all files visible to the user across all channels.
+func (c *slackClient) ListFiles(count int) ([]types.FileInfo, error) {
+	if count <= 0 {
+		count = 100
+	}
+
+	params := slack.ListFilesParameters{
+		Limit: count,
+	}
+
+	var files []types.FileInfo
+	err := c.tryWithFallback("list files", func(api *slack.Client) error {
+		slackFiles, _, e := api.ListFiles(params)
+		if e != nil {
+			return e
+		}
+		for _, f := range slackFiles {
+			channelName := ""
+			if len(f.Channels) > 0 {
+				channelName = f.Channels[0]
+			} else if len(f.Groups) > 0 {
+				channelName = f.Groups[0]
+			} else if len(f.IMs) > 0 {
+				channelName = f.IMs[0]
+			}
+
+			files = append(files, types.FileInfo{
+				ID:          f.ID,
+				Name:        f.Name,
+				Size:        int64(f.Size),
+				MimeType:    f.Mimetype,
+				URL:         f.URLPrivateDownload,
+				ChannelName: channelName,
+				UserName:    c.ResolveUserName(f.User),
+				Timestamp:   parseSlackTimestamp(fmt.Sprintf("%d", int64(f.Timestamp))),
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list files: %w", err)
+	}
+	return files, nil
 }
 
 // UploadFile uploads a local file to a Slack channel using the v2 API.

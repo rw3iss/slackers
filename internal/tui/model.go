@@ -29,6 +29,7 @@ const (
 	overlayRename
 	overlayMsgSearch
 	overlayFileBrowser
+	overlayFilesList
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -71,6 +72,9 @@ type FileDownloadProgressMsg struct {
 	Total      int64
 }
 
+// ActivityCheckMsg triggers an away-status check.
+type ActivityCheckMsg struct{}
+
 var filePattern = regexp.MustCompile(`\[FILE:([^\]]+)\]`)
 
 // ContextHistoryMsg carries messages around a search result for context viewing.
@@ -103,6 +107,7 @@ type Model struct {
 	msgSearch   MsgSearchModel
 	fileBrowser FileBrowserModel
 	fbPurpose   fileBrowserPurpose
+	filesList   FilesListModel
 
 	// State
 	focus      types.Focus
@@ -126,14 +131,20 @@ type Model struct {
 	socketSvc slackpkg.SocketService
 	eventChan chan slackpkg.SocketEvent
 
+	// Activity tracking
+	lastActivity time.Time
+	isAway       bool
+
 	// Layout
 	width        int
 	height       int
-	sidebarWidth int // computed sidebar width for click detection
-	msgTop       int // top Y of message area
-	inputTop     int // top Y of input area
+	sidebarWidth int
+	msgTop       int
+	inputTop     int
 	ready        bool
 	splash       bool
+	initialLoad  bool
+	fullMode     bool // sidebar hidden, chat fullscreen
 }
 
 // NewModel creates a new root TUI model.
@@ -159,8 +170,10 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		users:     make(map[string]types.User),
 		lastSeen:  make(map[string]string),
 		cfg:       cfg,
-		splash: true,
-		slackSvc:  slackSvc,
+		lastActivity: time.Now(),
+		splash:       true,
+		initialLoad:  true,
+		slackSvc:     slackSvc,
 		socketSvc: socketSvc,
 		eventChan: make(chan slackpkg.SocketEvent, 100),
 	}
@@ -175,6 +188,7 @@ func (m Model) Init() tea.Cmd {
 		connectSocketCmd(m.socketSvc, m.eventChan),
 		waitForSocketEvent(m.eventChan),
 		pollTickCmd(m.cfg.PollInterval),
+		activityCheckCmd(m.cfg.AwayTimeout),
 	)
 }
 
@@ -198,8 +212,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
-		// Clear urgency on any user interaction.
+		// Track activity for away detection.
+		m.lastActivity = time.Now()
 		clearWindowUrgent()
+
+		// If returning from away, trigger a full refresh.
+		if m.isAway {
+			m.isAway = false
+			m.warning = ""
+			cmds := []tea.Cmd{
+				checkNewMessagesCmd(m.slackSvc, m.lastSeen, m.cfg.PollInterval),
+			}
+			if m.currentCh != nil {
+				cmds = append(cmds, silentLoadHistoryCmd(m.slackSvc, m.currentCh.ID))
+			}
+			return m, tea.Batch(cmds...)
+		}
 
 		// Global shortcuts that work even in overlays
 		switch {
@@ -341,6 +369,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fileBrowser, cmd = m.fileBrowser.Update(msg)
 			return m, cmd
 		}
+		if m.overlay == overlayFilesList {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.filesList, cmd = m.filesList.Update(msg)
+			return m, cmd
+		}
 
 		// Normal key handling (no overlay)
 		switch {
@@ -370,6 +407,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateFocus()
 				return m, nil
 			}
+
+		case key.Matches(msg, m.keymap.FilesList):
+			m.filesList = NewFilesListModel()
+			m.filesList.SetSize(m.width, m.height)
+			m.overlay = overlayFilesList
+			return m, loadFilesCmd(m.slackSvc)
+
+		case key.Matches(msg, m.keymap.ToggleFullMode):
+			m.fullMode = !m.fullMode
+			m.resizeComponents()
+			return m, nil
 
 		case key.Matches(msg, m.keymap.Refresh):
 			return m, loadChannelsCmd(m.slackSvc)
@@ -602,8 +650,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			latest := msg.Messages[len(msg.Messages)-1]
 			m.lastSeen[m.currentCh.ID] = fmt.Sprintf("%d.%06d", latest.Timestamp.Unix(), latest.Timestamp.Nanosecond()/1000)
 		}
-		m.focus = types.FocusInput
-		m.updateFocus()
+		if m.initialLoad {
+			// Keep focus on sidebar for initial channel restore.
+			m.initialLoad = false
+		} else {
+			m.focus = types.FocusInput
+			m.updateFocus()
+		}
 		drainWarnings(&m)
 		return m, nil
 
@@ -685,6 +738,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, pollTickCmd(m.cfg.PollInterval)
 
+	case FilesListLoadedMsg:
+		m.filesList, _ = m.filesList.Update(msg)
+		return m, nil
+
+	case FilesListDownloadMsg:
+		m.overlay = overlayNone
+		downloadPath := m.cfg.DownloadPath
+		if downloadPath == "" {
+			home, _ := os.UserHomeDir()
+			downloadPath = filepath.Join(home, "Downloads")
+		}
+		destPath := filepath.Join(downloadPath, msg.File.Name)
+		m.warning = fmt.Sprintf("Downloading %s...", msg.File.Name)
+		return m, downloadFileCmd(m.slackSvc, msg.File, destPath)
+
 	case SettingsOpenFileBrowserMsg:
 		m.fileBrowser = NewFileBrowser(FileBrowserConfig{
 			StartDir:    msg.CurrentPath,
@@ -754,6 +822,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FileUploadedMsg:
 		return m, nil
 
+	case ActivityCheckMsg:
+		awayTimeout := m.cfg.AwayTimeout
+		if awayTimeout > 0 {
+			elapsed := time.Since(m.lastActivity)
+			if !m.isAway && elapsed >= time.Duration(awayTimeout)*time.Second {
+				m.isAway = true
+				m.warning = "Away (idle)"
+			}
+		}
+		return m, activityCheckCmd(m.cfg.AwayTimeout)
+
 	case SplashDoneMsg:
 		m.splash = false
 		return m, nil
@@ -792,12 +871,20 @@ func (m Model) View() string {
 		return m.msgSearch.View()
 	case overlayFileBrowser:
 		return m.fileBrowser.View()
+	case overlayFilesList:
+		return m.filesList.View()
 	}
 
-	sidebar := m.channels.View()
 	msgView := m.messages.View()
 
-	topRow := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, msgView)
+	var topRow string
+	showSidebar := !m.fullMode || m.focus == types.FocusSidebar
+	if showSidebar {
+		sidebar := m.channels.View()
+		topRow = lipgloss.JoinHorizontal(lipgloss.Top, sidebar, msgView)
+	} else {
+		topRow = msgView
+	}
 	inputBar := m.input.View()
 	statusLine := m.renderStatusBar()
 
@@ -833,11 +920,23 @@ func (m *Model) resizeComponents() {
 		sidebarWidth = m.width / 2
 	}
 
+	// In full mode, hide sidebar unless it's focused.
+	showSidebar := true
+	if m.fullMode && m.focus != types.FocusSidebar {
+		showSidebar = false
+	}
+
 	inputHeight := 3
 	statusHeight := 1
 	topHeight := m.height - inputHeight - statusHeight - 2
 
-	msgWidth := m.width - sidebarWidth - 2
+	var msgWidth int
+	if showSidebar {
+		msgWidth = m.width - sidebarWidth - 2
+	} else {
+		sidebarWidth = 0
+		msgWidth = m.width - 2
+	}
 
 	if topHeight < 1 {
 		topHeight = 1
@@ -986,6 +1085,10 @@ func (m *Model) updateFocus() {
 	m.channels.SetFocused(m.focus == types.FocusSidebar)
 	m.messages.SetFocused(m.focus == types.FocusMessages)
 	m.input.SetFocused(m.focus == types.FocusInput)
+	// In full mode, resize when focus changes to show/hide sidebar.
+	if m.fullMode {
+		m.resizeComponents()
+	}
 }
 
 func (m Model) renderStatusBar() string {
@@ -1176,6 +1279,23 @@ func sendMessageWithFilesCmd(svc slackpkg.SlackService, channelID, text string) 
 		}
 		return MessageSentMsg{}
 	}
+}
+
+func activityCheckCmd(awayTimeoutSec int) tea.Cmd {
+	if awayTimeoutSec <= 0 {
+		// Away detection disabled — check again in 30s in case setting changes.
+		return tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
+			return ActivityCheckMsg{}
+		})
+	}
+	// Check at half the timeout interval for responsiveness.
+	interval := time.Duration(awayTimeoutSec) * time.Second / 2
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+	return tea.Tick(interval, func(t time.Time) tea.Msg {
+		return ActivityCheckMsg{}
+	})
 }
 
 func pollTickCmd(intervalSec int) tea.Cmd {

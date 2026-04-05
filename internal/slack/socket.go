@@ -2,9 +2,9 @@ package slack
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"io"
+	"log"
+	"time"
 
 	"github.com/rw3iss/slackers/internal/types"
 	"github.com/slack-go/slack"
@@ -39,10 +39,37 @@ func NewSocketClient(botToken, appToken string) SocketService {
 	}
 }
 
-// Connect establishes a Socket Mode connection and forwards message events
-// to the provided channel. It blocks until the context is cancelled.
+// Connect establishes a Socket Mode connection with automatic reconnection.
+// It blocks until the context is cancelled, reconnecting on any failure.
 func (s *socketClient) Connect(ctx context.Context, eventCh chan<- SocketEvent) error {
-	// Suppress the slack-go library's internal logging which corrupts the TUI.
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		_ = s.connectOnce(ctx, eventCh)
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		// Connection dropped — notify and retry.
+		if s.lastStatus != types.StatusDisconnected {
+			s.lastStatus = types.StatusDisconnected
+			eventCh <- SocketEvent{Type: "status", Status: types.StatusDisconnected}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+			s.lastStatus = types.StatusConnecting
+			eventCh <- SocketEvent{Type: "status", Status: types.StatusConnecting}
+		}
+	}
+}
+
+func (s *socketClient) connectOnce(ctx context.Context, eventCh chan<- SocketEvent) error {
 	api := slack.New(
 		s.botToken,
 		slack.OptionAppLevelToken(s.appToken),
@@ -65,7 +92,7 @@ func (s *socketClient) Connect(ctx context.Context, eventCh chan<- SocketEvent) 
 
 		case evt, ok := <-client.Events:
 			if !ok {
-				return fmt.Errorf("socket mode events channel closed")
+				return nil // channel closed, trigger reconnect
 			}
 
 			s.handleEvent(client, evt, eventCh)
@@ -73,7 +100,6 @@ func (s *socketClient) Connect(ctx context.Context, eventCh chan<- SocketEvent) 
 	}
 }
 
-// handleEvent processes a single socket mode event.
 func (s *socketClient) handleEvent(client *socketmode.Client, evt socketmode.Event, eventCh chan<- SocketEvent) {
 	switch evt.Type {
 	case socketmode.EventTypeEventsAPI:
@@ -91,7 +117,6 @@ func (s *socketClient) handleEvent(client *socketmode.Client, evt socketmode.Eve
 		}
 
 	case socketmode.EventTypeConnecting:
-		// Only show "connecting" on initial connect, not during keepalive reconnects.
 		if s.lastStatus == types.StatusDisconnected || s.lastStatus == 0 {
 			s.lastStatus = types.StatusConnecting
 			eventCh <- SocketEvent{Type: "status", Status: types.StatusConnecting}
@@ -112,7 +137,6 @@ func (s *socketClient) handleEvent(client *socketmode.Client, evt socketmode.Eve
 	}
 }
 
-// handleEventsAPI extracts message events and sends them to the event channel.
 func (s *socketClient) handleEventsAPI(event slackevents.EventsAPIEvent, eventCh chan<- SocketEvent) {
 	switch event.Type {
 	case slackevents.CallbackEvent:
