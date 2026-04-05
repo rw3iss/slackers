@@ -20,12 +20,18 @@ type OAuthResult struct {
 	BotToken  string // xoxb-...
 	UserToken string // xoxp-...
 	TeamName  string
+	TeamID    string
+	AppID     string
 }
 
 // OAuthConfig holds the credentials needed for the OAuth flow.
 type OAuthConfig struct {
 	ClientID     string
 	ClientSecret string
+	// ExpectedTeamID, if set, is verified against the team ID returned by Slack
+	// after the OAuth exchange. A mismatch aborts the flow, preventing a
+	// malicious team config from routing tokens through an attacker's app.
+	ExpectedTeamID string
 	// Bot scopes requested for the bot token.
 	BotScopes []string
 	// User scopes requested for the user token.
@@ -34,10 +40,12 @@ type OAuthConfig struct {
 
 // slackOAuthResponse represents the response from oauth.v2.access.
 type slackOAuthResponse struct {
-	OK         bool   `json:"ok"`
-	Error      string `json:"error"`
+	OK          bool   `json:"ok"`
+	Error       string `json:"error"`
+	AppID       string `json:"app_id"`
 	AccessToken string `json:"access_token"` // bot token
-	Team       struct {
+	Team        struct {
+		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"team"`
 	AuthedUser struct {
@@ -189,7 +197,7 @@ func RunOAuthFlow(cfg OAuthConfig) (*OAuthResult, error) {
 
 	// Exchange the code for tokens.
 	fmt.Println("Exchanging authorization code for tokens...")
-	return exchangeCode(cfg.ClientID, cfg.ClientSecret, code, redirectURI)
+	return exchangeCode(cfg.ClientID, cfg.ClientSecret, code, redirectURI, cfg.ExpectedTeamID)
 }
 
 // shutdownServer gracefully shuts down the local callback server with a short deadline.
@@ -200,7 +208,10 @@ func shutdownServer(server *http.Server) {
 }
 
 // exchangeCode exchanges an authorization code for OAuth tokens.
-func exchangeCode(clientID, clientSecret, code, redirectURI string) (*OAuthResult, error) {
+// If expectedTeamID is non-empty, the team ID in the response must match or the
+// exchange is rejected — this prevents a malicious team config from silently
+// routing tokens through a different Slack app.
+func exchangeCode(clientID, clientSecret, code, redirectURI, expectedTeamID string) (*OAuthResult, error) {
 	data := url.Values{
 		"code":          {code},
 		"client_id":     {clientID},
@@ -228,10 +239,20 @@ func exchangeCode(clientID, clientSecret, code, redirectURI string) (*OAuthResul
 		return nil, fmt.Errorf("slack oauth error: %s", oauthResp.Error)
 	}
 
+	// Verify workspace identity when an expected team ID was provided.
+	if expectedTeamID != "" && oauthResp.Team.ID != expectedTeamID {
+		return nil, fmt.Errorf(
+			"team ID mismatch: expected %s but got %s (%s) — aborting to prevent token theft",
+			expectedTeamID, oauthResp.Team.ID, oauthResp.Team.Name,
+		)
+	}
+
 	return &OAuthResult{
-		BotToken:  oauthResp.AccessToken,
+		BotToken: oauthResp.AccessToken,
 		UserToken: oauthResp.AuthedUser.AccessToken,
-		TeamName:  oauthResp.Team.Name,
+		TeamName: oauthResp.Team.Name,
+		TeamID:   oauthResp.Team.ID,
+		AppID:    oauthResp.AppID,
 	}, nil
 }
 
