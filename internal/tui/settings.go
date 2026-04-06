@@ -266,7 +266,7 @@ func (m *SettingsModel) SetSize(w, h int) {
 	m.height = h
 }
 
-// Update handles key events in the settings overlay.
+// Update handles key and mouse events in the settings overlay.
 func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -274,6 +274,17 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			return m.updateEditing(msg)
 		}
 		return m.updateNavigating(msg)
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.selected > 0 {
+				m.selected--
+			}
+		case tea.MouseButtonWheelDown:
+			if m.selected < len(m.fields)-1 {
+				m.selected++
+			}
+		}
 	}
 	return m, nil
 }

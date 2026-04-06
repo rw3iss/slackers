@@ -162,6 +162,7 @@ type Model struct {
 	filesList       FilesListModel
 	shortcutsEditor ShortcutsEditorModel
 	whitelist       WhitelistModel
+	help            HelpModel
 
 	// State
 	focus      types.Focus
@@ -288,6 +289,7 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		shortcutMap:       merged,
 		shortcutOverrides: overrides,
 		settings:          NewSettingsModel(cfg, version),
+		help:              NewHelpModel(version),
 		focus:     types.FocusSidebar,
 		users:     make(map[string]types.User),
 		channelIndex: make(map[string]channelInfo),
@@ -338,8 +340,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		m.lastActivity = time.Now()
-		if m.overlay != overlayNone || m.splash {
+		if m.splash {
 			return m, nil
+		}
+		// Pass mouse events to active overlays.
+		if m.overlay != overlayNone {
+			return m.handleOverlayMouse(msg)
 		}
 		return m.handleMouse(msg)
 
@@ -379,6 +385,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.overlay == overlayHelp {
 				m.overlay = overlayNone
 			} else {
+				m.help = NewHelpModel(m.version)
+				m.help.SetSize(m.width, m.height)
 				m.overlay = overlayHelp
 			}
 			return m, nil
@@ -451,8 +459,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayHelp {
 			if msg.String() == "esc" {
 				m.overlay = overlayNone
+				return m, nil
 			}
-			return m, nil
+			var cmd tea.Cmd
+			m.help, cmd = m.help.Update(msg)
+			return m, cmd
 		}
 		if m.overlay == overlaySettings {
 			if msg.String() == "esc" && !m.settings.editing {
@@ -1319,7 +1330,7 @@ func (m Model) View() string {
 	// Render overlays on top
 	switch m.overlay {
 	case overlayHelp:
-		return renderHelp(m.width, m.height, m.version)
+		return m.help.View()
 	case overlaySettings:
 		return m.settings.View()
 	case overlaySearch:
@@ -1417,6 +1428,33 @@ func (m *Model) resizeComponents() {
 	m.channels.SetSize(sidebarWidth, topHeight)
 	m.messages.SetSize(msgWidth, topHeight)
 	m.input.SetSize(m.width - 2)
+}
+
+// handleOverlayMouse delegates mouse events to the active overlay.
+func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch m.overlay {
+	case overlayHelp:
+		var cmd tea.Cmd
+		m.help, cmd = m.help.Update(msg)
+		return m, cmd
+	case overlaySettings:
+		var cmd tea.Cmd
+		m.settings, cmd = m.settings.Update(msg)
+		return m, cmd
+	case overlaySearch:
+		var cmd tea.Cmd
+		m.search, cmd = m.search.Update(msg)
+		return m, cmd
+	case overlayHidden:
+		var cmd tea.Cmd
+		m.hidden, cmd = m.hidden.Update(msg)
+		return m, cmd
+	case overlayWhitelist:
+		var cmd tea.Cmd
+		m.whitelist, cmd = m.whitelist.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
 
 // handleMouse processes mouse click and scroll events.

@@ -70,7 +70,7 @@ func (m *HiddenChannelsModel) SetSize(w, h int) {
 	m.height = h
 }
 
-// Update handles key events in the hidden channels overlay.
+// Update handles key and mouse events in the hidden channels overlay.
 func (m HiddenChannelsModel) Update(msg tea.Msg) (HiddenChannelsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -93,6 +93,17 @@ func (m HiddenChannelsModel) Update(msg tea.Msg) (HiddenChannelsModel, tea.Cmd) 
 				return m, func() tea.Msg {
 					return UnhideChannelMsg{ChannelID: ch.ID}
 				}
+			}
+		}
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.selected > 0 {
+				m.selected--
+			}
+		case tea.MouseButtonWheelDown:
+			if m.selected < len(m.channels)-1 {
+				m.selected++
 			}
 		}
 	}

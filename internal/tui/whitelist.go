@@ -77,6 +77,17 @@ func (m WhitelistModel) Update(msg tea.Msg) (WhitelistModel, tea.Cmd) {
 				}
 			}
 		}
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.selected > 0 {
+				m.selected--
+			}
+		case tea.MouseButtonWheelDown:
+			if m.selected < len(m.whitelist)-1 {
+				m.selected++
+			}
+		}
 	}
 	return m, nil
 }

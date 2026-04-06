@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -72,8 +74,91 @@ var helpSections = []struct {
 	},
 }
 
-func renderHelp(width, height int, version string) string {
-	boxWidth := min(85, width-4) - 8 // account for border + padding
+// HelpModel holds state for the scrollable help overlay.
+type HelpModel struct {
+	scrollOffset int
+	totalLines   int
+	visibleLines int
+	width        int
+	height       int
+	version      string
+}
+
+// NewHelpModel creates a new help overlay model.
+func NewHelpModel(version string) HelpModel {
+	return HelpModel{version: version}
+}
+
+// SetSize sets the overlay dimensions.
+func (m *HelpModel) SetSize(w, h int) {
+	m.width = w
+	m.height = h
+	m.visibleLines = h - 10 // border + padding + header/footer
+	if m.visibleLines < 5 {
+		m.visibleLines = 5
+	}
+}
+
+// Update handles key and mouse events for the help overlay.
+func (m HelpModel) Update(msg tea.Msg) (HelpModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.scrollOffset > 0 {
+				m.scrollOffset--
+			}
+		case "down", "j":
+			if m.scrollOffset < m.totalLines-m.visibleLines {
+				m.scrollOffset++
+			}
+		case "pgup":
+			m.scrollOffset -= m.visibleLines
+			if m.scrollOffset < 0 {
+				m.scrollOffset = 0
+			}
+		case "pgdown":
+			m.scrollOffset += m.visibleLines
+			maxScroll := m.totalLines - m.visibleLines
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if m.scrollOffset > maxScroll {
+				m.scrollOffset = maxScroll
+			}
+		case "home":
+			m.scrollOffset = 0
+		case "end":
+			maxScroll := m.totalLines - m.visibleLines
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			m.scrollOffset = maxScroll
+		}
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.scrollOffset -= 3
+			if m.scrollOffset < 0 {
+				m.scrollOffset = 0
+			}
+		case tea.MouseButtonWheelDown:
+			m.scrollOffset += 3
+			maxScroll := m.totalLines - m.visibleLines
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if m.scrollOffset > maxScroll {
+				m.scrollOffset = maxScroll
+			}
+		}
+	}
+	return m, nil
+}
+
+// View renders the scrollable help overlay.
+func (m *HelpModel) View() string {
+	boxWidth := min(85, m.width-4) - 8
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -83,8 +168,7 @@ func renderHelp(width, height int, version string) string {
 
 	sectionTitleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(ColorAccent).
-		MarginTop(1)
+		Foreground(ColorAccent)
 
 	keyStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("229")).
@@ -102,26 +186,51 @@ func renderHelp(width, height int, version string) string {
 		Width(boxWidth).
 		Align(lipgloss.Center)
 
-	var b strings.Builder
-
-	b.WriteString(titleStyle.Render("Slackers Help"))
-	b.WriteString("\n")
-	b.WriteString(versionStyle.Render("(v" + version + ")"))
-	b.WriteString("\n\n")
-
-	for _, section := range helpSections {
-		b.WriteString(sectionTitleStyle.Render(section.title))
-		b.WriteString("\n")
+	// Build all lines.
+	var lines []string
+	for si, section := range helpSections {
+		if si > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, sectionTitleStyle.Render(section.title))
 		for _, item := range section.items {
-			b.WriteString("  ")
-			b.WriteString(keyStyle.Render(item.key))
-			b.WriteString(descStyle.Render(item.desc))
-			b.WriteString("\n")
+			lines = append(lines, "  "+keyStyle.Render(item.key)+descStyle.Render(item.desc))
 		}
 	}
 
+	m.totalLines = len(lines)
+
+	// Apply scroll window.
+	maxScroll := m.totalLines - m.visibleLines
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.scrollOffset > maxScroll {
+		m.scrollOffset = maxScroll
+	}
+
+	start := m.scrollOffset
+	end := start + m.visibleLines
+	if end > len(lines) {
+		end = len(lines)
+	}
+	visible := lines[start:end]
+
+	// Build final content.
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Slackers Help"))
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("Press Esc or Ctrl-H to close"))
+	b.WriteString(versionStyle.Render("(v" + m.version + ")"))
+	b.WriteString("\n\n")
+
+	b.WriteString(strings.Join(visible, "\n"))
+
+	b.WriteString("\n\n")
+	if maxScroll > 0 {
+		scrollInfo := dimStyle.Render(fmt.Sprintf("  [%d/%d] ", m.scrollOffset+1, maxScroll+1))
+		b.WriteString(scrollInfo)
+	}
+	b.WriteString(dimStyle.Render("Arrow keys/scroll to navigate | Esc or Ctrl-H to close"))
 
 	content := b.String()
 
@@ -129,12 +238,12 @@ func renderHelp(width, height int, version string) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
-		Width(min(85, width-4)).
-		MaxHeight(height - 4)
+		Width(min(85, m.width-4)).
+		MaxHeight(m.height - 4)
 
 	box := boxStyle.Render(content)
 
-	return lipgloss.Place(width, height,
+	return lipgloss.Place(m.width, m.height,
 		lipgloss.Center, lipgloss.Center,
 		box)
 }

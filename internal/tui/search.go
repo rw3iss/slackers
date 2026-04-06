@@ -72,7 +72,7 @@ func (m *SearchModel) filter() {
 	}
 }
 
-// Update handles key events in the search overlay.
+// Update handles key and mouse events in the search overlay.
 func (m SearchModel) Update(msg tea.Msg) (SearchModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -93,6 +93,19 @@ func (m SearchModel) Update(msg tea.Msg) (SearchModel, tea.Cmd) {
 				return m, func() tea.Msg {
 					return SearchSelectMsg{ChannelID: ch.ID}
 				}
+			}
+			return m, nil
+		}
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.selected > 0 {
+				m.selected--
+			}
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			if m.selected < len(m.filtered)-1 {
+				m.selected++
 			}
 			return m, nil
 		}
