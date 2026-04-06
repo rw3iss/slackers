@@ -63,6 +63,20 @@ func (m *ChannelListModel) SetChannels(channels []types.Channel) {
 	m.buildRows()
 }
 
+// SetFriendChannels sets the friend channels that render at the top of the sidebar.
+func (m *ChannelListModel) SetFriendChannels(friends []types.Channel) {
+	// Remove existing friend channels.
+	var workspace []types.Channel
+	for _, ch := range m.channels {
+		if !ch.IsFriend {
+			workspace = append(workspace, ch)
+		}
+	}
+	// Prepend friends so they appear first.
+	m.channels = append(friends, workspace...)
+	m.buildRows()
+}
+
 func (m *ChannelListModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
@@ -277,6 +291,8 @@ func (m *ChannelListModel) SelectByRow(y int) (*types.Channel, bool, string) {
 
 func sectionKey(ch types.Channel) string {
 	switch {
+	case ch.IsFriend:
+		return "friends"
 	case ch.IsDM:
 		return "dm"
 	case ch.IsGroup:
@@ -290,6 +306,8 @@ func sectionKey(ch types.Channel) string {
 
 func sectionLabel(key string) string {
 	switch key {
+	case "friends":
+		return "Friends"
 	case "channels":
 		return "# Channels"
 	case "private":
@@ -546,6 +564,12 @@ func (m ChannelListModel) renderItem(ch types.Channel, rowIdx int, maxLen int, i
 	switch {
 	case rowIdx == m.selected:
 		style = ChannelSelectedStyle
+	case ch.IsFriend && m.unread[ch.ID]:
+		// Online friend (unread = online indicator) in green.
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00"))
+	case ch.IsFriend:
+		// Offline friend in muted.
+		style = lipgloss.NewStyle().Foreground(ColorMuted)
 	case m.unread[ch.ID]:
 		name = "* " + name
 		style = ChannelUnreadStyle

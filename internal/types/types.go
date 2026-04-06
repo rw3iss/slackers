@@ -10,6 +10,7 @@ type Channel struct {
 	IsDM      bool
 	IsPrivate bool
 	IsGroup   bool
+	IsFriend  bool
 	UserID    string // for DMs: the other user's ID
 }
 
