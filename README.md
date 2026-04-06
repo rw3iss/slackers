@@ -9,7 +9,7 @@
 
 A lightweight, terminal-based Slack client.
 
-<a href=".github/screenshot.png"><img src=".github/screenshot.png" alt="Slackers chat" width="220"></a> <a href=".github/screenshot-channels.png"><img src=".github/screenshot-channels.png" alt="Slackers channels" width="220"></a> <a href=".github/screenshot-edit.png"><img src=".github/screenshot-edit.png" alt="Slackers edit mode" width="220"></a> <a href=".github/screenshot-help.png"><img src=".github/screenshot-help.png" alt="Slackers help" width="220"></a>
+<a href=".github/screenshot.png"><img src=".github/screenshot.png" alt="Slackers channels" width="220"></a> <a href=".github/screenshot-help.png"><img src=".github/screenshot-help.png" alt="Slackers help" width="220"></a> <a href=".github/screenshot-settings.png"><img src=".github/screenshot-settings.png" alt="Slackers settings" width="220"></a> <a href=".github/screenshot-search.png"><img src=".github/screenshot-search.png" alt="Slackers edit mode" width="220"></a> <a href=".github/screenshot-files.png"><img src=".github/screenshot-files.png" alt="Slackers edit mode" width="220"></a> <a href=".github/screenshot-edit.png"><img src=".github/screenshot-edit.png" alt="Slackers edit mode" width="180"></a>
 
 ## Features
 
