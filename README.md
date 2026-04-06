@@ -9,7 +9,7 @@
 
 A lightweight, terminal-based Slack client.
 
-<a href=".github/screenshot.png"><img src=".github/screenshot.png" alt="Slackers chat" width="280"></a> <a href=".github/screenshot-help.png"><img src=".github/screenshot-help.png" alt="Slackers help" width="280"></a>
+<a href=".github/screenshot.png"><img src=".github/screenshot.png" alt="Slackers chat" width="220"></a> <a href=".github/screenshot-channels.png"><img src=".github/screenshot-channels.png" alt="Slackers channels" width="220"></a> <a href=".github/screenshot-edit.png"><img src=".github/screenshot-edit.png" alt="Slackers edit mode" width="220"></a> <a href=".github/screenshot-help.png"><img src=".github/screenshot-help.png" alt="Slackers help" width="220"></a>
 
 ## Features
 
@@ -140,6 +140,10 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Up` / `Down` (input) | Browse sent message history |
 | `Ctrl-R` | Refresh channels |
 | `Ctrl-H` | Help |
+| `Ctrl-\` | Toggle input mode (normal/edit) |
+| `Alt-Enter` | New line (normal) or send (edit) |
+| `Shift-Enter` | New line (both modes) |
+| `Ctrl-D` | Cancel file download |
 | `Ctrl-S` | Settings (includes Keyboard Shortcuts) |
 | `Ctrl-Q` | Quit |
 
@@ -321,6 +325,12 @@ Elm architecture via Bubbletea (Model/Update/View). SOLID principles: interfaces
 ```
 
 </details>
+
+## Support
+
+If you find Slackers useful, consider buying me a coffee:
+
+[buymeacoffee.com/ttv1xp6yAj](https://buymeacoffee.com/ttv1xp6yAj)
 
 ## License
 

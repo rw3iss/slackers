@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
 
 const (
 	inputMinHeight = 1
@@ -26,15 +29,16 @@ type InputSendMsg struct{ Text string }
 
 // InputModel represents the multi-line text input bar.
 type InputModel struct {
-	textarea textarea.Model
-	focused  bool
-	width    int
-	height   int
-	mode     InputMode
-	history  []string
-	histIdx  int
-	draft    string
-	maxHist  int
+	textarea   textarea.Model
+	focused    bool
+	width      int
+	height     int
+	mode       InputMode
+	history    []string
+	histIdx    int
+	draft      string
+	maxHist    int
+	escSeqPart bool // true if we just saw alt+O (first half of Shift+Enter)
 }
 
 // NewInput creates a new input model.
@@ -130,19 +134,21 @@ func (m *InputModel) DisplayHeight() int {
 	return m.height + 2
 }
 
-// autoResize adjusts the visible textarea height based on content lines, capped at max.
+// autoResize adjusts the visible textarea height to fit content, capped at max.
 func (m *InputModel) autoResize() {
-	lines := strings.Count(m.textarea.Value(), "\n") + 1
+	val := m.textarea.Value()
+	lines := strings.Count(val, "\n") + 1
+	if val == "" {
+		lines = inputMinHeight
+	}
 	if lines < inputMinHeight {
 		lines = inputMinHeight
 	}
 	if lines > inputMaxHeight {
 		lines = inputMaxHeight
 	}
-	if lines != m.height {
-		m.height = lines
-		m.textarea.SetHeight(lines)
-	}
+	m.height = lines
+	m.textarea.SetHeight(lines)
 }
 
 func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
@@ -151,6 +157,32 @@ func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 	}
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// Handle Shift+Enter escape sequence (\eOM).
+		// Terminals like Konsole send this as alt+O followed by M.
+		str := keyMsg.String()
+		if str == "alt+O" {
+			m.escSeqPart = true
+			return m, nil
+		}
+		if m.escSeqPart {
+			m.escSeqPart = false
+			if str == "M" {
+				// Shift+Enter detected — insert newline.
+				newLines := strings.Count(m.textarea.Value(), "\n") + 2
+				if newLines > inputMaxHeight {
+					newLines = inputMaxHeight
+				}
+				if newLines > m.height {
+					m.height = newLines
+					m.textarea.SetHeight(newLines)
+				}
+				m.textarea.InsertString("\n")
+				m.autoResize()
+				return m, nil
+			}
+			// Not the expected 'M' — process normally.
+		}
+
 		switch keyMsg.Type {
 		case tea.KeyUp:
 			// In edit mode, Up only moves cursor — no history.
@@ -243,10 +275,115 @@ func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 		}
 	}
 
+	prevVal := m.textarea.Value()
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
 	m.autoResize()
+
+	// Detect pasted file paths and wrap them in [FILE:path].
+	newVal := m.textarea.Value()
+	if newVal != prevVal {
+		diff := extractNewText(prevVal, newVal)
+		if diff != "" {
+			wrapped := wrapFilePaths(diff)
+			if wrapped != diff {
+				// Replace the pasted text with the wrapped version.
+				m.textarea.SetValue(strings.Replace(newVal, diff, wrapped, 1))
+			}
+		}
+	}
+
 	return m, cmd
+}
+
+// extractNewText returns the text that was added between prev and next values.
+// Only returns content for paste-like operations (multiple chars added at once).
+func extractNewText(prev, next string) string {
+	if len(next) <= len(prev)+1 {
+		// Single character typed — not a paste.
+		return ""
+	}
+	// Find the inserted portion.
+	// Simple heuristic: if next starts with prev, the diff is the suffix.
+	if strings.HasPrefix(next, prev) {
+		return next[len(prev):]
+	}
+	// If next ends with prev suffix, the diff is the prefix.
+	if strings.HasSuffix(next, prev) {
+		return next[:len(next)-len(prev)]
+	}
+	// More complex insertion — check if the diff is large enough to be a paste.
+	if len(next)-len(prev) > 3 {
+		// Try to find the inserted text by common prefix/suffix.
+		prefix := 0
+		for prefix < len(prev) && prefix < len(next) && prev[prefix] == next[prefix] {
+			prefix++
+		}
+		suffix := 0
+		for suffix < len(prev)-prefix && suffix < len(next)-prefix &&
+			prev[len(prev)-1-suffix] == next[len(next)-1-suffix] {
+			suffix++
+		}
+		if prefix+suffix <= len(next) {
+			return next[prefix : len(next)-suffix]
+		}
+	}
+	return ""
+}
+
+// wrapFilePaths finds file paths in text and wraps them with [FILE:path].
+func wrapFilePaths(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return text
+	}
+
+	// Expand ~ to home directory for checking.
+	home, _ := os.UserHomeDir()
+
+	// Check each line — a pasted path is usually a single line or one path per line.
+	lines := strings.Split(trimmed, "\n")
+	changed := false
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Must look like an absolute path or ~/path.
+		if !strings.HasPrefix(line, "/") && !strings.HasPrefix(line, "~/") {
+			continue
+		}
+
+		// Already wrapped?
+		if strings.Contains(line, "[FILE:") {
+			continue
+		}
+
+		// Expand ~ for stat check.
+		checkPath := line
+		if strings.HasPrefix(checkPath, "~/") {
+			checkPath = filepath.Join(home, checkPath[2:])
+		}
+
+		// Verify the file exists and is NOT a directory.
+		info, err := os.Stat(checkPath)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			continue
+		}
+
+		// Wrap it.
+		lines[i] = "[FILE:" + line + "]"
+		changed = true
+	}
+
+	if !changed {
+		return text
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m InputModel) View() string {

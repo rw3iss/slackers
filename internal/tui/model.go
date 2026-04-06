@@ -45,7 +45,10 @@ const (
 // Custom message types for the TUI update loop.
 
 type ChannelsLoadedMsg struct{ Channels []types.Channel }
-type HistoryLoadedMsg struct{ Messages []types.Message }
+type HistoryLoadedMsg struct {
+	Messages []types.Message
+	Err      error
+}
 type UsersLoadedMsg struct{ Users map[string]types.User }
 type MessageSentMsg struct{}
 type SlackEventMsg struct{ Event slackpkg.SocketEvent }
@@ -771,20 +774,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case HistoryLoadedMsg:
-		m.messages.SetMessages(msg.Messages)
+		// Always open the channel, even if history fetch failed.
+		if msg.Messages != nil {
+			m.messages.SetMessages(msg.Messages)
+		} else {
+			m.messages.SetMessages(nil)
+		}
 		if m.currentCh != nil && len(msg.Messages) > 0 {
 			latest := msg.Messages[len(msg.Messages)-1]
 			m.lastSeen[m.currentCh.ID] = fmt.Sprintf("%d.%06d", latest.Timestamp.Unix(), latest.Timestamp.Nanosecond()/1000)
 			m.persistLastSeen()
 		}
 		if m.initialLoad {
-			// Keep focus on sidebar for initial channel restore.
 			m.initialLoad = false
 		} else {
 			m.focus = types.FocusInput
 			m.updateFocus()
 		}
 		drainWarnings(&m)
+		// Show error if history fetch failed, but channel is still open.
+		if msg.Err != nil {
+			return m, setError(&m, msg.Err)
+		}
 		return m, nil
 
 	case UsersLoadedMsg:
@@ -1294,46 +1305,57 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if msg.Ctrl || msg.Shift {
 				lines = 15
 			}
-			if m.focus == types.FocusMessages {
+			// Scroll based on mouse position, not focus.
+			if y >= m.inputTop {
+				m.focus = types.FocusInput
+				m.updateFocus()
 				for i := 0; i < lines; i++ {
-					m.messages, _ = m.messages.Update(tea.KeyMsg{Type: tea.KeyUp})
+					m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyUp})
 				}
-				return m, nil
-			} else if m.focus == types.FocusSidebar {
+			} else if x < m.sidebarWidth+1 && !m.fullMode {
+				m.focus = types.FocusSidebar
+				m.updateFocus()
 				m.channels.selected -= lines
 				if m.channels.selected < 0 {
 					m.channels.selected = 0
 				}
 				m.channels.ensureVisible()
-			} else if m.focus == types.FocusInput {
+			} else {
+				m.focus = types.FocusMessages
+				m.updateFocus()
 				for i := 0; i < lines; i++ {
-					m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyUp})
+					m.messages, _ = m.messages.Update(tea.KeyMsg{Type: tea.KeyUp})
 				}
-				return m, nil
 			}
+			return m, nil
 
 		} else if msg.Button == tea.MouseButtonWheelDown {
 			lines := 3
 			if msg.Ctrl || msg.Shift {
 				lines = 15
 			}
-			if m.focus == types.FocusMessages {
+			if y >= m.inputTop {
+				m.focus = types.FocusInput
+				m.updateFocus()
 				for i := 0; i < lines; i++ {
-					m.messages, _ = m.messages.Update(tea.KeyMsg{Type: tea.KeyDown})
+					m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyDown})
 				}
-				return m, nil
-			} else if m.focus == types.FocusSidebar {
+			} else if x < m.sidebarWidth+1 && !m.fullMode {
+				m.focus = types.FocusSidebar
+				m.updateFocus()
 				m.channels.selected += lines
 				if m.channels.selected >= len(m.channels.rows) {
 					m.channels.selected = len(m.channels.rows) - 1
 				}
 				m.channels.ensureVisible()
-			} else if m.focus == types.FocusInput {
+			} else {
+				m.focus = types.FocusMessages
+				m.updateFocus()
 				for i := 0; i < lines; i++ {
-					m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyDown})
+					m.messages, _ = m.messages.Update(tea.KeyMsg{Type: tea.KeyDown})
 				}
-				return m, nil
 			}
+			return m, nil
 		}
 	}
 
@@ -1460,7 +1482,10 @@ func (m *Model) updateFocus() {
 	m.channels.SetFocused(m.focus == types.FocusSidebar)
 	m.messages.SetFocused(m.focus == types.FocusMessages)
 	m.input.SetFocused(m.focus == types.FocusInput)
-	// In full mode, resize when focus changes to show/hide sidebar.
+	// When leaving the sidebar, reset selection to the current channel.
+	if m.focus != types.FocusSidebar && m.currentCh != nil {
+		m.channels.SelectByID(m.currentCh.ID)
+	}
 	if m.fullMode {
 		m.resizeComponents()
 	}
@@ -1541,7 +1566,9 @@ func loadHistoryCmd(svc slackpkg.SlackService, channelID string) tea.Cmd {
 	return func() tea.Msg {
 		msgs, err := svc.FetchHistory(channelID, 50)
 		if err != nil {
-			return ErrMsg{Err: err}
+			// Return empty history so the channel still opens,
+			// plus the error to display in the status bar.
+			return HistoryLoadedMsg{Messages: nil, Err: err}
 		}
 		return HistoryLoadedMsg{Messages: msgs}
 	}
