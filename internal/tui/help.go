@@ -20,7 +20,7 @@ var helpSections = []struct {
 			{"Up / Down / k / j", "Navigate channels or scroll messages"},
 			{"Up / Down (input)", "Browse sent message history"},
 			{"PgUp / PgDn", "Scroll messages by page"},
-			{"Ctrl-U / Ctrl-D", "Half-page scroll"},
+			{"Ctrl-U / Ctrl-D", "Half-page scroll (messages focused)"},
 			{"Home / End", "Jump to top / bottom of messages"},
 		},
 	},

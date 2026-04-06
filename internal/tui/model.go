@@ -417,6 +417,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keymap.AttachFile):
+			// Ctrl+U is shared with half-page-up in the viewport.
+			// Only open file browser when messages pane is NOT focused.
+			if m.focus == types.FocusMessages {
+				break // fall through to viewport handler
+			}
 			if m.currentCh != nil {
 				startDir := m.cfg.DownloadPath
 				if startDir == "" {
@@ -611,12 +616,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, loadFilesCmd(m.slackSvc, loadChID)
 
 		case key.Matches(msg, m.keymap.CancelDownload):
+			// Ctrl+D is shared with half-page-down in the viewport.
+			// Only cancel download when one is active; otherwise fall through.
 			if m.downloading && m.downloadCancel != nil {
 				m.downloadCancel()
 				m.downloading = false
 				m.downloadCancel = nil
 				m.warning = "Download cancelled"
 				return m, nil
+			}
+			if m.focus == types.FocusMessages {
+				break // fall through to viewport handler
 			}
 
 		case key.Matches(msg, m.keymap.Escape):
