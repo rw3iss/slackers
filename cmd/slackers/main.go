@@ -48,7 +48,7 @@ func resetTerminal() {
 	}
 }
 
-var version = "0.16.0"
+var version = "0.17.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "slackers",

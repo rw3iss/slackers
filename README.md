@@ -83,7 +83,7 @@ Teammates then run: `slackers join https://your-url.com/team.json`
 <details>
 <summary>Keyboard shortcuts (customizable)</summary>
 
-All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard Shortcuts** to rebind any key in-app (changes take effect immediately). You can also edit `~/.config/slackers/shortcuts.json` directly -- only overridden keys need to be listed; defaults fill in the rest. See [internal/shortcuts/defaults.json](internal/shortcuts/defaults.json) for the full default mapping.
+All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard Shortcuts** to rebind any key in-app (changes take effect immediately). You can also edit `~/.config/slackers/shortcuts.json` directly -- only overridden keys need to be listed; defaults fill in the rest. See [internal/shortcuts/defaults.json](internal/shortcuts/defaults.json) for the full default mapping. The in-app help panel (`Ctrl-H`) always shows your current bindings including any overrides.
 
 | Key | Action |
 |-----|--------|
@@ -94,7 +94,8 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Ctrl-K` | Search channels |
 | `Ctrl-F` | Search messages (Tab toggles scope) |
 | `Ctrl-N` | Next unread channel |
-| `Ctrl-U` | Attach file to send |
+| `Ctrl-U` | Attach file (sidebar/input) or half-page up (messages) |
+| `Ctrl-D` | Cancel download (if active) or half-page down (messages) |
 | `Ctrl-L` | Browse all files |
 | `f` (messages) | Toggle file select mode |
 | `Ctrl-Up` | Enter file select mode from anywhere |
@@ -105,15 +106,18 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Ctrl-A` | Rename/alias channel |
 | `Ctrl-W` | Toggle full screen chat |
 | `Ctrl-R` | Refresh channels |
-| `Ctrl-D` | Cancel file download |
+| `PgUp` / `PgDn` | Page scroll (messages, overlays) |
+| `Home` / `End` | Jump to top / bottom |
 | `Ctrl-\` | Toggle input mode (normal/edit) |
 | `Alt-Enter` | New line (normal) or send (edit) |
 | `Shift-Enter` | Insert new line (both modes) |
 | `Up` / `Down` (input) | Browse sent message history |
 | `Enter` / `Space` (header) | Collapse/expand channel group |
-| `Ctrl-H` | Help |
+| `Ctrl-H` | Help (shows current bindings) |
 | `Ctrl-S` | Settings |
 | `Ctrl-Q` / `Ctrl-C` | Quit |
+
+All overlay panels (help, settings, search, hidden channels) are scrollable with arrow keys, PgUp/PgDn, and mouse wheel.
 
 </details>
 
