@@ -17,6 +17,7 @@ type SocketEvent struct {
 	Type    string
 	Message types.Message
 	Status  types.ConnectionStatus
+	SlackTS string // raw Slack timestamp for lastSeen tracking
 }
 
 // SocketService defines the interface for real-time Slack event listening.
@@ -154,7 +155,9 @@ func (s *socketClient) handleEventsAPI(event slackevents.EventsAPIEvent, eventCh
 					UserID:    ev.User,
 					Text:      ev.Text,
 					ChannelID: ev.Channel,
+					Timestamp: parseSlackTimestamp(ev.TimeStamp),
 				},
+				SlackTS: ev.TimeStamp,
 			}
 
 			eventCh <- socketEvt

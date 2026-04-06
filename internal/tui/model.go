@@ -131,13 +131,17 @@ type ContextHistoryMsg struct {
 	ChannelName string
 }
 
-// PollTickMsg triggers a new-message poll.
+// PollTickMsg triggers a poll for the current channel and priority channels.
 type PollTickMsg struct{}
+
+// BgPollTickMsg triggers a background poll for rotation channels.
+type BgPollTickMsg struct{}
 
 // UnreadChannelsMsg carries channel IDs with new messages and all latest timestamps.
 type UnreadChannelsMsg struct {
-	ChannelIDs []string
-	LatestTS   map[string]string
+	ChannelIDs   []string
+	LatestTS     map[string]string
+	IsBackground bool // true if from background poll
 }
 
 // Model is the root TUI model composing all sub-components.
@@ -309,6 +313,7 @@ func (m Model) Init() tea.Cmd {
 		connectSocketCmd(m.socketSvc, m.eventChan),
 		waitForSocketEvent(m.eventChan),
 		pollTickCmd(m.cfg.PollInterval),
+		bgPollTickCmd(m.cfg.PollIntervalBg),
 		activityCheckCmd(m.cfg.AwayTimeout),
 	}
 	if m.p2pChan != nil {
@@ -350,17 +355,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		// If returning from away, trigger a full refresh.
+		// If returning from away, refresh the current channel only.
+		// Socket Mode and regular polling will catch up on other channels.
 		if m.isAway {
 			m.isAway = false
 			m.warning = ""
-			cmds := []tea.Cmd{
-				checkNewMessagesCmd(m.slackSvc, m.lastSeen, m.cfg.PollInterval),
-			}
 			if m.currentCh != nil {
-				cmds = append(cmds, silentLoadHistoryCmd(m.slackSvc, m.currentCh.ID))
+				return m, silentLoadHistoryCmd(m.slackSvc, m.currentCh.ID)
 			}
-			return m, tea.Batch(cmds...)
 		}
 
 		// Global shortcuts that work even in overlays
@@ -920,7 +922,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Event.Type {
 		case "message":
 			evMsg := msg.Event.Message
+			ts := msg.Event.SlackTS
+			// Update lastSeen for the current channel so polling doesn't
+			// re-detect this message. For other channels, don't update
+			// lastSeen (that would hide the unread flag).
 			if m.currentCh != nil && evMsg.ChannelID == m.currentCh.ID {
+				if ts != "" {
+					m.lastSeen[evMsg.ChannelID] = ts
+				}
 				m.messages.AppendMessage(evMsg)
 			} else {
 				m.channels.MarkUnread(evMsg.ChannelID)
@@ -936,49 +945,70 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case PollTickMsg:
-		rotationSize := 5
 		batch := make(map[string]string)
 
-		// 1. Current channel — always.
+		// 1. Current channel — always poll for content refresh.
 		if m.currentCh != nil {
 			if ts, ok := m.lastSeen[m.currentCh.ID]; ok {
 				batch[m.currentCh.ID] = ts
 			}
 		}
 
-		// 2. Priority channels — N most-recently-active channels every cycle.
-		priority := m.cfg.PollPriority
-		if priority <= 0 {
-			priority = 3
-		}
-		if len(m.pollChannels) > 0 {
-			type chTS struct{ id, ts string }
-			sorted := make([]chTS, 0, len(m.pollChannels))
-			for _, id := range m.pollChannels {
-				if ts, ok := m.lastSeen[id]; ok {
-					sorted = append(sorted, chTS{id, ts})
-				}
+		// 2. Priority channels — only when socket is NOT connected,
+		//    since Socket Mode already provides real-time unread events.
+		if m.connStatus != types.StatusConnected {
+			priority := m.cfg.PollPriority
+			if priority <= 0 {
+				priority = 3
 			}
-			for i := 0; i < len(sorted); i++ {
-				for j := i + 1; j < len(sorted); j++ {
-					if sorted[j].ts > sorted[i].ts {
-						sorted[i], sorted[j] = sorted[j], sorted[i]
+			if len(m.pollChannels) > 0 {
+				type chTS struct{ id, ts string }
+				sorted := make([]chTS, 0, len(m.pollChannels))
+				for _, id := range m.pollChannels {
+					if _, already := batch[id]; already {
+						continue
+					}
+					if ts, ok := m.lastSeen[id]; ok {
+						sorted = append(sorted, chTS{id, ts})
 					}
 				}
-			}
-			for i := 0; i < priority && i < len(sorted); i++ {
-				if _, already := batch[sorted[i].id]; !already {
+				for i := 0; i < len(sorted); i++ {
+					for j := i + 1; j < len(sorted); j++ {
+						if sorted[j].ts > sorted[i].ts {
+							sorted[i], sorted[j] = sorted[j], sorted[i]
+						}
+					}
+				}
+				for i := 0; i < priority && i < len(sorted); i++ {
 					batch[sorted[i].id] = sorted[i].ts
 				}
 			}
 		}
 
-		// 3. Rotation — pick channels least-recently-checked.
+		if len(batch) == 0 {
+			return m, pollTickCmd(m.cfg.PollInterval)
+		}
+
+		// Record check times.
+		now := time.Now()
+		for id := range batch {
+			m.lastChecked[id] = now
+		}
+
+		return m, checkNewMessagesCmd(m.slackSvc, batch, m.cfg.PollInterval)
+
+	case BgPollTickMsg:
+		// Background rotation poll — safety net for catching missed socket events.
+		// Runs at PollIntervalBg (default 30s), checks least-recently-polled channels.
+		rotationSize := 5
+		batch := make(map[string]string)
+
 		if len(m.pollChannels) > 0 {
 			type chCheck struct{ id string; checked time.Time }
 			unchecked := make([]chCheck, 0)
 			for _, id := range m.pollChannels {
-				if _, already := batch[id]; already {
+				// Skip current channel (handled by primary poll).
+				if m.currentCh != nil && id == m.currentCh.ID {
 					continue
 				}
 				checked := m.lastChecked[id]
@@ -1000,13 +1030,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Record check times.
+		if len(batch) == 0 {
+			return m, bgPollTickCmd(m.cfg.PollIntervalBg)
+		}
+
 		now := time.Now()
 		for id := range batch {
 			m.lastChecked[id] = now
 		}
 
-		return m, checkNewMessagesCmd(m.slackSvc, batch, m.cfg.PollInterval)
+		return m, checkNewMessagesBgCmd(m.slackSvc, batch, m.cfg.PollIntervalBg)
 
 	case UnreadChannelsMsg:
 		if msg.LatestTS != nil {
@@ -1026,13 +1059,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			sendNotification("multiple channels", newUnread)
 			setWindowUrgent()
 		}
+
+		// Reschedule the correct timer based on which poll triggered this.
+		nextTick := pollTickCmd(m.cfg.PollInterval)
+		if msg.IsBackground {
+			nextTick = bgPollTickCmd(m.cfg.PollIntervalBg)
+		}
+
 		if refreshCurrent && m.currentCh != nil && !m.messages.InContextMode() {
 			return m, tea.Batch(
-				pollTickCmd(m.cfg.PollInterval),
+				nextTick,
 				silentLoadHistoryCmd(m.slackSvc, m.currentCh.ID),
 			)
 		}
-		return m, pollTickCmd(m.cfg.PollInterval)
+		return m, nextTick
 
 	case FilesListLoadedMsg:
 		m.filesList, _ = m.filesList.Update(msg)
@@ -2035,6 +2075,15 @@ func pollTickCmd(intervalSec int) tea.Cmd {
 	})
 }
 
+func bgPollTickCmd(intervalSec int) tea.Cmd {
+	if intervalSec < 5 {
+		intervalSec = 30
+	}
+	return tea.Tick(time.Duration(intervalSec)*time.Second, func(t time.Time) tea.Msg {
+		return BgPollTickMsg{}
+	})
+}
+
 func checkNewMessagesCmd(svc slackpkg.SlackService, lastSeen map[string]string, intervalSec int) tea.Cmd {
 	seen := make(map[string]string, len(lastSeen))
 	for k, v := range lastSeen {
@@ -2047,5 +2096,20 @@ func checkNewMessagesCmd(svc slackpkg.SlackService, lastSeen map[string]string, 
 			return UnreadChannelsMsg{LatestTS: latestTS}
 		}
 		return UnreadChannelsMsg{ChannelIDs: ids, LatestTS: latestTS}
+	}
+}
+
+func checkNewMessagesBgCmd(svc slackpkg.SlackService, lastSeen map[string]string, intervalSec int) tea.Cmd {
+	seen := make(map[string]string, len(lastSeen))
+	for k, v := range lastSeen {
+		seen[k] = v
+	}
+
+	return func() tea.Msg {
+		ids, latestTS, err := svc.CheckNewMessages(seen)
+		if err != nil {
+			return UnreadChannelsMsg{LatestTS: latestTS, IsBackground: true}
+		}
+		return UnreadChannelsMsg{ChannelIDs: ids, LatestTS: latestTS, IsBackground: true}
 	}
 }

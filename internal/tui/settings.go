@@ -89,13 +89,19 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				label:       "Poll Interval",
 				key:         "poll_interval",
 				value:       strconv.Itoa(cfg.PollInterval),
-				description: "Seconds between new-message checks (1-300)",
+				description: "Seconds between current-channel polls (1-300)",
+			},
+			{
+				label:       "Bg Poll Interval",
+				key:         "poll_interval_bg",
+				value:       strconv.Itoa(bgPollVal(cfg.PollIntervalBg)),
+				description: "Seconds between background channel checks (5-600, default 30)",
 			},
 			{
 				label:       "Priority Channels",
 				key:         "poll_priority",
 				value:       strconv.Itoa(pollPriorityVal(cfg.PollPriority)),
-				description: "Most-recent channels checked every poll (0-10). Higher = more API usage. Slack limit: ~50 req/min.",
+				description: "Extra channels polled when socket is disconnected (0-10)",
 			},
 			{
 				label:       "Input History",
@@ -211,6 +217,13 @@ func awayTimeoutValue(n int) string {
 func pollPriorityVal(n int) int {
 	if n <= 0 {
 		return 3
+	}
+	return n
+}
+
+func bgPollVal(n int) int {
+	if n < 5 {
+		return 30
 	}
 	return n
 }
@@ -465,6 +478,16 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 		}
 		m.cfg.PollInterval = n
 		m.message = "Poll interval updated"
+
+	case "poll_interval_bg":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 5 || n > 600 {
+			m.message = "Background poll must be 5-600 seconds"
+			m.fields[m.selected].value = strconv.Itoa(bgPollVal(m.cfg.PollIntervalBg))
+			return nil
+		}
+		m.cfg.PollIntervalBg = n
+		m.message = fmt.Sprintf("Background poll interval: %ds", n)
 
 	case "channel_sort_by":
 		m.cfg.ChannelSortBy = value

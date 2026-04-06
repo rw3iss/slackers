@@ -36,6 +36,7 @@ type Config struct {
 	InputHistory    []string          `json:"input_history,omitempty"`
 	InputHistoryMax int               `json:"input_history_max,omitempty"`
 	PollInterval    int               `json:"poll_interval,omitempty"`
+	PollIntervalBg  int               `json:"poll_interval_bg,omitempty"`
 	PollPriority    int               `json:"poll_priority,omitempty"`
 	Notifications   bool              `json:"notifications,omitempty"`
 	ConfigPath      string            `json:"-"`
@@ -68,6 +69,7 @@ func defaults() *Config {
 		MouseEnabled:    true,
 		Notifications:   true,
 		PollInterval:    10,
+		PollIntervalBg:  30,
 		PollPriority:    3,
 		InputHistoryMax: 20,
 		DownloadPath:    downloadPath,
