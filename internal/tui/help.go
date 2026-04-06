@@ -36,6 +36,8 @@ var helpSections = []struct {
 			{"Ctrl-D", "Cancel file download"},
 			{"Ctrl-\\", "Toggle input mode (normal/edit)"},
 			{"Alt-Enter", "New line (normal) or send (edit)"},
+			{"Shift-Enter", "Insert new line (both modes)"},
+			{"Ctrl-W", "Toggle full screen chat mode"},
 		},
 	},
 	{

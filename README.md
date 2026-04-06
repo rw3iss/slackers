@@ -4,7 +4,7 @@
 ╚█████╗  ██║     ████████║██║     █████╔╝ █████╗  ██████╔╝╚█████╗
  ╚═══██╗ ██║     ██╔═══██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗ ╚═══██╗
 ██████╔╝ ███████╗██║   ██║╚██████╗██║  ██╗███████╗██║  ██║██████╔╝
-╚═════╝  ╚══════╝╚═╝   ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝
+╚═════╝  ╚══════╝╚═╝   ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═════╝
 ```
 
 A lightweight, terminal-based Slack client.
@@ -13,16 +13,19 @@ A lightweight, terminal-based Slack client.
 
 ## Features
 
-- **Smart unread detection** -- batched polling with priority channels, rate-limit aware
+- **Real-time messages** -- Socket Mode for instant delivery, with smart polling as a fallback
 - **Message search** -- search current or all channels, jump to results with context view
-- **File drop and browser** -- drop files, upload, download, browse/search all files across channels
-- **Mouse support** -- click channels, scroll panels, drag sidebar, click files to download
+- **File browser** -- upload, download, browse and search files across all channels
+- **Mouse support** -- click channels, scroll panels, drag sidebar resize, click files
 - **Multi-line editor** -- expandable textarea with normal/edit mode toggle
 - **Customizable shortcuts** -- rebind any key in-app, changes take effect immediately
 - **Channel management** -- hide, alias, collapse groups, sort by type/name/recent
+- **E2E encrypted messaging** -- optional P2P secure mode with X25519 key exchange
 - **Auto-update** -- new versions downloaded and installed on startup
 - **One-command onboarding** -- `slackers join <url>` for team setup, OAuth browser login
 - **Single binary** -- cross-platform (Linux, macOS, Windows), no dependencies
+
+For a deep dive into the architecture and design decisions, see [How_It_Works.md](How_It_Works.md).
 
 ## Install
 
@@ -80,7 +83,7 @@ Teammates then run: `slackers join https://your-url.com/team.json`
 <details>
 <summary>Keyboard shortcuts (customizable)</summary>
 
-All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard Shortcuts** to rebind any key in-app (changes take effect immediately). You can also edit `~/.config/slackers/shortcuts.json` directly — only overridden keys need to be listed; defaults fill in the rest. See [internal/shortcuts/defaults.json](internal/shortcuts/defaults.json) for the full default mapping.
+All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard Shortcuts** to rebind any key in-app (changes take effect immediately). You can also edit `~/.config/slackers/shortcuts.json` directly -- only overridden keys need to be listed; defaults fill in the rest. See [internal/shortcuts/defaults.json](internal/shortcuts/defaults.json) for the full default mapping.
 
 | Key | Action |
 |-----|--------|
@@ -91,28 +94,26 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Ctrl-K` | Search channels |
 | `Ctrl-F` | Search messages (Tab toggles scope) |
 | `Ctrl-N` | Next unread channel |
+| `Ctrl-U` | Attach file to send |
 | `Ctrl-L` | Browse all files |
+| `f` (messages) | Toggle file select mode |
+| `Ctrl-Up` | Enter file select mode from anywhere |
+| `Ctrl-Down` | Exit file select, focus input |
 | `Ctrl-X` | Hide channel |
 | `Ctrl-G` | Unhide channels |
 | `Ctrl-O` | Toggle hidden visible |
 | `Ctrl-A` | Rename/alias channel |
-| `Ctrl-U` | Attach file to send |
-| `Ctrl-L` | Browse all files |
-| `Ctrl-D` | Cancel file download |
 | `Ctrl-W` | Toggle full screen chat |
-| `f` (messages) | Toggle file select mode |
-| `Ctrl-Up` | Enter file select mode from anywhere |
-| `Ctrl-Down` | Exit file select, focus input |
-| `Enter` / `Space` (header) | Collapse/expand channel group |
-| `Up` / `Down` (input) | Browse sent message history |
 | `Ctrl-R` | Refresh channels |
-| `Ctrl-H` | Help |
+| `Ctrl-D` | Cancel file download |
 | `Ctrl-\` | Toggle input mode (normal/edit) |
 | `Alt-Enter` | New line (normal) or send (edit) |
-| `Shift-Enter` | New line (both modes) |
-| `Ctrl-D` | Cancel file download |
-| `Ctrl-S` | Settings (includes Keyboard Shortcuts) |
-| `Ctrl-Q` | Quit |
+| `Shift-Enter` | Insert new line (both modes) |
+| `Up` / `Down` (input) | Browse sent message history |
+| `Enter` / `Space` (header) | Collapse/expand channel group |
+| `Ctrl-H` | Help |
+| `Ctrl-S` | Settings |
+| `Ctrl-Q` / `Ctrl-C` | Quit |
 
 </details>
 
@@ -121,18 +122,23 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 
 | Setting | Options | Description |
 |---------|---------|-------------|
-| Auto Update | on / off | Auto-update on startup when new version available |
 | Sidebar Width | 10-80 | Sidebar width in characters |
 | Timestamp Format | Go format | e.g. `15:04`, `3:04 PM` |
+| Auto Update | on / off | Auto-update on startup |
 | Away Timeout | 0+ seconds | Auto-away after idle (0 = disabled) |
-| Mouse | on / off | Mouse click/scroll support (restart required) |
+| Mouse | on / off | Mouse support (restart required) |
 | Notifications | on / off | Terminal bell + desktop notifications |
-| Poll Interval | 1-300 | Seconds between message checks |
-| Priority Channels | 0-10 | Most-recent channels checked every poll cycle |
-| Sort By | type / name / recent | Channel sorting |
+| Poll Interval | 1-300s | Current channel poll frequency (default 10) |
+| Bg Poll Interval | 5-600s | Background channel checks (default 30) |
+| Priority Channels | 0-10 | Extra channels polled when socket is down |
+| Input History | 1-200 | Sent messages to remember |
+| Download Path | folder | File download location |
+| Sort By | type / name / recent | Channel sorting mode |
 | Sort Direction | asc / desc | Sort order |
-| Input History | 1-200 | Max sent messages to remember |
-| Download Path | folder | File download/upload location |
+| Secure Mode | on / off | E2E encrypted P2P messaging (restart required) |
+| P2P Port | 1024-65535 | Local port for P2P connections (default 9900) |
+| Secure Whitelist | Manage... | Users allowed for encrypted messaging |
+| Keyboard Shortcuts | Customize... | Rebind any key in-app |
 
 Fields with fixed options cycle with Enter/Tab.
 
@@ -159,31 +165,6 @@ rm -rf ~/.config/slackers
 
 ---
 
-## How it works
-
-**User token first.** Slackers uses your user token (`xoxp-`) for API calls so messages appear as you and you see all your channels. The bot token (`xoxb-`) is a fallback.
-
-**Polling for new messages.** Slack's Socket Mode only delivers events to channels the bot has joined (and joining posts a visible system message). Instead, Slackers polls `conversations.history` with `limit=1` to check for new messages — one lightweight API call per channel that returns just the latest timestamp.
-
-**Batched rotation to respect rate limits.** Slack allows ~50 API calls per minute. Slackers doesn't check all channels every cycle. Each poll cycle checks a small batch:
-
-1. **Current channel** — always included, so your active chat stays live
-2. **Priority channels** — the N most-recently-active channels (configurable, default 3). These are the channels with the newest messages, so your busiest conversations update fastest
-3. **Rotating batch** — 5 additional channels from the full list, advancing each cycle. This ensures every channel gets checked within `(total_channels / 5) × poll_interval` seconds
-
-With 50 channels, a 10s poll interval, and 3 priority channels: each cycle makes ~9 API calls (1 current + 3 priority + 5 rotation) = ~54 calls/min. If that's too high, reduce priority channels or increase the poll interval.
-
-**Hidden channels are skipped.** Channels you've hidden (`Ctrl-X`) are excluded from polling entirely, reducing API usage. Unhiding a channel adds it back to the poll rotation.
-
-**Unread detection.** On startup, Slackers seeds baseline timestamps for all visible channels (batched with delays to avoid rate limits). After seeding, the poller compares each channel's latest message timestamp against the stored baseline. Changed channels get marked with `*` in the sidebar. Viewing a channel updates its timestamp, clearing the marker.
-
-**Settings.** All values are configurable in settings (`Ctrl-S`):
-- **Poll Interval** (1-300s, default 10s) — how often to check
-- **Priority Channels** (0-10, default 3) — most-recent channels checked every cycle
-- Lower interval + higher priority = more responsive but more API usage
-
----
-
 ## Development
 
 ### Build
@@ -206,6 +187,7 @@ internal/
   auth/             OAuth2 browser flow with team ID verification
   config/           Config loading, saving, validation (0600 perms)
   format/           Slack mrkdwn to plain text, emoji rendering
+  secure/           E2E encryption, key management, libp2p P2P node
   shortcuts/        Customizable keyboard shortcuts with embedded defaults
   slack/            SlackService + SocketService interfaces and implementations
   tui/              Bubbletea model, UI components, overlays
@@ -213,10 +195,6 @@ internal/
 scripts/            Install/uninstall/cleanup scripts
 configs/            Default config, Slack app manifest
 ```
-
-### Architecture
-
-Elm architecture via Bubbletea (Model/Update/View). SOLID principles: interfaces for Slack API (`SlackService`, `SocketService`), single-responsibility packages, dependency inversion for testability.
 
 ### App manifest
 
