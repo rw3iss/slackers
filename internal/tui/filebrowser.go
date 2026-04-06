@@ -394,12 +394,17 @@ func (m FileBrowserModel) View() string {
 		boxWidth = 30
 	}
 
+	boxHeight := m.height - 4
+	if boxHeight < 10 {
+		boxHeight = 10
+	}
+
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
 		Width(boxWidth).
-		MaxHeight(m.height - 2)
+		Height(boxHeight)
 
 	box := boxStyle.Render(content)
 

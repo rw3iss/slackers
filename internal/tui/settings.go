@@ -20,15 +20,16 @@ type SettingsOpenFileBrowserMsg struct{ CurrentPath string }
 
 // SettingsModel provides an interactive config editor overlay.
 type SettingsModel struct {
-	fields   []settingsField
-	selected int
-	editing  bool
-	input    textinput.Model
-	cfg      *config.Config
-	width    int
-	height   int
-	message  string
-	version  string
+	fields       []settingsField
+	selected     int
+	scrollOffset int
+	editing      bool
+	input        textinput.Model
+	cfg          *config.Config
+	width        int
+	height       int
+	message      string
+	version      string
 }
 
 type settingsField struct {
@@ -577,7 +578,35 @@ func (m SettingsModel) View() string {
 	b.WriteString(titleStyle.Render("Settings") + strings.Repeat(" ", verPad) + verStyle.Render(verText))
 	b.WriteString("\n\n")
 
-	for i, f := range m.fields {
+	// Calculate visible field window.
+	// Box: 2 border + 2 padding + 3 header + 4 footer = ~11 overhead lines.
+	// Each field = 1 line, selected field = 2 lines (with description).
+	visibleFields := (m.height - 4 - 11) / 2
+	if visibleFields < 3 {
+		visibleFields = 3
+	}
+	if visibleFields > len(m.fields) {
+		visibleFields = len(m.fields)
+	}
+
+	// Auto-scroll to keep selected in view.
+	if m.selected < m.scrollOffset {
+		m.scrollOffset = m.selected
+	}
+	if m.selected >= m.scrollOffset+visibleFields {
+		m.scrollOffset = m.selected - visibleFields + 1
+	}
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
+
+	end := m.scrollOffset + visibleFields
+	if end > len(m.fields) {
+		end = len(m.fields)
+	}
+
+	for i := m.scrollOffset; i < end; i++ {
+		f := m.fields[i]
 		cursor := "  "
 		ls := labelStyle
 		if i == m.selected {
@@ -633,12 +662,17 @@ func (m SettingsModel) View() string {
 
 	content := b.String()
 
+	boxHeight := m.height - 4
+	if boxHeight < 10 {
+		boxHeight = 10
+	}
+
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
 		Width(min(65, m.width-4)).
-		MaxHeight(m.height - 4)
+		Height(boxHeight)
 
 	box := boxStyle.Render(content)
 

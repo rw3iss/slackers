@@ -93,9 +93,10 @@ func NewHelpModel(version string) HelpModel {
 func (m *HelpModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	m.visibleLines = h - 10 // border + padding + header/footer
-	if m.visibleLines < 5 {
-		m.visibleLines = 5
+	// Box uses: 2 border + 2 padding + 4 header lines + 3 footer lines = 11
+	m.visibleLines = h - 4 - 11
+	if m.visibleLines < 3 {
+		m.visibleLines = 3
 	}
 }
 
@@ -234,12 +235,17 @@ func (m *HelpModel) View() string {
 
 	content := b.String()
 
+	boxHeight := m.height - 4
+	if boxHeight < 10 {
+		boxHeight = 10
+	}
+
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
 		Width(min(85, m.width-4)).
-		MaxHeight(m.height - 4)
+		Height(boxHeight)
 
 	box := boxStyle.Render(content)
 

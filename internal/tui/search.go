@@ -180,12 +180,17 @@ func (m SearchModel) View() string {
 
 	content := b.String()
 
+	boxHeight := m.height - 4
+	if boxHeight < 10 {
+		boxHeight = 10
+	}
+
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
 		Width(min(55, m.width-4)).
-		MaxHeight(m.height - 4)
+		Height(boxHeight)
 
 	box := boxStyle.Render(content)
 

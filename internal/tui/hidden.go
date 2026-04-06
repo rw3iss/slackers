@@ -129,8 +129,26 @@ func (m HiddenChannelsModel) View() string {
 	if len(m.channels) == 0 {
 		b.WriteString(dimStyle.Render("  No hidden channels"))
 	} else {
+		// Scroll window around selected.
+		maxVisible := m.height - 12
+		if maxVisible < 5 {
+			maxVisible = 5
+		}
+		if maxVisible > len(m.channels) {
+			maxVisible = len(m.channels)
+		}
+		start := 0
+		if m.selected >= maxVisible {
+			start = m.selected - maxVisible + 1
+		}
+		end := start + maxVisible
+		if end > len(m.channels) {
+			end = len(m.channels)
+		}
+
 		lastHeader := ""
-		for i, ch := range m.channels {
+		for i := start; i < end; i++ {
+			ch := m.channels[i]
 			header := hiddenSectionHeader(ch)
 			if header != lastHeader {
 				if lastHeader != "" {
@@ -163,12 +181,17 @@ func (m HiddenChannelsModel) View() string {
 
 	content := b.String()
 
+	boxHeight := m.height - 4
+	if boxHeight < 10 {
+		boxHeight = 10
+	}
+
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
 		Width(min(50, m.width-4)).
-		MaxHeight(m.height - 4)
+		Height(boxHeight)
 
 	box := boxStyle.Render(content)
 
