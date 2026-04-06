@@ -49,7 +49,7 @@ func resetTerminal() {
 	}
 }
 
-var version = "0.17.0"
+var version = "0.18.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "slackers",
@@ -374,6 +374,9 @@ var configCmd = &cobra.Command{
 		fmt.Printf("    collapsed_groups:   %d\n", len(cfg.CollapsedGroups))
 		fmt.Printf("    input_history:      %d entries\n", len(cfg.InputHistory))
 		fmt.Printf("    last_seen_ts:       %d channels\n", len(cfg.LastSeenTS))
+		fStore := friends.NewFriendStore(friends.DefaultPath())
+		_ = fStore.Load()
+		fmt.Printf("    friends:            %d\n", fStore.Count())
 
 		return nil
 	},

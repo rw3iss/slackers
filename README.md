@@ -21,6 +21,7 @@ A lightweight, terminal-based Slack client.
 - **Customizable shortcuts** -- rebind any key in-app, changes take effect immediately
 - **Channel management** -- hide, alias, collapse groups, sort by type/name/recent
 - **E2E encrypted messaging** -- optional P2P secure mode with X25519 key exchange
+- **Friends list** -- private P2P chat with befriended Slackers users, works without a Slack workspace
 - **Auto-update** -- new versions downloaded and installed on startup
 - **One-command onboarding** -- `slackers join <url>` for team setup, OAuth browser login
 - **Single binary** -- cross-platform (Linux, macOS, Windows), no dependencies
@@ -113,6 +114,7 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Shift-Enter` | Insert new line (both modes) |
 | `Up` / `Down` (input) | Browse sent message history |
 | `Enter` / `Space` (header) | Collapse/expand channel group |
+| `Ctrl-B` | Send friend request to current DM user |
 | `Ctrl-H` | Help (shows current bindings) |
 | `Ctrl-S` | Settings |
 | `Ctrl-Q` / `Ctrl-C` | Quit |
