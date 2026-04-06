@@ -40,6 +40,7 @@ type MessageViewModel struct {
 	messages    []types.Message
 	users       map[string]string
 	channelName string
+	secureLabel string
 	focused     bool
 	autoScroll  bool
 	width       int
@@ -162,6 +163,10 @@ func (m *MessageViewModel) SetUsers(users map[string]string) {
 
 func (m *MessageViewModel) SetChannelName(name string) {
 	m.channelName = name
+}
+
+func (m *MessageViewModel) SetSecureLabel(label string) {
+	m.secureLabel = label
 }
 
 func (m *MessageViewModel) SetSize(w, h int) {
@@ -315,6 +320,9 @@ func (m MessageViewModel) View() string {
 	headerParts := []string{}
 	if m.channelName != "" {
 		headerParts = append(headerParts, lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render(m.channelName))
+	}
+	if m.secureLabel != "" {
+		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00")).Render(" "+m.secureLabel))
 	}
 
 	// Determine the date of the first visible message for the sticky date bar.

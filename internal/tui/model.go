@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/config"
+	"github.com/rw3iss/slackers/internal/secure"
 	"github.com/rw3iss/slackers/internal/shortcuts"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
 	"github.com/rw3iss/slackers/internal/types"
@@ -35,6 +36,7 @@ const (
 	overlayFileBrowser
 	overlayFilesList
 	overlayShortcuts
+	overlayWhitelist
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -99,6 +101,21 @@ type ActivityCheckMsg struct{}
 // ClearWarningMsg clears the status bar warning if the user was recently active.
 type ClearWarningMsg struct{}
 
+// WhitelistOpenMsg signals that the whitelist overlay should open.
+type WhitelistOpenMsg struct{}
+
+// P2PReceivedMsg is sent when a message arrives over the P2P connection.
+type P2PReceivedMsg struct {
+	SenderID string
+	Text     string
+}
+
+// SecureSessionReadyMsg signals that a secure session was established with a peer.
+type SecureSessionReadyMsg struct {
+	PeerID string
+	State  secure.SessionState
+}
+
 // channelInfo stores the name and alias for a channel.
 type channelInfo struct {
 	name  string
@@ -139,6 +156,7 @@ type Model struct {
 	fbPurpose   fileBrowserPurpose
 	filesList       FilesListModel
 	shortcutsEditor ShortcutsEditorModel
+	whitelist       WhitelistModel
 
 	// State
 	focus      types.Focus
@@ -151,8 +169,13 @@ type Model struct {
 	err        error
 	warning    string
 
+	// Secure messaging
+	secureMgr  *secure.SessionManager
+	p2pNode    *secure.P2PNode
+	p2pChan    chan P2PReceivedMsg
+
 	// Shortcuts
-	shortcutMap       shortcuts.ShortcutMap
+	shortcutMap shortcuts.ShortcutMap
 	shortcutOverrides shortcuts.ShortcutMap
 
 	// Channel index: ID -> {name, alias}
@@ -207,6 +230,42 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	}
 	inp.SetMaxHistory(histMax)
 
+	// Initialize secure messaging if enabled.
+	var secureMgr *secure.SessionManager
+	if cfg.SecureMode {
+		keyPath := cfg.SecureKeyPath
+		if keyPath == "" {
+			keyPath = secure.DefaultKeyPath()
+		}
+		var kp *secure.KeyPair
+		if secure.KeyExists(keyPath) {
+			kp, _ = secure.LoadKeyPair(keyPath)
+		} else {
+			kp, _ = secure.GenerateKeyPair()
+			if kp != nil {
+				_ = kp.SavePrivateKey(keyPath)
+			}
+		}
+		if kp != nil {
+			secureMgr = secure.NewSessionManager(kp)
+		}
+	}
+
+	// Start P2P node if secure mode is enabled.
+	var p2pNode *secure.P2PNode
+	var p2pChan chan P2PReceivedMsg
+	if cfg.SecureMode && secureMgr != nil {
+		port := cfg.P2PPort
+		if port <= 0 {
+			port = 9900
+		}
+		p2pChan = make(chan P2PReceivedMsg, 64)
+		onMsg := func(peerSlackID string, msg secure.P2PMessage) {
+			p2pChan <- P2PReceivedMsg{SenderID: peerSlackID, Text: msg.Text}
+		}
+		p2pNode, _ = secure.NewP2PNode(port, cfg.P2PAddress, onMsg)
+	}
+
 	// Load and merge shortcuts.
 	defaults := shortcuts.DefaultShortcuts()
 	overrides, _ := shortcuts.Load(shortcuts.UserConfigPath())
@@ -218,6 +277,9 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		messages:          NewMessageView(),
 		input:             inp,
 		keymap:            km,
+		secureMgr:         secureMgr,
+		p2pNode:           p2pNode,
+		p2pChan:           p2pChan,
 		shortcutMap:       merged,
 		shortcutOverrides: overrides,
 		settings:          NewSettingsModel(cfg, version),
@@ -239,7 +301,7 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 
 // Init returns the initial commands to run at startup.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		tea.EnterAltScreen,
 		splashTimerCmd(),
 		checkUpdateCmd(m.version),
@@ -248,7 +310,11 @@ func (m Model) Init() tea.Cmd {
 		waitForSocketEvent(m.eventChan),
 		pollTickCmd(m.cfg.PollInterval),
 		activityCheckCmd(m.cfg.AwayTimeout),
-	)
+	}
+	if m.p2pChan != nil {
+		cmds = append(cmds, waitForP2PMsg(m.p2pChan))
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles all messages and delegates to sub-models.
@@ -301,6 +367,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, m.keymap.Quit):
 			clearWindowUrgent()
+			if m.p2pNode != nil {
+				_ = m.p2pNode.Close()
+			}
 			return m, tea.Quit
 
 		case key.Matches(msg, m.keymap.Help):
@@ -459,6 +528,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.shortcutsEditor, cmd = m.shortcutsEditor.Update(msg)
 			return m, cmd
 		}
+		if m.overlay == overlayWhitelist {
+			if msg.String() == "esc" && !m.whitelist.adding {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.whitelist, cmd = m.whitelist.Update(msg)
+			return m, cmd
+		}
 
 		// Normal key handling (no overlay)
 		switch {
@@ -549,7 +627,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if ch != nil {
 				m.currentCh = ch
 				m.channels.ClearUnread(ch.ID)
-				m.messages.SetChannelName("#" + m.channels.displayName(*ch))
+				m.setChannelHeader()
 				m.saveLastChannel(ch.ID)
 				return m, loadHistoryCmd(m.slackSvc, ch.ID)
 			}
@@ -606,9 +684,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if ch != nil {
 					m.currentCh = ch
 					m.channels.ClearUnread(ch.ID)
-					m.messages.SetChannelName("#" + ch.Name)
+					m.setChannelHeader()
 					m.saveLastChannel(ch.ID)
-					return m, loadHistoryCmd(m.slackSvc, ch.ID)
+					cmds := []tea.Cmd{loadHistoryCmd(m.slackSvc, ch.ID)}
+					// Trigger peer discovery for whitelisted DM peers.
+					if ch.IsDM && ch.UserID != "" && m.secureMgr != nil {
+						if isWhitelisted(m.cfg.SecureWhitelist, ch.UserID) {
+							cmds = append(cmds, discoverPeerCmd(m.secureMgr, ch.UserID))
+						}
+					}
+					return m, tea.Batch(cmds...)
 				}
 				// Header selected — fall through to channel list Update for collapse toggle.
 			}
@@ -696,7 +781,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.channels.SelectByID(ch.ID)
 				m.channels.ClearUnread(ch.ID)
 				m.channels.UnhideChannel(ch.ID)
-				m.messages.SetChannelName("#" + m.channels.displayName(ch))
+				m.setChannelHeader()
 				m.saveLastChannel(ch.ID)
 				return m, loadHistoryCmd(m.slackSvc, ch.ID)
 			}
@@ -760,7 +845,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if ch.ID == m.cfg.LastChannelID {
 					m.currentCh = &ch
 					m.channels.SelectByID(ch.ID)
-					m.messages.SetChannelName("#" + m.channels.displayName(ch))
+					m.setChannelHeader()
 					cmds = append(cmds, loadHistoryCmd(m.slackSvc, ch.ID))
 					break
 				}
@@ -773,7 +858,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case SilentHistoryMsg:
-		// Always update the view — the poll already confirmed new messages exist.
+		msg.Messages = m.decryptMessages(msg.Messages)
 		m.messages.SetMessagesSilent(msg.Messages)
 		if m.currentCh != nil && len(msg.Messages) > 0 {
 			latest := msg.Messages[len(msg.Messages)-1]
@@ -783,8 +868,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case HistoryLoadedMsg:
-		// Always open the channel, even if history fetch failed.
 		if msg.Messages != nil {
+			msg.Messages = m.decryptMessages(msg.Messages)
 			m.messages.SetMessages(msg.Messages)
 		} else {
 			m.messages.SetMessages(nil)
@@ -970,6 +1055,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayShortcuts
 		return m, nil
 
+	case WhitelistOpenMsg:
+		m.whitelist = NewWhitelistModel(m.cfg.SecureWhitelist, m.users)
+		m.whitelist.SetSize(m.width, m.height)
+		m.overlay = overlayWhitelist
+		return m, nil
+
 	case ShortcutsSavedMsg:
 		// Immediately rebuild keymap from the editor's current state.
 		m.shortcutMap = m.shortcutsEditor.Merged()
@@ -1060,7 +1151,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cfg.InputHistory = m.input.History()
 			go config.Save(m.cfg)
 			m.input.Reset()
-			return m, sendMessageWithFilesCmd(m.slackSvc, m.currentCh.ID, text)
+
+			// If secure mode is active and this is a DM with a whitelisted peer,
+			// encrypt the message before sending.
+			sendText := text
+			if m.secureMgr != nil && m.currentCh.IsDM && m.currentCh.UserID != "" {
+				if isWhitelisted(m.cfg.SecureWhitelist, m.currentCh.UserID) {
+					encrypted, err := m.secureMgr.EncryptMessage(m.currentCh.UserID, text)
+					if err == nil {
+						sendText = encrypted
+					}
+				}
+			}
+
+			return m, sendMessageWithFilesCmd(m.slackSvc, m.currentCh.ID, sendText)
 		}
 		return m, nil
 
@@ -1110,6 +1214,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.splash = false
 		return m, nil
 
+	case P2PReceivedMsg:
+		// A message arrived over P2P — display it in the current DM if it matches.
+		if m.currentCh != nil && m.currentCh.IsDM && m.currentCh.UserID == msg.SenderID {
+			userName := msg.SenderID
+			if u, ok := m.users[msg.SenderID]; ok {
+				userName = u.DisplayName
+			}
+			p2pMsg := types.Message{
+				UserID:    msg.SenderID,
+				UserName:  userName,
+				Text:      "🔒 " + msg.Text,
+				Timestamp: time.Now(),
+			}
+			m.messages.AppendMessage(p2pMsg)
+		}
+		// Continue listening for more P2P messages.
+		if m.p2pChan != nil {
+			return m, waitForP2PMsg(m.p2pChan)
+		}
+		return m, nil
+
+	case SecureSessionReadyMsg:
+		if m.secureMgr != nil {
+			m.secureMgr.SetState(msg.PeerID, msg.State)
+			// Refresh the header if we're viewing this peer's DM.
+			if m.currentCh != nil && m.currentCh.UserID == msg.PeerID {
+				m.setChannelHeader()
+			}
+		}
+		return m, nil
+
+	case WhitelistUpdateMsg:
+		m.cfg.SecureWhitelist = msg.Whitelist
+		go config.Save(m.cfg)
+		return m, nil
+
 	case ErrMsg:
 		return m, setError(&m, msg.Err)
 	}
@@ -1147,6 +1287,8 @@ func (m Model) View() string {
 		return m.filesList.View()
 	case overlayShortcuts:
 		return m.shortcutsEditor.View()
+	case overlayWhitelist:
+		return m.whitelist.View()
 	}
 
 	msgView := m.messages.View()
@@ -1295,7 +1437,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				} else if isChannel && ch != nil {
 					m.currentCh = ch
 					m.channels.ClearUnread(ch.ID)
-					m.messages.SetChannelName("#" + m.channels.displayName(*ch))
+					m.setChannelHeader()
 					m.saveLastChannel(ch.ID)
 					return m, loadHistoryCmd(m.slackSvc, ch.ID)
 				}
@@ -1472,6 +1614,79 @@ func (m *Model) persistLastSeen() {
 		}
 	}
 	go config.Save(m.cfg)
+}
+
+// setChannelHeader updates the message view header with channel name and secure indicator.
+func (m *Model) setChannelHeader() {
+	if m.currentCh == nil {
+		return
+	}
+	m.messages.SetChannelName("#" + m.channels.displayName(*m.currentCh))
+	m.messages.SetSecureLabel(m.secureIndicator())
+}
+
+// secureIndicator returns a status label for the current channel's secure state.
+func (m *Model) secureIndicator() string {
+	if m.secureMgr == nil || m.currentCh == nil || !m.currentCh.IsDM {
+		return ""
+	}
+	if !isWhitelisted(m.cfg.SecureWhitelist, m.currentCh.UserID) {
+		return ""
+	}
+	sess := m.secureMgr.GetSession(m.currentCh.UserID)
+	if sess == nil {
+		return ""
+	}
+	return " [" + sess.State.String() + "]"
+}
+
+// decryptMessages decrypts any E2E encrypted messages in the list using the secure manager.
+func (m *Model) decryptMessages(msgs []types.Message) []types.Message {
+	if m.secureMgr == nil {
+		return msgs
+	}
+	for i, msg := range msgs {
+		if secure.IsEncryptedMessage(msg.Text) {
+			plaintext, err := m.secureMgr.DecryptMessage(msg.UserID, msg.Text)
+			if err == nil {
+				msgs[i].Text = "🔒 " + plaintext
+			} else {
+				msgs[i].Text = "🔒 [encrypted message]"
+			}
+		}
+	}
+	return msgs
+}
+
+// waitForP2PMsg returns a command that waits for the next P2P message.
+func waitForP2PMsg(ch chan P2PReceivedMsg) tea.Cmd {
+	return func() tea.Msg {
+		return <-ch
+	}
+}
+
+// discoverPeerCmd attempts to discover a peer and set session state.
+func discoverPeerCmd(mgr *secure.SessionManager, userID string) tea.Cmd {
+	return func() tea.Msg {
+		// Check if we already have a session with this peer.
+		sess := mgr.GetSession(userID)
+		if sess != nil {
+			return SecureSessionReadyMsg{PeerID: userID, State: sess.State}
+		}
+		// No session yet — mark as discovering. Full key exchange happens
+		// when the peer also has Slackers with secure mode enabled.
+		return SecureSessionReadyMsg{PeerID: userID, State: secure.SessionDiscovering}
+	}
+}
+
+// isWhitelisted checks if a user ID is in the secure whitelist.
+func isWhitelisted(whitelist []string, userID string) bool {
+	for _, id := range whitelist {
+		if id == userID {
+			return true
+		}
+	}
+	return false
 }
 
 // rebuildPollChannels builds the list of channels to poll, excluding hidden ones.

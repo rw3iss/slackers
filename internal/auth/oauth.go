@@ -134,20 +134,20 @@ func RunOAuthFlow(cfg OAuthConfig) (*OAuthResult, error) {
 
 		if errParam != "" {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprintf(w, successPage("Authorization denied: "+errParam, false))
+			fmt.Fprint(w, successPage("Authorization denied: "+errParam, false))
 			errCh <- fmt.Errorf("oauth denied: %s", errParam)
 			return
 		}
 
 		if code == "" {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprintf(w, successPage("No authorization code received.", false))
+			fmt.Fprint(w, successPage("No authorization code received.", false))
 			errCh <- fmt.Errorf("no authorization code in callback")
 			return
 		}
 
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, successPage("Authorization successful! You can close this tab and return to your terminal.", true))
+		fmt.Fprint(w, successPage("Authorization successful! You can close this tab and return to your terminal.", true))
 		codeCh <- code
 	})
 

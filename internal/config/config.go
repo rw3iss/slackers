@@ -23,6 +23,11 @@ type Config struct {
 	ChannelSortAsc  *bool             `json:"channel_sort_asc,omitempty"`
 	LastChannelID   string            `json:"last_channel_id,omitempty"`
 	DownloadPath    string            `json:"download_path,omitempty"`
+	SecureMode      bool              `json:"secure_mode,omitempty"`
+	P2PPort         int               `json:"p2p_port,omitempty"`
+	P2PAddress      string            `json:"p2p_address,omitempty"`
+	SecureWhitelist []string          `json:"secure_whitelist,omitempty"`
+	SecureKeyPath   string            `json:"secure_key_path,omitempty"`
 	CollapsedGroups []string          `json:"collapsed_groups,omitempty"`
 	AutoUpdate      *bool             `json:"auto_update,omitempty"`
 	MouseEnabled    bool              `json:"mouse_enabled,omitempty"`
@@ -66,6 +71,7 @@ func defaults() *Config {
 		PollPriority:    3,
 		InputHistoryMax: 20,
 		DownloadPath:    downloadPath,
+		P2PPort:         9900,
 		ConfigPath:      DefaultConfigPath(),
 	}
 }

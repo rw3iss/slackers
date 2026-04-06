@@ -124,6 +124,25 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				options:     []string{"asc", "desc"},
 			},
 			{
+				label:       "Secure Mode",
+				key:         "secure_mode",
+				value:       boolToOnOff(cfg.SecureMode),
+				description: "E2E encrypted P2P messaging with whitelisted peers (restart required)",
+				options:     []string{"on", "off"},
+			},
+			{
+				label:       "P2P Port",
+				key:         "p2p_port",
+				value:       strconv.Itoa(p2pPortVal(cfg.P2PPort)),
+				description: "Local port for P2P connections (default 9900)",
+			},
+			{
+				label:       "Secure Whitelist",
+				key:         "whitelist",
+				value:       "Manage...",
+				description: "Manage users allowed for E2E encrypted messaging",
+			},
+			{
 				label:       "Keyboard Shortcuts",
 				key:         "shortcuts",
 				value:       "Customize...",
@@ -166,6 +185,13 @@ func boolToDir(b *bool) string {
 		return "asc"
 	}
 	return "desc"
+}
+
+func p2pPortVal(n int) int {
+	if n <= 0 {
+		return 9900
+	}
+	return n
 }
 
 func autoUpdateValue(b *bool) string {
@@ -265,6 +291,13 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 			}
 		}
 
+		// Whitelist opens the whitelist manager.
+		if f.key == "whitelist" {
+			return m, func() tea.Msg {
+				return WhitelistOpenMsg{}
+			}
+		}
+
 		// Download path opens a folder browser.
 		if f.key == "download_path" {
 			return m, func() tea.Msg {
@@ -340,6 +373,25 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 	case "timestamp_format":
 		m.cfg.TimestampFormat = value
 		m.message = "Timestamp format updated"
+
+	case "secure_mode":
+		v := strings.ToLower(strings.TrimSpace(value))
+		m.cfg.SecureMode = (v == "on")
+		if m.cfg.SecureMode {
+			m.message = "Secure mode enabled (restart to activate)"
+		} else {
+			m.message = "Secure mode disabled (restart to deactivate)"
+		}
+
+	case "p2p_port":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1024 || n > 65535 {
+			m.message = "Port must be 1024-65535"
+			m.fields[m.selected].value = strconv.Itoa(p2pPortVal(m.cfg.P2PPort))
+			return nil
+		}
+		m.cfg.P2PPort = n
+		m.message = fmt.Sprintf("P2P port: %d (restart to apply)", n)
 
 	case "auto_update":
 		v := strings.ToLower(strings.TrimSpace(value))
