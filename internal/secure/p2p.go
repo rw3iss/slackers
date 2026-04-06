@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -17,8 +18,15 @@ import (
 )
 
 const (
-	// P2PProtocol is the libp2p protocol ID for Slackers messaging.
 	P2PProtocol = protocol.ID("/slackers/msg/1.0.0")
+
+	// P2P message types.
+	MsgTypeMessage       = "message"
+	MsgTypePing          = "ping"
+	MsgTypePong          = "pong"
+	MsgTypeFriendRequest = "friend_request"
+	MsgTypeFriendAccept  = "friend_accept"
+	MsgTypeFriendReject  = "friend_reject"
 )
 
 // P2PMessage is the wire format for messages sent over P2P.
@@ -202,6 +210,40 @@ func (n *P2PNode) handleStream(s network.Stream) {
 			n.onMessage(slackID, msg)
 		}
 	}
+}
+
+// RegisterPeer maps a Slack user ID to a libp2p peer ID without connecting.
+func (n *P2PNode) RegisterPeer(slackUserID string, peerID peer.ID) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.peerMap[slackUserID] = peerID
+	n.slackMap[peerID] = slackUserID
+}
+
+// PingPeer sends a ping to a peer and returns true if they respond.
+func (n *P2PNode) PingPeer(slackUserID string) bool {
+	n.mu.RLock()
+	peerID, ok := n.peerMap[slackUserID]
+	n.mu.RUnlock()
+	if !ok {
+		return false
+	}
+
+	if n.host.Network().Connectedness(peerID) != network.Connected {
+		return false
+	}
+
+	msg := P2PMessage{Type: MsgTypePing, SenderID: slackUserID, Timestamp: time.Now().Unix()}
+	stream, err := n.host.NewStream(n.ctx, peerID, P2PProtocol)
+	if err != nil {
+		return false
+	}
+	defer stream.Close()
+
+	data, _ := json.Marshal(msg)
+	data = append(data, '\n')
+	_, err = stream.Write(data)
+	return err == nil
 }
 
 // Close shuts down the P2P node.
