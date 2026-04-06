@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/config"
+	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/secure"
 	"github.com/rw3iss/slackers/internal/shortcuts"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
@@ -911,11 +912,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MessageSentMsg:
 		drainWarnings(&m)
-		// Refresh history to show the sent message (socket events may not
-		// arrive if the bot isn't in the channel).
-		if m.currentCh != nil {
+		// Only reload history if socket is disconnected. When connected,
+		// the socket event handler already appends the sent message.
+		if m.connStatus != types.StatusConnected && m.currentCh != nil {
+			debug.Log("[tui] MessageSent: socket disconnected, reloading history for %s", m.currentCh.ID)
 			return m, loadHistoryCmd(m.slackSvc, m.currentCh.ID)
 		}
+		debug.Log("[tui] MessageSent: socket connected, skipping history reload")
 		return m, nil
 
 	case SlackEventMsg:
@@ -923,6 +926,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "message":
 			evMsg := msg.Event.Message
 			ts := msg.Event.SlackTS
+			debug.Log("[tui] socket message: channel=%s user=%s ts=%s", evMsg.ChannelID, evMsg.UserID, ts)
 			// Update lastSeen for the current channel so polling doesn't
 			// re-detect this message. For other channels, don't update
 			// lastSeen (that would hide the unread flag).
@@ -952,6 +956,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if ts, ok := m.lastSeen[m.currentCh.ID]; ok {
 				batch[m.currentCh.ID] = ts
 			}
+			debug.Log("[poll] primary tick: current=%s socket=%v", m.currentCh.ID, m.connStatus == types.StatusConnected)
 		}
 
 		// 2. Priority channels — only when socket is NOT connected,
@@ -1000,6 +1005,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case BgPollTickMsg:
 		// Background rotation poll — safety net for catching missed socket events.
 		// Runs at PollIntervalBg (default 30s), checks least-recently-polled channels.
+		debug.Log("[poll] background tick")
 		rotationSize := 5
 		batch := make(map[string]string)
 
@@ -1179,7 +1185,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case FileUploadedMsg:
+		// File uploads need a history reload since the file message
+		// won't arrive via socket for the sender.
 		if m.currentCh != nil {
+			m.warning = fmt.Sprintf("Uploaded %d file(s)", msg.Count)
 			return m, loadHistoryCmd(m.slackSvc, m.currentCh.ID)
 		}
 		return m, nil

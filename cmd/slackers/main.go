@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rw3iss/slackers/internal/auth"
 	"github.com/rw3iss/slackers/internal/config"
+	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/slack"
 	"github.com/rw3iss/slackers/internal/tui"
 	"github.com/spf13/cobra"
@@ -48,6 +49,15 @@ var rootCmd = &cobra.Command{
 		botToken, _ := cmd.Flags().GetString("bot-token")
 		appToken, _ := cmd.Flags().GetString("app-token")
 		sidebarWidth, _ := cmd.Flags().GetInt("sidebar-width")
+		debugMode, _ := cmd.Flags().GetBool("debug")
+
+		if debugMode {
+			if err := debug.Init(""); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not init debug log: %v\n", err)
+			} else {
+				defer debug.Close()
+			}
+		}
 
 		if configPath == "" {
 			configPath = config.DefaultConfigPath()
@@ -459,6 +469,7 @@ func init() {
 	rootCmd.Flags().String("bot-token", "", "Override Slack bot token")
 	rootCmd.Flags().String("app-token", "", "Override Slack app token")
 	rootCmd.Flags().Int("sidebar-width", 0, "Override sidebar width")
+	rootCmd.Flags().Bool("debug", false, "Enable debug logging to ~/.config/slackers/debug.log")
 
 	loginCmd.Flags().String("client-id", "", "Slack app Client ID")
 	loginCmd.Flags().String("client-secret", "", "Slack app Client Secret")

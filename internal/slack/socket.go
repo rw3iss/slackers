@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/types"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -113,21 +114,25 @@ func (s *socketClient) handleEvent(client *socketmode.Client, evt socketmode.Eve
 
 	case socketmode.EventTypeConnected:
 		if s.lastStatus != types.StatusConnected {
+			debug.Log("[socket] connected")
 			s.lastStatus = types.StatusConnected
 			eventCh <- SocketEvent{Type: "status", Status: types.StatusConnected}
 		}
 
 	case socketmode.EventTypeConnecting:
 		if s.lastStatus == types.StatusDisconnected || s.lastStatus == 0 {
+			debug.Log("[socket] connecting...")
 			s.lastStatus = types.StatusConnecting
 			eventCh <- SocketEvent{Type: "status", Status: types.StatusConnecting}
 		}
 
 	case socketmode.EventTypeDisconnect:
+		debug.Log("[socket] disconnected")
 		s.lastStatus = types.StatusDisconnected
 		eventCh <- SocketEvent{Type: "status", Status: types.StatusDisconnected}
 
 	case socketmode.EventTypeConnectionError:
+		debug.Log("[socket] connection error")
 		s.lastStatus = types.StatusError
 		eventCh <- SocketEvent{Type: "status", Status: types.StatusError}
 
@@ -146,8 +151,10 @@ func (s *socketClient) handleEventsAPI(event slackevents.EventsAPIEvent, eventCh
 		switch ev := innerEvent.Data.(type) {
 		case *slackevents.MessageEvent:
 			if ev.SubType != "" {
+				debug.Log("[socket] ignoring message subtype=%s channel=%s", ev.SubType, ev.Channel)
 				return
 			}
+			debug.Log("[socket] message channel=%s user=%s ts=%s", ev.Channel, ev.User, ev.TimeStamp)
 
 			socketEvt := SocketEvent{
 				Type: "message",

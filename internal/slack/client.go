@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/types"
 	"github.com/slack-go/slack"
 )
@@ -121,6 +122,7 @@ func (c *slackClient) AuthTest() (string, error) {
 
 // ListChannels retrieves all conversations the user can see, sorted by type.
 func (c *slackClient) ListChannels() ([]types.Channel, error) {
+	debug.Log("[api] ListChannels")
 	var channels []types.Channel
 
 	params := &slack.GetConversationsParameters{
@@ -195,6 +197,7 @@ func channelSortOrder(ch types.Channel) int {
 
 // ListUsers fetches all workspace users and caches them.
 func (c *slackClient) ListUsers() (map[string]types.User, error) {
+	debug.Log("[api] ListUsers")
 	var slackUsers []slack.User
 	err := c.tryWithFallback("list users", func(api *slack.Client) error {
 		var e error
@@ -224,6 +227,7 @@ func (c *slackClient) ListUsers() (map[string]types.User, error) {
 
 // FetchHistory retrieves recent messages from a channel in chronological order.
 func (c *slackClient) FetchHistory(channelID string, limit int) ([]types.Message, error) {
+	debug.Log("[api] FetchHistory channel=%s limit=%d", channelID, limit)
 	params := &slack.GetConversationHistoryParameters{
 		ChannelID: channelID,
 		Limit:     limit,
@@ -268,6 +272,7 @@ func (c *slackClient) FetchHistory(channelID string, limit int) ([]types.Message
 
 // SendMessage posts a text message to the specified channel.
 func (c *slackClient) SendMessage(channelID, text string) error {
+	debug.Log("[api] SendMessage channel=%s len=%d", channelID, len(text))
 	err := c.tryWithFallback("send message", func(api *slack.Client) error {
 		_, _, e := api.PostMessage(channelID, slack.MsgOptionText(text, false))
 		return e
@@ -477,6 +482,7 @@ func (c *slackClient) UploadFile(channelID, filePath string) error {
 // CheckNewMessages checks the given channels for new messages.
 // The caller controls batch size to stay within rate limits.
 func (c *slackClient) CheckNewMessages(lastSeen map[string]string) ([]string, map[string]string, error) {
+	debug.Log("[api] CheckNewMessages channels=%d", len(lastSeen))
 	api := c.primary
 	if api == nil {
 		api = c.fallback
@@ -499,8 +505,10 @@ func (c *slackClient) CheckNewMessages(lastSeen map[string]string) ([]string, ma
 			if err != nil {
 				// Rate limited or error — stop this batch early.
 				if strings.Contains(err.Error(), "rate_limit") || strings.Contains(err.Error(), "rate limit") {
+					debug.Log("[api] RATE LIMITED on channel=%s, stopping batch", channelID)
 					break
 				}
+				debug.Log("[api] CheckNewMessages error channel=%s: %v", channelID, err)
 				continue
 			}
 		}
