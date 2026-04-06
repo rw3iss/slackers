@@ -179,6 +179,20 @@ tail -f ~/.config/slackers/debug.log
 
 The log shows timestamped entries for every API request (with channel IDs and batch sizes), Socket Mode connect/disconnect/message events, poll tick triggers, and rate limit errors. Useful for diagnosing connectivity issues, unexpected API usage, or verifying that Socket Mode is delivering events. No performance overhead when `--debug` is not passed.
 
+### Friends & Private Chat
+
+Slackers includes a peer-to-peer friends system that works independently of Slack. Friends communicate directly through encrypted libp2p connections -- messages never pass through Slack's servers.
+
+**Adding a friend:** Open a DM with someone and press `Ctrl+B`. If they're running Slackers with Secure Mode enabled, a friend request is sent over P2P. If they're not using Slackers, they'll receive a Slack DM inviting them to try it.
+
+**Accepting a request:** When someone sends you a friend request, a popup appears with their name. Accept to exchange connection info and add them to your friends list.
+
+**Chatting:** Friends appear in a collapsible "Friends" section at the top of the sidebar. Click a friend to open a private chat -- messages are sent directly over libp2p, stored locally, and never touch Slack. Online friends appear in green, offline in grey.
+
+**No workspace required:** If you have friends in your list but no Slack workspace configured, Slackers starts in friends-only mode. You can chat with any online friend without needing a Slack account.
+
+Friend data is stored in `~/.config/slackers/friends.json`. See [How_It_Works.md](How_It_Works.md#friends--private-chat) for the technical details.
+
 ### Uninstall
 
 ```bash

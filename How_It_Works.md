@@ -190,3 +190,93 @@ On startup (if enabled), Slackers checks the GitHub releases API for a newer ver
 All configuration is stored in `~/.config/slackers/config.json` with `0600` permissions (user-read/write only). The config is loaded once at startup and saved incrementally when settings change. Sensitive fields (tokens) are never logged or displayed in the UI beyond masked values in the settings panel.
 
 Config changes from the settings overlay take effect immediately for display settings (sidebar width, sort order, timestamp format) and on next poll cycle for polling settings. Some settings (mouse, secure mode) require a restart.
+
+## Friends & Private Chat
+
+The friends system enables direct peer-to-peer messaging between Slackers users without involving Slack's servers. It is built on top of the existing P2P infrastructure (libp2p, X25519 key exchange) and operates as a fully independent communication layer.
+
+### Architecture
+
+Friends are stored in a separate file (`~/.config/slackers/friends.json`) as a `FriendStore` -- a thread-safe, JSON-persisted list of `Friend` records. Each friend entry contains:
+
+- **UserID**: Slack user ID (used as a stable identifier even if the friend was originally discovered via Slack)
+- **Name**: Display name
+- **PublicKey**: Base64-encoded X25519 public key for encryption
+- **Multiaddr**: libp2p multiaddress for direct connection (e.g. `/ip4/1.2.3.4/tcp/9900/p2p/<peerID>`)
+- **AddedAt**: Unix timestamp of when the friendship was established
+
+The `Online` field is runtime-only (not persisted) and tracks whether the friend's P2P node is currently reachable.
+
+### Startup sequence
+
+Friends are loaded **before** workspace data. The startup order is:
+
+1. Load `friends.json` and create `FriendStore`
+2. Build friend channel entries and add to sidebar
+3. Attempt P2P connection to each friend's multiaddr
+4. Start friend ping cycle (30-second interval)
+5. Load workspace data (users, channels, Socket Mode) -- if configured
+
+This means the sidebar shows friends immediately, even before Slack channels finish loading. If no workspace is configured at all, the app enters **friends-only mode** and skips all Slack API initialization.
+
+### Friend request flow
+
+The friend request protocol uses the existing P2P message system with three new message types:
+
+```
+friend_request  →  Sender's public key + multiaddr
+friend_accept   ←  Receiver's public key + multiaddr
+friend_reject   ←  (no payload)
+```
+
+**Sending a request (`Ctrl+B`):**
+1. User presses `Ctrl+B` while viewing a DM channel
+2. A confirmation popup asks "Send friend request to {name}?"
+3. On confirm, a `friend_request` P2P message is sent containing the sender's public key and multiaddr, pipe-delimited in the `Text` field
+4. If the P2P send fails (peer not connected or not running Slackers), a fallback Slack DM is sent inviting them to install Slackers
+
+**Receiving a request:**
+1. The P2P callback detects a `friend_request` message type
+2. A `P2PReceivedMsg` is dispatched with the special `__friend_request__` text marker
+3. The model opens the friend request popup showing the sender's name with Accept/Reject buttons
+4. On accept: the friend is added to `FriendStore`, saved to disk, a `friend_accept` message is sent back with the receiver's own public key and multiaddr, and the friend appears in the sidebar
+5. On reject: a `friend_reject` is sent and nothing is stored
+
+**Mutual completion:**
+When the original sender receives a `friend_accept` message, they automatically add the peer as a friend (no second confirmation needed since they initiated), save to disk, and update the sidebar.
+
+### Friend channels
+
+Friend channels are represented as regular `types.Channel` entries with `IsFriend: true` and an ID of `"friend:<userID>"`. They participate in the same sidebar rendering system as Slack channels but are grouped into a "Friends" section that renders before all workspace sections.
+
+The `sectionKey()` function checks `IsFriend` first, ensuring friends always group together regardless of other flags. The channel list model's `SetFriendChannels()` method strips existing friend entries and prepends the new set, so friends always appear at the top.
+
+### Message routing
+
+When the current channel is a friend channel, message handling diverges from the normal Slack flow:
+
+**Sending:** Instead of calling `SendMessage` on the Slack API, the input handler creates a `P2PMessage` with type `"message"` and sends it via `p2pNode.SendMessage()`. The message is also immediately appended to the local view and stored in `friendMessages[userID]` (an in-memory map of message history per friend).
+
+**Receiving:** When a P2P message arrives from a known friend:
+- If the friend's channel is currently open, the message is appended to the viewport and stored in history
+- If the friend's channel is not open, the channel is marked as unread (triggering the sidebar indicator)
+
+**History:** Friend message history is stored in-memory only (`friendMessages` map). It survives for the duration of the session but is not persisted to disk. When you select a friend channel, `SetMessages()` loads the stored history into the viewport. Future versions may add persistent local message storage.
+
+### Online detection
+
+A background goroutine pings all friends every 30 seconds:
+
+1. `friendPingTickMsg` fires every 30 seconds
+2. `friendPingCmd` iterates through all friends with a stored multiaddr
+3. For each friend, it attempts `ConnectToPeer()` if not already connected, then checks `IsConnected()`
+4. The resulting `FriendPingMsg` carries a map of `userID -> bool`
+5. The model updates the sidebar: online friends have their channel marked as "unread" (which triggers the green color for friend channels), offline friends have it cleared (grey color)
+
+The friend-specific styling in `renderItem()` checks `IsFriend` before the generic unread check, so the green/grey coloring is specific to friends and doesn't conflict with normal unread indicators for Slack channels.
+
+### Friends-only mode
+
+If `config.Validate()` fails (no bot token / app token) but the friend store has entries, the app skips the setup wizard and launches with nil Slack services. The `Init()` function guards all workspace-dependent commands (`loadUsersCmd`, `connectSocketCmd`, `pollTickCmd`, etc.) behind nil checks on `m.slackSvc` and `m.socketSvc`. The friend loading, P2P node, and ping cycle all start normally.
+
+This allows Slackers to function as a standalone P2P chat client for users who only want private friend-to-friend communication.
