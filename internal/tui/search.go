@@ -87,6 +87,21 @@ func (m SearchModel) Update(msg tea.Msg) (SearchModel, tea.Cmd) {
 				m.selected++
 			}
 			return m, nil
+		case "pgup":
+			m.selected -= 5
+			if m.selected < 0 {
+				m.selected = 0
+			}
+			return m, nil
+		case "pgdown":
+			m.selected += 5
+			if m.selected >= len(m.filtered) {
+				m.selected = len(m.filtered) - 1
+			}
+			if m.selected < 0 {
+				m.selected = 0
+			}
+			return m, nil
 		case "enter":
 			if len(m.filtered) > 0 && m.selected < len(m.filtered) {
 				ch := m.filtered[m.selected]

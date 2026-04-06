@@ -300,6 +300,20 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		if m.selected < len(m.fields)-1 {
 			m.selected++
 		}
+	case "pgup":
+		m.selected -= 5
+		if m.selected < 0 {
+			m.selected = 0
+		}
+	case "pgdown":
+		m.selected += 5
+		if m.selected >= len(m.fields) {
+			m.selected = len(m.fields) - 1
+		}
+	case "home":
+		m.selected = 0
+	case "end":
+		m.selected = len(m.fields) - 1
 	case "enter", "tab":
 		f := m.fields[m.selected]
 

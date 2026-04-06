@@ -83,6 +83,22 @@ func (m HiddenChannelsModel) Update(msg tea.Msg) (HiddenChannelsModel, tea.Cmd) 
 			if m.selected < len(m.channels)-1 {
 				m.selected++
 			}
+		case "pgup":
+			m.selected -= 5
+			if m.selected < 0 {
+				m.selected = 0
+			}
+		case "pgdown":
+			m.selected += 5
+			if m.selected >= len(m.channels) {
+				m.selected = len(m.channels) - 1
+			}
+		case "home":
+			m.selected = 0
+		case "end":
+			if len(m.channels) > 0 {
+				m.selected = len(m.channels) - 1
+			}
 		case "enter":
 			if len(m.channels) > 0 && m.selected < len(m.channels) {
 				ch := m.channels[m.selected]
