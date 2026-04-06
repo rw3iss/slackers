@@ -287,19 +287,86 @@ var configCmd = &cobra.Command{
 		configPath := config.DefaultConfigPath()
 		fmt.Printf("Config path: %s\n\n", configPath)
 
-		cfg, err := config.Load(config.DefaultConfigPath())
+		cfg, err := config.Load(configPath)
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
 
+		boolStr := func(b bool) string {
+			if b {
+				return "on"
+			}
+			return "off"
+		}
+		boolPtrStr := func(b *bool, def bool) string {
+			if b == nil {
+				return boolStr(def) + " (default)"
+			}
+			return boolStr(*b)
+		}
+		intDefault := func(v, def int) string {
+			if v == 0 {
+				return fmt.Sprintf("%d (default)", def)
+			}
+			return fmt.Sprintf("%d", v)
+		}
+		strDefault := func(v, def string) string {
+			if v == "" {
+				return def + " (default)"
+			}
+			return v
+		}
+
 		fmt.Println("Current configuration:")
-		fmt.Printf("  bot_token:        %s\n", maskToken(cfg.BotToken))
-		fmt.Printf("  app_token:        %s\n", maskToken(cfg.AppToken))
-		fmt.Printf("  user_token:       %s\n", maskToken(cfg.UserToken))
-		fmt.Printf("  client_id:        %s\n", maskToken(cfg.ClientID))
-		fmt.Printf("  client_secret:    %s\n", maskToken(cfg.ClientSecret))
-		fmt.Printf("  sidebar_width:    %d\n", cfg.SidebarWidth)
-		fmt.Printf("  timestamp_format: %s\n", cfg.TimestampFormat)
+		fmt.Println()
+		fmt.Println("  Credentials:")
+		fmt.Printf("    bot_token:          %s\n", maskToken(cfg.BotToken))
+		fmt.Printf("    app_token:          %s\n", maskToken(cfg.AppToken))
+		fmt.Printf("    user_token:         %s\n", maskToken(cfg.UserToken))
+		fmt.Printf("    client_id:          %s\n", maskToken(cfg.ClientID))
+		fmt.Printf("    client_secret:      %s\n", maskToken(cfg.ClientSecret))
+		fmt.Println()
+		fmt.Println("  Display:")
+		fmt.Printf("    sidebar_width:      %s\n", intDefault(cfg.SidebarWidth, 30))
+		fmt.Printf("    timestamp_format:   %s\n", strDefault(cfg.TimestampFormat, "15:04"))
+		fmt.Printf("    mouse_enabled:      %s\n", boolStr(cfg.MouseEnabled))
+		fmt.Printf("    notifications:      %s\n", boolStr(cfg.Notifications))
+		fmt.Printf("    channel_sort_by:    %s\n", strDefault(cfg.ChannelSortBy, "type"))
+		sortAsc := "asc"
+		if cfg.ChannelSortAsc != nil && !*cfg.ChannelSortAsc {
+			sortAsc = "desc"
+		}
+		fmt.Printf("    channel_sort_asc:   %s\n", sortAsc)
+		fmt.Printf("    download_path:      %s\n", strDefault(cfg.DownloadPath, "~/Downloads"))
+		fmt.Println()
+		fmt.Println("  Polling:")
+		fmt.Printf("    poll_interval:      %ss\n", intDefault(cfg.PollInterval, 10))
+		fmt.Printf("    poll_interval_bg:   %ss\n", intDefault(cfg.PollIntervalBg, 30))
+		fmt.Printf("    poll_priority:      %s\n", intDefault(cfg.PollPriority, 3))
+		fmt.Println()
+		fmt.Println("  Behavior:")
+		fmt.Printf("    auto_update:        %s\n", boolPtrStr(cfg.AutoUpdate, true))
+		if cfg.AwayTimeout > 0 {
+			fmt.Printf("    away_timeout:       %ds\n", cfg.AwayTimeout)
+		} else {
+			fmt.Printf("    away_timeout:       disabled\n")
+		}
+		fmt.Printf("    input_history_max:  %s\n", intDefault(cfg.InputHistoryMax, 20))
+		fmt.Println()
+		fmt.Println("  Secure Messaging:")
+		fmt.Printf("    secure_mode:        %s\n", boolStr(cfg.SecureMode))
+		fmt.Printf("    p2p_port:           %s\n", intDefault(cfg.P2PPort, 9900))
+		fmt.Printf("    p2p_address:        %s\n", strDefault(cfg.P2PAddress, "(auto)"))
+		fmt.Printf("    secure_key_path:    %s\n", strDefault(cfg.SecureKeyPath, "(default)"))
+		fmt.Printf("    secure_whitelist:   %d users\n", len(cfg.SecureWhitelist))
+		fmt.Println()
+		fmt.Println("  State:")
+		fmt.Printf("    last_channel_id:    %s\n", strDefault(cfg.LastChannelID, "(none)"))
+		fmt.Printf("    hidden_channels:    %d\n", len(cfg.HiddenChannels))
+		fmt.Printf("    channel_aliases:    %d\n", len(cfg.ChannelAliases))
+		fmt.Printf("    collapsed_groups:   %d\n", len(cfg.CollapsedGroups))
+		fmt.Printf("    input_history:      %d entries\n", len(cfg.InputHistory))
+		fmt.Printf("    last_seen_ts:       %d channels\n", len(cfg.LastSeenTS))
 
 		return nil
 	},
