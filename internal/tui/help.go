@@ -34,6 +34,8 @@ var helpSections = []struct {
 			{"Ctrl-Down", "Exit file select, focus input"},
 			{"Ctrl-L", "Browse all files across channels"},
 			{"Ctrl-D", "Cancel file download"},
+			{"Ctrl-\\", "Toggle input mode (normal/edit)"},
+			{"Alt-Enter", "New line (normal) or send (edit)"},
 		},
 	},
 	{

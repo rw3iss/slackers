@@ -77,6 +77,11 @@ type FileDownloadProgressMsg struct {
 	Total      int64
 }
 
+// SeedLastSeenMsg carries baseline timestamps without triggering unread markers.
+type SeedLastSeenMsg struct {
+	Timestamps map[string]string
+}
+
 // ActivityCheckMsg triggers an away-status check.
 type ActivityCheckMsg struct{}
 
@@ -143,7 +148,10 @@ type Model struct {
 	channelIndex map[string]channelInfo
 
 	// Polling
-	lastSeen map[string]string
+	lastSeen      map[string]string
+	lastChecked   map[string]time.Time // when each channel was last polled
+	pollChannels  []string             // ordered list for round-robin polling
+	pollOffset    int
 
 	// Config
 	cfg *config.Config
@@ -171,6 +179,7 @@ type Model struct {
 	splash       bool
 	initialLoad  bool
 	fullMode     bool
+	dragging     bool // sidebar resize drag in progress
 	version      string
 }
 
@@ -204,7 +213,8 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		focus:     types.FocusSidebar,
 		users:     make(map[string]types.User),
 		channelIndex: make(map[string]channelInfo),
-		lastSeen:     make(map[string]string),
+		lastSeen:     loadLastSeen(cfg),
+		lastChecked:  make(map[string]time.Time),
 		cfg:       cfg,
 		lastActivity: time.Now(),
 		splash:       true,
@@ -460,6 +470,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateFocus()
 			return m, nil
 
+		case msg.String() == "ctrl+\\":
+			// Toggle input mode and focus the input bar.
+			m.input.ToggleMode()
+			m.focus = types.FocusInput
+			m.updateFocus()
+			if m.input.Mode() == InputModeEdit {
+				return m, setWarning(&m, "Edit mode: Enter = new line, Alt+Enter = send")
+			}
+			return m, setWarning(&m, "Normal mode: Enter = send, Alt+Enter = new line")
+
 		case key.Matches(msg, m.keymap.FocusInput):
 			if m.focus != types.FocusInput {
 				m.focus = types.FocusInput
@@ -534,6 +554,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.channels.HideChannel(ch.ID)
 					m.cfg.HiddenChannels = m.channels.HiddenChannelIDs()
 					_ = config.Save(m.cfg)
+					m.rebuildPollChannels()
 				}
 				return m, nil
 			}
@@ -580,15 +601,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Header selected — fall through to channel list Update for collapse toggle.
 			}
 			if m.focus == types.FocusInput {
-				text := m.input.Value()
-				if text != "" && m.currentCh != nil {
-					m.input.PushHistory(text)
-					m.cfg.InputHistory = m.input.History()
-					go config.Save(m.cfg)
-					m.input.Reset()
-					return m, sendMessageWithFilesCmd(m.slackSvc, m.currentCh.ID, text)
-				}
-				return m, nil
+				// Enter is handled by the input component — it sends InputSendMsg.
+				// Fall through to delegate to input.Update.
 			}
 		}
 
@@ -603,9 +617,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages, cmd = m.messages.Update(msg)
 			cmds = append(cmds, cmd)
 		case types.FocusInput:
+			prevHeight := m.input.DisplayHeight()
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			cmds = append(cmds, cmd)
+			// Resize layout if input height changed.
+			if m.input.DisplayHeight() != prevHeight {
+				m.resizeComponents()
+			}
 		}
 
 		return m, tea.Batch(cmds...)
@@ -676,6 +695,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.channels.UnhideChannel(msg.ChannelID)
 		m.cfg.HiddenChannels = m.channels.HiddenChannelIDs()
 		_ = config.Save(m.cfg)
+		m.rebuildPollChannels()
 		if len(m.channels.HiddenChannelsList()) == 0 {
 			m.overlay = overlayNone
 		}
@@ -713,18 +733,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.channels.SetSort(sortBy, sortAsc)
 		drainWarnings(&m)
 
+		// Seed lastSeen for all channels.
+		for _, ch := range msg.Channels {
+			if _, ok := m.lastSeen[ch.ID]; !ok {
+				m.lastSeen[ch.ID] = "0"
+			}
+		}
+		m.rebuildPollChannels()
+
 		// Restore last viewed channel on first load.
+		var cmds []tea.Cmd
 		if m.currentCh == nil && m.cfg.LastChannelID != "" {
 			for _, ch := range msg.Channels {
 				if ch.ID == m.cfg.LastChannelID {
 					m.currentCh = &ch
 					m.channels.SelectByID(ch.ID)
 					m.messages.SetChannelName("#" + m.channels.displayName(ch))
-					return m, loadHistoryCmd(m.slackSvc, ch.ID)
+					cmds = append(cmds, loadHistoryCmd(m.slackSvc, ch.ID))
+					break
 				}
 			}
 		}
-		return m, nil
+
+		// Run an initial seed poll to establish baseline timestamps
+		// without marking anything as unread.
+		cmds = append(cmds, seedLastSeenCmd(m.slackSvc, m.lastSeen))
+		return m, tea.Batch(cmds...)
 
 	case SilentHistoryMsg:
 		// Always update the view — the poll already confirmed new messages exist.
@@ -732,15 +766,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentCh != nil && len(msg.Messages) > 0 {
 			latest := msg.Messages[len(msg.Messages)-1]
 			m.lastSeen[m.currentCh.ID] = fmt.Sprintf("%d.%06d", latest.Timestamp.Unix(), latest.Timestamp.Nanosecond()/1000)
+			m.persistLastSeen()
 		}
 		return m, nil
 
 	case HistoryLoadedMsg:
 		m.messages.SetMessages(msg.Messages)
-		// Record the latest message timestamp so the poller won't re-flag this channel.
 		if m.currentCh != nil && len(msg.Messages) > 0 {
 			latest := msg.Messages[len(msg.Messages)-1]
 			m.lastSeen[m.currentCh.ID] = fmt.Sprintf("%d.%06d", latest.Timestamp.Unix(), latest.Timestamp.Nanosecond()/1000)
+			m.persistLastSeen()
 		}
 		if m.initialLoad {
 			// Keep focus on sidebar for initial channel restore.
@@ -796,13 +831,77 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case PollTickMsg:
-		// Ensure the current channel is always polled even if not yet in lastSeen.
+		rotationSize := 5
+		batch := make(map[string]string)
+
+		// 1. Current channel — always.
 		if m.currentCh != nil {
-			if _, ok := m.lastSeen[m.currentCh.ID]; !ok {
-				m.lastSeen[m.currentCh.ID] = "0"
+			if ts, ok := m.lastSeen[m.currentCh.ID]; ok {
+				batch[m.currentCh.ID] = ts
 			}
 		}
-		return m, checkNewMessagesCmd(m.slackSvc, m.lastSeen, m.cfg.PollInterval)
+
+		// 2. Priority channels — N most-recently-active channels every cycle.
+		priority := m.cfg.PollPriority
+		if priority <= 0 {
+			priority = 3
+		}
+		if len(m.pollChannels) > 0 {
+			type chTS struct{ id, ts string }
+			sorted := make([]chTS, 0, len(m.pollChannels))
+			for _, id := range m.pollChannels {
+				if ts, ok := m.lastSeen[id]; ok {
+					sorted = append(sorted, chTS{id, ts})
+				}
+			}
+			for i := 0; i < len(sorted); i++ {
+				for j := i + 1; j < len(sorted); j++ {
+					if sorted[j].ts > sorted[i].ts {
+						sorted[i], sorted[j] = sorted[j], sorted[i]
+					}
+				}
+			}
+			for i := 0; i < priority && i < len(sorted); i++ {
+				if _, already := batch[sorted[i].id]; !already {
+					batch[sorted[i].id] = sorted[i].ts
+				}
+			}
+		}
+
+		// 3. Rotation — pick channels least-recently-checked.
+		if len(m.pollChannels) > 0 {
+			type chCheck struct{ id string; checked time.Time }
+			unchecked := make([]chCheck, 0)
+			for _, id := range m.pollChannels {
+				if _, already := batch[id]; already {
+					continue
+				}
+				checked := m.lastChecked[id]
+				unchecked = append(unchecked, chCheck{id, checked})
+			}
+			// Sort by oldest-checked first.
+			for i := 0; i < len(unchecked); i++ {
+				for j := i + 1; j < len(unchecked); j++ {
+					if unchecked[j].checked.Before(unchecked[i].checked) {
+						unchecked[i], unchecked[j] = unchecked[j], unchecked[i]
+					}
+				}
+			}
+			for i := 0; i < rotationSize && i < len(unchecked); i++ {
+				id := unchecked[i].id
+				if ts, ok := m.lastSeen[id]; ok {
+					batch[id] = ts
+				}
+			}
+		}
+
+		// Record check times.
+		now := time.Now()
+		for id := range batch {
+			m.lastChecked[id] = now
+		}
+
+		return m, checkNewMessagesCmd(m.slackSvc, batch, m.cfg.PollInterval)
 
 	case UnreadChannelsMsg:
 		if msg.LatestTS != nil {
@@ -875,12 +974,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.fbPurpose {
 		case fbPurposeAttach:
 			if !msg.IsDir {
-				// Insert [FILE:<path>] into the input bar.
-				current := m.input.Value()
-				if current != "" && !strings.HasSuffix(current, " ") {
-					current += " "
-				}
-				m.input.SetValue(current + "[FILE:" + msg.Path + "]")
+				// Insert [FILE:<path>] at the cursor position.
+				m.input.InsertAtCursor("[FILE:" + msg.Path + "]")
 				m.focus = types.FocusInput
 				m.updateFocus()
 			}
@@ -933,18 +1028,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case FileUploadedMsg:
+		if m.currentCh != nil {
+			return m, loadHistoryCmd(m.slackSvc, m.currentCh.ID)
+		}
+		return m, nil
+
+	case InputSendMsg:
+		text := msg.Text
+		if text != "" && m.currentCh != nil {
+			m.input.PushHistory(text)
+			m.cfg.InputHistory = m.input.History()
+			go config.Save(m.cfg)
+			m.input.Reset()
+			return m, sendMessageWithFilesCmd(m.slackSvc, m.currentCh.ID, text)
+		}
+		return m, nil
+
+	case SeedLastSeenMsg:
+		// Establish baseline timestamps without marking anything as unread.
+		for id, ts := range msg.Timestamps {
+			if ts != "" {
+				m.lastSeen[id] = ts
+			}
+		}
+		m.channels.SetLatestTimestamps(msg.Timestamps)
+		m.persistLastSeen()
 		return m, nil
 
 	case ClearWarningMsg:
-		if m.warning == "" {
+		if m.warning == "" && m.err == nil {
 			return m, nil
 		}
-		// Only clear if user was active in the last 5 seconds.
 		if time.Since(m.lastActivity) < 5*time.Second {
 			m.warning = ""
+			m.err = nil
 			return m, nil
 		}
-		// User inactive — check again in 5 seconds.
 		return m, clearWarningCmd()
 
 	case ActivityCheckMsg:
@@ -963,8 +1082,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ErrMsg:
-		m.err = msg.Err
-		return m, nil
+		return m, setError(&m, msg.Err)
 	}
 
 	return m, nil
@@ -1053,7 +1171,7 @@ func (m *Model) resizeComponents() {
 		showSidebar = false
 	}
 
-	inputHeight := 3
+	inputHeight := m.input.DisplayHeight()
 	statusHeight := 1
 	topHeight := m.height - inputHeight - statusHeight - 2
 
@@ -1085,9 +1203,40 @@ func (m *Model) resizeComponents() {
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	x, y := msg.X, msg.Y
 
+	// Handle drag for sidebar resize.
+	if m.dragging {
+		switch msg.Action {
+		case tea.MouseActionMotion:
+			newWidth := x
+			if newWidth < 10 {
+				newWidth = 10
+			}
+			maxWidth := m.width / 2
+			if newWidth > maxWidth {
+				newWidth = maxWidth
+			}
+			m.cfg.SidebarWidth = newWidth
+			m.resizeComponents()
+			return m, nil
+		case tea.MouseActionRelease:
+			m.dragging = false
+			go config.Save(m.cfg)
+			return m, nil
+		}
+		return m, nil
+	}
+
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
+			// Check if clicking on the sidebar divider (within 1 char of the border).
+			if !m.fullMode && y < m.inputTop {
+				dividerX := m.sidebarWidth + 1
+				if x >= dividerX-1 && x <= dividerX+1 {
+					m.dragging = true
+					return m, nil
+				}
+			}
 			// Determine which panel was clicked based on layout.
 			// Check input bar first since it spans full width.
 			// Click on status bar (last line) cancels download.
@@ -1156,6 +1305,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.channels.selected = 0
 				}
 				m.channels.ensureVisible()
+			} else if m.focus == types.FocusInput {
+				for i := 0; i < lines; i++ {
+					m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyUp})
+				}
+				return m, nil
 			}
 
 		} else if msg.Button == tea.MouseButtonWheelDown {
@@ -1174,6 +1328,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.channels.selected = len(m.channels.rows) - 1
 				}
 				m.channels.ensureVisible()
+			} else if m.focus == types.FocusInput {
+				for i := 0; i < lines; i++ {
+					m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyDown})
+				}
+				return m, nil
 			}
 		}
 	}
@@ -1239,6 +1398,56 @@ func (m *Model) resolveChannelDisplay(channelID string) string {
 	return channelID
 }
 
+// setWarning sets a status bar warning and schedules auto-clear after 5s of activity.
+func setWarning(m *Model, msg string) tea.Cmd {
+	m.warning = msg
+	return clearWarningCmd()
+}
+
+// setError sets a status bar error and schedules auto-clear after 5s of activity.
+func setError(m *Model, err error) tea.Cmd {
+	m.err = err
+	return clearWarningCmd()
+}
+
+// loadLastSeen initializes lastSeen from persisted config.
+func loadLastSeen(cfg *config.Config) map[string]string {
+	if cfg.LastSeenTS != nil && len(cfg.LastSeenTS) > 0 {
+		// Clone it so we don't mutate the config map directly.
+		m := make(map[string]string, len(cfg.LastSeenTS))
+		for k, v := range cfg.LastSeenTS {
+			m[k] = v
+		}
+		return m
+	}
+	return make(map[string]string)
+}
+
+// persistLastSeen saves lastSeen timestamps to config (fire-and-forget).
+func (m *Model) persistLastSeen() {
+	m.cfg.LastSeenTS = make(map[string]string, len(m.lastSeen))
+	for k, v := range m.lastSeen {
+		if v != "0" && v != "" {
+			m.cfg.LastSeenTS[k] = v
+		}
+	}
+	go config.Save(m.cfg)
+}
+
+// rebuildPollChannels builds the list of channels to poll, excluding hidden ones.
+func (m *Model) rebuildPollChannels() {
+	hidden := make(map[string]bool)
+	for _, id := range m.cfg.HiddenChannels {
+		hidden[id] = true
+	}
+	m.pollChannels = make([]string, 0)
+	for _, ch := range m.channels.AllChannels() {
+		if !hidden[ch.ID] {
+			m.pollChannels = append(m.pollChannels, ch.ID)
+		}
+	}
+}
+
 func drainWarnings(m *Model) {
 	if warns := m.slackSvc.Warnings(); len(warns) > 0 {
 		m.warning = warns[len(warns)-1]
@@ -1287,7 +1496,11 @@ func (m Model) renderStatusBar() string {
 		extra += " | " + StatusDisconnected.Render(m.err.Error())
 	}
 
-	hints := HelpStyle.Render("Ctrl-H: help | Ctrl-S: settings | Ctrl-C: quit")
+	hintsText := "Ctrl-H: help | Ctrl-S: settings | Ctrl-\\: edit mode | Ctrl-C: quit"
+	if m.input.Mode() == InputModeEdit {
+		hintsText = "EDIT | Alt-Enter: send | Ctrl-\\: normal mode | Ctrl-C: quit"
+	}
+	hints := HelpStyle.Render(hintsText)
 
 	left := fmt.Sprintf(" %s | %s%s", connStr, hints, extra)
 	right := StatusBarStyle.Render(fmt.Sprintf("slackers v%s ", m.version))
@@ -1464,6 +1677,41 @@ func sendMessageWithFilesCmd(svc slackpkg.SlackService, channelID, text string) 
 			return FileUploadedMsg{Count: uploadCount}
 		}
 		return MessageSentMsg{}
+	}
+}
+
+// seedLastSeenCmd fetches baseline timestamps for unseeded channels.
+// Batches requests to avoid rate limits (5 channels per batch with delays).
+func seedLastSeenCmd(svc slackpkg.SlackService, lastSeen map[string]string) tea.Cmd {
+	channelIDs := make([]string, 0)
+	for id, ts := range lastSeen {
+		if ts == "0" {
+			channelIDs = append(channelIDs, id)
+		}
+	}
+
+	return func() tea.Msg {
+		timestamps := make(map[string]string)
+		// Process in small batches to respect rate limits.
+		for i := 0; i < len(channelIDs); i += 5 {
+			end := i + 5
+			if end > len(channelIDs) {
+				end = len(channelIDs)
+			}
+			batch := make(map[string]string)
+			for _, id := range channelIDs[i:end] {
+				batch[id] = "0"
+			}
+			_, resultTS, _ := svc.CheckNewMessages(batch)
+			for id, ts := range resultTS {
+				timestamps[id] = ts
+			}
+			// Small delay between batches to stay under rate limits.
+			if end < len(channelIDs) {
+				time.Sleep(2 * time.Second)
+			}
+		}
+		return SeedLastSeenMsg{Timestamps: timestamps}
 	}
 }
 

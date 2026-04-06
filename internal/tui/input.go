@@ -1,157 +1,266 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbles/textinput"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-// InputModel represents the text input bar with message history.
+const (
+	inputMinHeight = 1
+	inputMaxHeight = 10
+)
+
+// InputMode defines the behavior of Enter vs Alt+Enter.
+type InputMode int
+
+const (
+	InputModeNormal InputMode = iota
+	InputModeEdit
+)
+
+// InputSendMsg signals the model that the user wants to send the message.
+type InputSendMsg struct{ Text string }
+
+// InputModel represents the multi-line text input bar.
 type InputModel struct {
-	textInput textinput.Model
-	focused   bool
-	width     int
-	history   []string // sent message history (oldest first)
-	histIdx   int      // -1 = composing new, 0..len-1 = browsing history
-	draft     string   // saves in-progress text when browsing history
-	maxHist   int      // max history entries
+	textarea textarea.Model
+	focused  bool
+	width    int
+	height   int
+	mode     InputMode
+	history  []string
+	histIdx  int
+	draft    string
+	maxHist  int
 }
 
 // NewInput creates a new input model.
 func NewInput() InputModel {
-	ti := textinput.New()
-	ti.Placeholder = "Type a message... (Enter to send)"
-	ti.Prompt = "> "
-	ti.CharLimit = 4000
+	ta := textarea.New()
+	ta.Placeholder = "Type a message... (Enter to send)"
+	ta.Prompt = "> "
+	ta.CharLimit = 0 // no limit
+	ta.MaxHeight = 0 // no max height limit on content
+	ta.SetHeight(inputMinHeight)
+	ta.ShowLineNumbers = false
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
 
 	return InputModel{
-		textInput: ti,
-		histIdx:   -1,
-		maxHist:   20,
+		textarea: ta,
+		height:   inputMinHeight,
+		histIdx:  -1,
+		maxHist:  20,
 	}
 }
 
-// SetSize sets the width of the input.
 func (m *InputModel) SetSize(w int) {
 	m.width = w
-	m.textInput.Width = w - 6
+	m.textarea.SetWidth(w - 4)
 }
 
-// SetFocused sets the focus state and focuses/blurs the text input.
 func (m *InputModel) SetFocused(focused bool) {
 	m.focused = focused
 	if focused {
-		m.textInput.Focus()
+		m.textarea.Focus()
 	} else {
-		m.textInput.Blur()
+		m.textarea.Blur()
 	}
 }
 
-// Value returns the current input text.
 func (m *InputModel) Value() string {
-	return m.textInput.Value()
+	return m.textarea.Value()
 }
 
-// SetValue sets the input text.
 func (m *InputModel) SetValue(s string) {
-	m.textInput.SetValue(s)
-	m.textInput.CursorEnd()
+	m.textarea.SetValue(s)
+	m.autoResize()
 }
 
-// Reset clears the input and resets history browsing.
+// InsertAtCursor inserts text at the current cursor position.
+func (m *InputModel) InsertAtCursor(s string) {
+	m.textarea.InsertString(s)
+	m.autoResize()
+}
+
 func (m *InputModel) Reset() {
-	m.textInput.Reset()
+	m.textarea.Reset()
+	m.height = inputMinHeight
+	m.textarea.SetHeight(inputMinHeight)
 	m.histIdx = -1
 	m.draft = ""
 }
 
-// SetHistory loads persisted history.
-func (m *InputModel) SetHistory(history []string) {
-	m.history = history
+func (m *InputModel) Mode() InputMode {
+	return m.mode
 }
 
-// SetMaxHistory sets the max history size.
-func (m *InputModel) SetMaxHistory(n int) {
-	if n < 1 {
-		n = 1
+func (m *InputModel) ToggleMode() {
+	if m.mode == InputModeNormal {
+		m.mode = InputModeEdit
+		m.textarea.Placeholder = "Edit mode (Enter = new line)"
+	} else {
+		m.mode = InputModeNormal
+		m.textarea.Placeholder = "Type a message... (Enter to send)"
 	}
-	m.maxHist = n
 }
 
-// History returns the current history slice.
-func (m *InputModel) History() []string {
-	return m.history
-}
+func (m *InputModel) SetHistory(history []string)  { m.history = history }
+func (m *InputModel) SetMaxHistory(n int)           { if n < 1 { n = 1 }; m.maxHist = n }
+func (m *InputModel) History() []string             { return m.history }
 
-// PushHistory adds a sent message to history.
 func (m *InputModel) PushHistory(msg string) {
 	if msg == "" {
 		return
 	}
-	// Don't duplicate the last entry.
 	if len(m.history) > 0 && m.history[len(m.history)-1] == msg {
 		return
 	}
 	m.history = append(m.history, msg)
-	// Trim to max.
 	if len(m.history) > m.maxHist {
 		m.history = m.history[len(m.history)-m.maxHist:]
 	}
 }
 
-// Update delegates to the text input when focused, with history navigation.
+// DisplayHeight returns the current height for the input area including borders.
+func (m *InputModel) DisplayHeight() int {
+	return m.height + 2
+}
+
+// autoResize adjusts the visible textarea height based on content lines, capped at max.
+func (m *InputModel) autoResize() {
+	lines := strings.Count(m.textarea.Value(), "\n") + 1
+	if lines < inputMinHeight {
+		lines = inputMinHeight
+	}
+	if lines > inputMaxHeight {
+		lines = inputMaxHeight
+	}
+	if lines != m.height {
+		m.height = lines
+		m.textarea.SetHeight(lines)
+	}
+}
+
 func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 	if !m.focused {
 		return m, nil
 	}
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		switch keyMsg.String() {
-		case "up":
-			if len(m.history) == 0 {
-				return m, nil
+		switch keyMsg.Type {
+		case tea.KeyUp:
+			// In edit mode, Up only moves cursor — no history.
+			if m.mode == InputModeNormal {
+				row := m.textarea.Line()
+				if row == 0 && len(m.history) > 0 {
+					if m.histIdx == -1 {
+						m.draft = m.textarea.Value()
+						m.histIdx = len(m.history) - 1
+					} else if m.histIdx > 0 {
+						m.histIdx--
+					}
+					m.textarea.SetValue(m.history[m.histIdx])
+					m.autoResize()
+					return m, nil
+				}
 			}
-			if m.histIdx == -1 {
-				// Save current draft before browsing.
-				m.draft = m.textInput.Value()
-				m.histIdx = len(m.history) - 1
-			} else if m.histIdx > 0 {
-				m.histIdx--
-			}
-			m.textInput.SetValue(m.history[m.histIdx])
-			m.textInput.CursorEnd()
-			return m, nil
 
-		case "down":
-			if m.histIdx == -1 {
+		case tea.KeyDown:
+			// In edit mode, Down only moves cursor — no history.
+			if m.mode == InputModeNormal {
+				row := m.textarea.Line()
+				totalLines := strings.Count(m.textarea.Value(), "\n")
+				if row >= totalLines && m.histIdx != -1 {
+					if m.histIdx < len(m.history)-1 {
+						m.histIdx++
+						m.textarea.SetValue(m.history[m.histIdx])
+					} else {
+						m.histIdx = -1
+						m.textarea.SetValue(m.draft)
+					}
+					m.autoResize()
+					return m, nil
+				}
+			}
+
+		case tea.KeyCtrlJ:
+			// Ctrl+Enter (Ctrl+J) — send in edit mode, newline in normal mode.
+			if m.mode == InputModeEdit {
+				text := m.textarea.Value()
+				if strings.TrimSpace(text) != "" {
+					return m, func() tea.Msg { return InputSendMsg{Text: text} }
+				}
 				return m, nil
 			}
-			if m.histIdx < len(m.history)-1 {
-				m.histIdx++
-				m.textInput.SetValue(m.history[m.histIdx])
-				m.textInput.CursorEnd()
+
+		case tea.KeyEnter:
+			if keyMsg.Alt {
+				// Alt+Enter: alternate action.
+				if m.mode == InputModeNormal {
+					// Normal: Alt+Enter = new line. Pre-expand.
+					newLines := strings.Count(m.textarea.Value(), "\n") + 2
+					if newLines > inputMaxHeight {
+						newLines = inputMaxHeight
+					}
+					if newLines > m.height {
+						m.height = newLines
+						m.textarea.SetHeight(newLines)
+					}
+				} else {
+					// Edit: Alt+Enter = send.
+					text := m.textarea.Value()
+					if strings.TrimSpace(text) != "" {
+						return m, func() tea.Msg { return InputSendMsg{Text: text} }
+					}
+					return m, nil
+				}
 			} else {
-				// Back to draft.
-				m.histIdx = -1
-				m.textInput.SetValue(m.draft)
-				m.textInput.CursorEnd()
+				// Plain Enter.
+				if m.mode == InputModeNormal {
+					// Normal: Enter = send.
+					text := m.textarea.Value()
+					if strings.TrimSpace(text) != "" {
+						return m, func() tea.Msg { return InputSendMsg{Text: text} }
+					}
+					return m, nil
+				}
+				// Edit: Enter = new line.
+				// Pre-expand height so the textarea doesn't scroll when adding the line.
+				newLines := strings.Count(m.textarea.Value(), "\n") + 2
+				if newLines > inputMaxHeight {
+					newLines = inputMaxHeight
+				}
+				if newLines > m.height {
+					m.height = newLines
+					m.textarea.SetHeight(newLines)
+				}
+				// Fall through to textarea to insert the newline.
 			}
-			return m, nil
 		}
 	}
 
 	var cmd tea.Cmd
-	m.textInput, cmd = m.textInput.Update(msg)
+	m.textarea, cmd = m.textarea.Update(msg)
+	m.autoResize()
 	return m, cmd
 }
 
-// View renders the input bar.
 func (m InputModel) View() string {
 	style := InputStyle
 	if m.focused {
 		style = InputActiveStyle
 	}
 
+	// In edit mode, show a subtle indicator instead of a big label.
+	if m.mode == InputModeEdit {
+		style = style.BorderForeground(ColorHighlight)
+	}
+
 	return style.
 		Width(m.width).
-		Render(m.textInput.View())
+		Render(m.textarea.View())
 }

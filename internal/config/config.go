@@ -26,9 +26,11 @@ type Config struct {
 	CollapsedGroups []string          `json:"collapsed_groups,omitempty"`
 	MouseEnabled    bool              `json:"mouse_enabled,omitempty"`
 	AwayTimeout     int               `json:"away_timeout,omitempty"`
+	LastSeenTS      map[string]string  `json:"last_seen_ts,omitempty"`
 	InputHistory    []string          `json:"input_history,omitempty"`
 	InputHistoryMax int               `json:"input_history_max,omitempty"`
 	PollInterval    int               `json:"poll_interval,omitempty"`
+	PollPriority    int               `json:"poll_priority,omitempty"`
 	Notifications   bool              `json:"notifications,omitempty"`
 	ConfigPath      string            `json:"-"`
 }
@@ -48,10 +50,18 @@ func DefaultConfigPath() string {
 }
 
 func defaults() *Config {
+	home, _ := os.UserHomeDir()
+	downloadPath := filepath.Join(home, "Downloads")
+
 	return &Config{
-		SidebarWidth:    25,
+		SidebarWidth:    30,
 		TimestampFormat: "15:04",
-		PollInterval:    5,
+		MouseEnabled:    true,
+		Notifications:   true,
+		PollInterval:    10,
+		PollPriority:    3,
+		InputHistoryMax: 20,
+		DownloadPath:    downloadPath,
 		ConfigPath:      DefaultConfigPath(),
 	}
 }

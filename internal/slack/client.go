@@ -474,11 +474,9 @@ func (c *slackClient) UploadFile(channelID, filePath string) error {
 	return nil
 }
 
-// CheckNewMessages checks each channel in lastSeen for new messages by
-// fetching the latest message via conversations.history (limit=1).
-// Returns channel IDs with new messages and a map of all latest timestamps.
+// CheckNewMessages checks the given channels for new messages.
+// The caller controls batch size to stay within rate limits.
 func (c *slackClient) CheckNewMessages(lastSeen map[string]string) ([]string, map[string]string, error) {
-
 	api := c.primary
 	if api == nil {
 		api = c.fallback
@@ -487,7 +485,7 @@ func (c *slackClient) CheckNewMessages(lastSeen map[string]string) ([]string, ma
 	var updated []string
 	allLatest := make(map[string]string)
 
-	for channelID, seenTS := range lastSeen {
+	for channelID := range lastSeen {
 		params := &slack.GetConversationHistoryParameters{
 			ChannelID: channelID,
 			Limit:     1,
@@ -495,12 +493,14 @@ func (c *slackClient) CheckNewMessages(lastSeen map[string]string) ([]string, ma
 
 		resp, err := api.GetConversationHistory(params)
 		if err != nil {
-			// Try fallback
 			if c.fallback != nil && api != c.fallback {
 				resp, err = c.fallback.GetConversationHistory(params)
 			}
 			if err != nil {
-				// Skip this channel, don't fail the whole poll.
+				// Rate limited or error — stop this batch early.
+				if strings.Contains(err.Error(), "rate_limit") || strings.Contains(err.Error(), "rate limit") {
+					break
+				}
 				continue
 			}
 		}
@@ -512,6 +512,7 @@ func (c *slackClient) CheckNewMessages(lastSeen map[string]string) ([]string, ma
 		latestTS := resp.Messages[0].Timestamp
 		allLatest[channelID] = latestTS
 
+		seenTS := lastSeen[channelID]
 		if latestTS > seenTS {
 			updated = append(updated, channelID)
 		}

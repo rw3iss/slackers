@@ -85,6 +85,12 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				description: "Seconds between new-message checks (1-300)",
 			},
 			{
+				label:       "Priority Channels",
+				key:         "poll_priority",
+				value:       strconv.Itoa(pollPriorityVal(cfg.PollPriority)),
+				description: "Most-recent channels checked every poll (0-10). Higher = more API usage. Slack limit: ~50 req/min.",
+			},
+			{
 				label:       "Input History",
 				key:         "input_history_max",
 				value:       strconv.Itoa(inputHistMax(cfg.InputHistoryMax)),
@@ -160,6 +166,13 @@ func awayTimeoutValue(n int) string {
 		return "0"
 	}
 	return strconv.Itoa(n)
+}
+
+func pollPriorityVal(n int) int {
+	if n <= 0 {
+		return 3
+	}
+	return n
 }
 
 func inputHistMax(n int) int {
@@ -356,6 +369,16 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 		m.cfg.InputHistoryMax = n
 		m.message = "History size updated"
 
+	case "poll_priority":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 10 {
+			m.message = "Must be 0-10"
+			m.fields[m.selected].value = strconv.Itoa(pollPriorityVal(m.cfg.PollPriority))
+			return nil
+		}
+		m.cfg.PollPriority = n
+		m.message = fmt.Sprintf("Priority channels: %d", n)
+
 	case "poll_interval":
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 1 || n > 300 {
@@ -432,14 +455,15 @@ func (m SettingsModel) View() string {
 	var b strings.Builder
 
 	verStyle := lipgloss.NewStyle().Foreground(ColorMuted)
-	settingsBoxWidth := min(65, m.width-4) - 8
-	titleLeft := titleStyle.Render("Settings")
-	titleRight := verStyle.Render("slackers v" + m.version)
-	titleGap := settingsBoxWidth - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
-	if titleGap < 1 {
-		titleGap = 1
+	// Content width = box width - border(2) - padding(6)
+	contentWidth := min(65, m.width-4) - 8
+	// Version aligns with value column: cursor(2) + label(20) = 22 chars from left
+	verText := "slackers v" + m.version
+	verPad := contentWidth - lipgloss.Width(titleStyle.Render("Settings")) - len(verText)
+	if verPad < 1 {
+		verPad = 1
 	}
-	b.WriteString(titleLeft + strings.Repeat(" ", titleGap) + titleRight)
+	b.WriteString(titleStyle.Render("Settings") + strings.Repeat(" ", verPad) + verStyle.Render(verText))
 	b.WriteString("\n\n")
 
 	for i, f := range m.fields {

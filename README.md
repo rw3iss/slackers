@@ -13,26 +13,49 @@ A lightweight, terminal-based Slack client.
 
 ## Features
 
+**Messaging**
 - Read and send messages as yourself across channels, DMs, and group chats
-- Real-time message polling with configurable interval
-- Channel search (`Ctrl-K`) and message search (`Ctrl-F`) with context view
-- Collapsible channel groups -- Enter/Space on section headers to toggle
-- Hide, rename, and sort channels
-- Mouse support -- click channels, panels, files; scroll wheel; Ctrl/Shift for fast scroll
+- Unread indicators (`*`) with smart batched polling (respects Slack rate limits)
+- Priority polling -- most-active channels checked every cycle; hidden channels skipped
+- Message search (`Ctrl-F`) across current or all channels with context view
+- Search context -- view surrounding messages with target highlighted, load more with PgUp
+- Emoji rendering -- `:smiley:` `:thumbsup:` `:fire:` etc. as real Unicode
+- Date headers and sticky date bar in message viewport
+- Input history -- Up/Down in input bar recalls sent messages
+
+**Channels**
+- Channel search (`Ctrl-K`) -- filter and jump to any channel
+- Collapsible channel groups -- Enter/Space on section headers
+- Hide (`Ctrl-X`), unhide (`Ctrl-G`), toggle hidden (`Ctrl-O`)
+- Rename/alias any channel (`Ctrl-A`) -- great for group chats
+- Sort by type, name, or most recent activity
 - Jump to next unread (`Ctrl-N`)
-- Terminal notifications (bell, desktop, urgency hints)
+
+**Files**
 - File uploads (`Ctrl-U`) with built-in file browser and `[FILE:<path>]` syntax
-- File downloads -- select files in chat history (`f` or `Ctrl-Up`) and download with Enter
-- Files browser (`Ctrl-L`) -- browse files with search filter, channel scope toggle, download with Enter
-- Emoji rendering -- `:smiley:` `:thumbsup:` `:fire:` etc. rendered as real Unicode emoji
-- Input history -- Up/Down in the input bar recalls sent messages
-- Full screen chat mode (`Ctrl-W`) -- hide sidebar, auto-show on focus
-- Auto-away detection -- configurable idle timeout with automatic refresh on return
-- Auto-reconnect -- socket connection recovers automatically from drops
-- Interactive settings (`Ctrl-S`) and built-in help (`Ctrl-H`)
-- OAuth browser login for quick onboarding
-- Single binary, cross-platform (Linux, macOS, Windows)
-- All settings persisted locally at `~/.config/slackers/`
+- File downloads -- select files in chat history (`f` or `Ctrl-Up`), Enter to download
+- Files browser (`Ctrl-L`) -- browse all files with search filter and channel scope toggle
+- Download cancel (`Ctrl-D`) with partial file cleanup
+- Click `[FILE:name]` items in chat to download (mouse mode)
+
+**UI**
+- Full screen chat mode (`Ctrl-W`) -- hide sidebar, auto-show when focused
+- Mouse support -- click channels, panels, files; scroll wheel; Ctrl/Shift for fast scroll
+- Configurable sidebar width
+- Terminal notifications (bell, desktop, urgency hints)
+
+**Customization**
+- Fully customizable keyboard shortcuts -- rebind any key in Settings > Keyboard Shortcuts
+- All settings configurable in-app (`Ctrl-S`) with instant effect
+- All state persisted locally: tokens, shortcuts, hidden channels, aliases, collapsed groups, sort, last channel
+
+**Infrastructure**
+- Auto-away detection -- configurable idle timeout, full refresh on return
+- Auto-reconnect -- socket connection recovers from drops
+- Self-update (`slackers update`) -- checks GitHub releases, downloads correct platform binary
+- OAuth browser login (`slackers login`) with team ID verification
+- Team onboarding (`slackers join <url>`) -- one command setup
+- Single static binary, cross-platform (Linux, macOS, Windows)
 
 ## Install
 
@@ -107,14 +130,17 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Ctrl-O` | Toggle hidden visible |
 | `Ctrl-A` | Rename/alias channel |
 | `Ctrl-U` | Attach file to send |
+| `Ctrl-L` | Browse all files |
+| `Ctrl-D` | Cancel file download |
 | `Ctrl-W` | Toggle full screen chat |
 | `f` (messages) | Toggle file select mode |
-| `Ctrl-Up` | Enter file select mode |
+| `Ctrl-Up` | Enter file select mode from anywhere |
 | `Ctrl-Down` | Exit file select, focus input |
+| `Enter` / `Space` (header) | Collapse/expand channel group |
 | `Up` / `Down` (input) | Browse sent message history |
 | `Ctrl-R` | Refresh channels |
 | `Ctrl-H` | Help |
-| `Ctrl-S` | Settings |
+| `Ctrl-S` | Settings (includes Keyboard Shortcuts) |
 | `Ctrl-Q` | Quit |
 
 </details>
@@ -130,6 +156,7 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | Mouse | on / off | Mouse click/scroll support (restart required) |
 | Notifications | on / off | Terminal bell + desktop notifications |
 | Poll Interval | 1-300 | Seconds between message checks |
+| Priority Channels | 0-10 | Most-recent channels checked every poll cycle |
 | Sort By | type / name / recent | Channel sorting |
 | Sort Direction | asc / desc | Sort order |
 | Input History | 1-200 | Max sent messages to remember |
@@ -162,13 +189,26 @@ rm -rf ~/.config/slackers
 
 ## How it works
 
-Slackers uses the Slack Web API with a **user token** (`xoxp-`) as the primary client, falling back to a bot token (`xoxb-`) when needed. This means messages you send appear as you, and you see all channels you belong to -- not just the ones a bot has been added to.
+**User token first.** Slackers uses your user token (`xoxp-`) for API calls so messages appear as you and you see all your channels. The bot token (`xoxb-`) is a fallback.
 
-**Polling, not webhooks.** Slack's Socket Mode delivers real-time events only to channels the bot has joined. Since we don't want the bot joining your channels (it posts a system message each time), Slackers uses lightweight polling instead. Every N seconds (configurable, default 5), it fetches `conversations.history` with `limit=1` for each tracked channel. This returns just the latest message timestamp per channel -- a single small API call each. The app compares these timestamps against the last-seen timestamps stored locally. Only channels with genuinely new messages trigger a history refresh.
+**Polling for new messages.** Slack's Socket Mode only delivers events to channels the bot has joined (and joining posts a visible system message). Instead, Slackers polls `conversations.history` with `limit=1` to check for new messages — one lightweight API call per channel that returns just the latest timestamp.
 
-**Efficient refresh.** The currently viewed channel gets a silent background update when new messages are detected -- new messages appear without disrupting your scroll position. Other channels are marked as unread (`*`) in the sidebar. No full history re-fetch happens unless you actually open the channel.
+**Batched rotation to respect rate limits.** Slack allows ~50 API calls per minute. Slackers doesn't check all channels every cycle. Each poll cycle checks a small batch:
 
-**Configurable.** The poll interval, sidebar width, sort order, notifications, mouse mode, download path, and input history size are all adjustable in the interactive settings panel (`Ctrl-S`). All settings persist to `~/.config/slackers/config.json` and survive restarts. Channel-specific state (hidden channels, aliases, collapsed groups, last viewed channel) also persists.
+1. **Current channel** — always included, so your active chat stays live
+2. **Priority channels** — the N most-recently-active channels (configurable, default 3). These are the channels with the newest messages, so your busiest conversations update fastest
+3. **Rotating batch** — 5 additional channels from the full list, advancing each cycle. This ensures every channel gets checked within `(total_channels / 5) × poll_interval` seconds
+
+With 50 channels, a 10s poll interval, and 3 priority channels: each cycle makes ~9 API calls (1 current + 3 priority + 5 rotation) = ~54 calls/min. If that's too high, reduce priority channels or increase the poll interval.
+
+**Hidden channels are skipped.** Channels you've hidden (`Ctrl-X`) are excluded from polling entirely, reducing API usage. Unhiding a channel adds it back to the poll rotation.
+
+**Unread detection.** On startup, Slackers seeds baseline timestamps for all visible channels (batched with delays to avoid rate limits). After seeding, the poller compares each channel's latest message timestamp against the stored baseline. Changed channels get marked with `*` in the sidebar. Viewing a channel updates its timestamp, clearing the marker.
+
+**Settings.** All values are configurable in settings (`Ctrl-S`):
+- **Poll Interval** (1-300s, default 10s) — how often to check
+- **Priority Channels** (0-10, default 3) — most-recent channels checked every cycle
+- Lower interval + higher priority = more responsive but more API usage
 
 ---
 
@@ -191,9 +231,10 @@ make clean        # Remove build artifacts
 ```
 cmd/slackers/       CLI entry point, Cobra commands
 internal/
-  auth/             OAuth2 browser flow
-  config/           Config loading, saving, validation
-  format/           Slack mrkdwn to plain text
+  auth/             OAuth2 browser flow with team ID verification
+  config/           Config loading, saving, validation (0600 perms)
+  format/           Slack mrkdwn to plain text, emoji rendering
+  shortcuts/        Customizable keyboard shortcuts with embedded defaults
   slack/            SlackService + SocketService interfaces and implementations
   tui/              Bubbletea model, UI components, overlays
   types/            Shared domain types
