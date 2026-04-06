@@ -34,8 +34,18 @@ func resetTerminal() {
 	fmt.Fprint(os.Stdout, "\033]0;\a")
 	// Disable mouse tracking (in case it was enabled).
 	fmt.Fprint(os.Stdout, "\033[?1000l\033[?1002l\033[?1003l\033[?1006l")
-	// Clear line.
-	fmt.Fprint(os.Stdout, "\r\n")
+	// Re-enable line wrapping.
+	fmt.Fprint(os.Stdout, "\033[?7h")
+	// Reset scrolling region to full screen.
+	fmt.Fprint(os.Stdout, "\033[r")
+	// Move cursor to bottom-left and clear line.
+	fmt.Fprint(os.Stdout, "\033[999;1H\r\n")
+	// Use stty to restore cooked mode, echo, etc.
+	if cmd := exec.Command("stty", "sane"); cmd != nil {
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		_ = cmd.Run()
+	}
 }
 
 var version = "0.16.0"
