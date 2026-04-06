@@ -87,6 +87,7 @@ var helpLayout = []helpSection{
 		entries: []helpEntry{
 			{"help", "Toggle this help page", ""},
 			{"settings", "Open settings", ""},
+			{"befriend", "Send friend request to current DM user", ""},
 			{"quit", "Quit", ""},
 		},
 	},

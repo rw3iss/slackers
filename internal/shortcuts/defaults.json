@@ -31,5 +31,6 @@
   "enter_file_select": ["ctrl+up"],
   "toggle_file_select": ["f"],
   "sidebar_collapse": [" "],
-  "toggle_input_mode": ["ctrl+\\"]
+  "toggle_input_mode": ["ctrl+\\"],
+  "befriend": ["ctrl+b"]
 }

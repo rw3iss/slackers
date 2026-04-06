@@ -40,6 +40,7 @@ type KeyMap struct {
 	ToggleFileSelect key.Binding
 	SidebarCollapse  key.Binding
 	ToggleInputMode  key.Binding
+	Befriend         key.Binding
 }
 
 // binding creates a key.Binding from a ShortcutMap action name.
@@ -90,6 +91,7 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		ToggleFileSelect: binding(sm, "toggle_file_select", "f", "file select"),
 		SidebarCollapse:  binding(sm, "sidebar_collapse", "space", "collapse group"),
 		ToggleInputMode: binding(sm, "toggle_input_mode", "ctrl+\\", "input mode"),
+		Befriend:        binding(sm, "befriend", "ctrl+b", "befriend user"),
 	}
 }
 
