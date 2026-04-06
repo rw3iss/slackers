@@ -93,10 +93,36 @@ func NewHelpModel(version string) HelpModel {
 func (m *HelpModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	// Box uses: 2 border + 2 padding + 4 header lines + 3 footer lines = 11
+	// Box height minus border(2) + padding(2) + header(4) + footer(3) = 11
 	m.visibleLines = h - 4 - 11
 	if m.visibleLines < 3 {
 		m.visibleLines = 3
+	}
+	// Count total content lines.
+	m.totalLines = 0
+	for si, section := range helpSections {
+		if si > 0 {
+			m.totalLines++ // blank line between sections
+		}
+		m.totalLines++ // section title
+		m.totalLines += len(section.items)
+	}
+}
+
+func (m *HelpModel) maxScroll() int {
+	ms := m.totalLines - m.visibleLines
+	if ms < 0 {
+		return 0
+	}
+	return ms
+}
+
+func (m *HelpModel) clampScroll() {
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
+	if m.scrollOffset > m.maxScroll() {
+		m.scrollOffset = m.maxScroll()
 	}
 }
 
@@ -106,54 +132,27 @@ func (m HelpModel) Update(msg tea.Msg) (HelpModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if m.scrollOffset > 0 {
-				m.scrollOffset--
-			}
+			m.scrollOffset--
 		case "down", "j":
-			if m.scrollOffset < m.totalLines-m.visibleLines {
-				m.scrollOffset++
-			}
+			m.scrollOffset++
 		case "pgup":
 			m.scrollOffset -= m.visibleLines
-			if m.scrollOffset < 0 {
-				m.scrollOffset = 0
-			}
 		case "pgdown":
 			m.scrollOffset += m.visibleLines
-			maxScroll := m.totalLines - m.visibleLines
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			if m.scrollOffset > maxScroll {
-				m.scrollOffset = maxScroll
-			}
 		case "home":
 			m.scrollOffset = 0
 		case "end":
-			maxScroll := m.totalLines - m.visibleLines
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			m.scrollOffset = maxScroll
+			m.scrollOffset = m.maxScroll()
 		}
 	case tea.MouseMsg:
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
 			m.scrollOffset -= 3
-			if m.scrollOffset < 0 {
-				m.scrollOffset = 0
-			}
 		case tea.MouseButtonWheelDown:
 			m.scrollOffset += 3
-			maxScroll := m.totalLines - m.visibleLines
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			if m.scrollOffset > maxScroll {
-				m.scrollOffset = maxScroll
-			}
 		}
 	}
+	m.clampScroll()
 	return m, nil
 }
 

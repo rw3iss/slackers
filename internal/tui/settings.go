@@ -579,9 +579,11 @@ func (m SettingsModel) View() string {
 	b.WriteString("\n\n")
 
 	// Calculate visible field window.
-	// Box: 2 border + 2 padding + 3 header + 4 footer = ~11 overhead lines.
-	// Each field = 1 line, selected field = 2 lines (with description).
-	visibleFields := (m.height - 4 - 11) / 2
+	// Box overhead: 2 border + 2 padding + 3 header + 4 footer = 11 lines.
+	// Each field = 1 line, the selected field takes 2 (includes description).
+	// So available = boxHeight - overhead, minus 1 for the selected field's extra line.
+	available := m.height - 4 - 11 - 1
+	visibleFields := available
 	if visibleFields < 3 {
 		visibleFields = 3
 	}
