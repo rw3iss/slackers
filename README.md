@@ -148,6 +148,7 @@ Fields with fixed options cycle with Enter/Tab.
 
 ```
 slackers              Launch the TUI
+slackers --debug      Launch with debug logging enabled
 slackers setup        Interactive setup
 slackers login        OAuth browser login
 slackers join <url>   One-command team onboarding
@@ -155,6 +156,22 @@ slackers update       Check for and install latest version
 slackers config       Show current config
 slackers version      Print version
 ```
+
+### Debugging
+
+Run with `--debug` to log all Slack API calls, socket events, and poll activity to a file:
+
+```bash
+slackers --debug
+```
+
+In another terminal, tail the log to watch requests in real time:
+
+```bash
+tail -f ~/.config/slackers/debug.log
+```
+
+The log shows timestamped entries for every API request (with channel IDs and batch sizes), Socket Mode connect/disconnect/message events, poll tick triggers, and rate limit errors. Useful for diagnosing connectivity issues, unexpected API usage, or verifying that Socket Mode is delivering events. No performance overhead when `--debug` is not passed.
 
 ### Uninstall
 
