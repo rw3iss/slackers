@@ -50,6 +50,7 @@ var ActionDescriptions = map[string]string{
 	"enter_file_select":  "Enter file select mode",
 	"toggle_file_select": "Toggle file select in messages",
 	"sidebar_collapse":   "Collapse/expand channel group",
+	"toggle_input_mode": "Toggle input mode (normal/edit)",
 }
 
 // ActionOrder defines the display order for the shortcuts editor.
@@ -63,7 +64,7 @@ var ActionOrder = []string{
 	"enter_file_select", "focus_input_global", "cancel_download",
 	"hide_channel", "show_hidden", "toggle_hidden",
 	"rename_group", "sidebar_collapse",
-	"toggle_full_mode", "help", "settings",
+	"toggle_input_mode", "toggle_full_mode", "help", "settings",
 }
 
 // DefaultShortcuts returns the built-in default shortcut mappings.

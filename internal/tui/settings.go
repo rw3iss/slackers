@@ -59,6 +59,13 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				description: "Go time format for message timestamps (e.g. 15:04, 3:04 PM)",
 			},
 			{
+				label:       "Auto Update",
+				key:         "auto_update",
+				value:       autoUpdateValue(cfg.AutoUpdate),
+				description: "Automatically update on startup when a new version is available",
+				options:     []string{"on", "off"},
+			},
+			{
 				label:       "Away Timeout",
 				key:         "away_timeout",
 				value:       awayTimeoutValue(cfg.AwayTimeout),
@@ -159,6 +166,13 @@ func boolToDir(b *bool) string {
 		return "asc"
 	}
 	return "desc"
+}
+
+func autoUpdateValue(b *bool) string {
+	if b == nil || *b {
+		return "on"
+	}
+	return "off"
 }
 
 func awayTimeoutValue(n int) string {
@@ -326,6 +340,17 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 	case "timestamp_format":
 		m.cfg.TimestampFormat = value
 		m.message = "Timestamp format updated"
+
+	case "auto_update":
+		v := strings.ToLower(strings.TrimSpace(value))
+		if v == "on" {
+			b := true
+			m.cfg.AutoUpdate = &b
+		} else {
+			b := false
+			m.cfg.AutoUpdate = &b
+		}
+		m.message = "Auto update: " + value
 
 	case "away_timeout":
 		n, err := strconv.Atoi(value)

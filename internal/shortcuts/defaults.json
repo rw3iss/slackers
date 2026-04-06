@@ -30,5 +30,6 @@
   "focus_input_global": ["ctrl+down"],
   "enter_file_select": ["ctrl+up"],
   "toggle_file_select": ["f"],
-  "sidebar_collapse": [" "]
+  "sidebar_collapse": [" "],
+  "toggle_input_mode": ["ctrl+\\"]
 }

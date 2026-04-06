@@ -2,7 +2,10 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -43,6 +46,11 @@ const (
 )
 
 // Custom message types for the TUI update loop.
+
+// UpdateAvailableMsg signals that a new version is available.
+type UpdateAvailableMsg struct {
+	Version string
+}
 
 type ChannelsLoadedMsg struct{ Channels []types.Channel }
 type HistoryLoadedMsg struct {
@@ -234,6 +242,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		tea.EnterAltScreen,
 		splashTimerCmd(),
+		checkUpdateCmd(m.version),
 		loadUsersCmd(m.slackSvc),
 		connectSocketCmd(m.socketSvc, m.eventChan),
 		waitForSocketEvent(m.eventChan),
@@ -473,7 +482,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateFocus()
 			return m, nil
 
-		case msg.String() == "ctrl+\\":
+		case key.Matches(msg, m.keymap.ToggleInputMode):
 			// Toggle input mode and focus the input bar.
 			m.input.ToggleMode()
 			m.focus = types.FocusInput
@@ -1087,6 +1096,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, activityCheckCmd(m.cfg.AwayTimeout)
+
+	case UpdateAvailableMsg:
+		if msg.Version != "" {
+			m.warning = fmt.Sprintf("Update available: %s (run 'slackers update')", msg.Version)
+			return m, tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
+				return ClearWarningMsg{}
+			})
+		}
+		return m, nil
 
 	case SplashDoneMsg:
 		m.splash = false
@@ -1739,6 +1757,34 @@ func seedLastSeenCmd(svc slackpkg.SlackService, lastSeen map[string]string) tea.
 			}
 		}
 		return SeedLastSeenMsg{Timestamps: timestamps}
+	}
+}
+
+func checkUpdateCmd(currentVersion string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := http.Get("https://api.github.com/repos/rw3iss/slackers/releases/latest")
+		if err != nil {
+			return UpdateAvailableMsg{} // silently fail
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return UpdateAvailableMsg{}
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return UpdateAvailableMsg{}
+		}
+		var release struct {
+			TagName string `json:"tag_name"`
+		}
+		if err := json.Unmarshal(body, &release); err != nil {
+			return UpdateAvailableMsg{}
+		}
+		latest := strings.TrimPrefix(release.TagName, "v")
+		if latest != currentVersion && latest > currentVersion {
+			return UpdateAvailableMsg{Version: release.TagName}
+		}
+		return UpdateAvailableMsg{}
 	}
 }
 

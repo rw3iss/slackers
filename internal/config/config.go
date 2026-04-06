@@ -24,6 +24,7 @@ type Config struct {
 	LastChannelID   string            `json:"last_channel_id,omitempty"`
 	DownloadPath    string            `json:"download_path,omitempty"`
 	CollapsedGroups []string          `json:"collapsed_groups,omitempty"`
+	AutoUpdate      *bool             `json:"auto_update,omitempty"`
 	MouseEnabled    bool              `json:"mouse_enabled,omitempty"`
 	AwayTimeout     int               `json:"away_timeout,omitempty"`
 	LastSeenTS      map[string]string  `json:"last_seen_ts,omitempty"`
@@ -49,6 +50,8 @@ func DefaultConfigPath() string {
 	return filepath.Join(DefaultConfigDir(), "config.json")
 }
 
+func boolPtr(b bool) *bool { return &b }
+
 func defaults() *Config {
 	home, _ := os.UserHomeDir()
 	downloadPath := filepath.Join(home, "Downloads")
@@ -56,6 +59,7 @@ func defaults() *Config {
 	return &Config{
 		SidebarWidth:    30,
 		TimestampFormat: "15:04",
+		AutoUpdate:      boolPtr(true),
 		MouseEnabled:    true,
 		Notifications:   true,
 		PollInterval:    10,

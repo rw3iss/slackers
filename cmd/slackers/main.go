@@ -37,7 +37,7 @@ func resetTerminal() {
 	fmt.Fprint(os.Stdout, "\r\n")
 }
 
-var version = "0.14.0"
+var version = "0.15.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "slackers",
@@ -86,6 +86,37 @@ var rootCmd = &cobra.Command{
 			resetTerminal()
 			os.Exit(0)
 		}()
+
+		// Auto-update check (if enabled).
+		autoUpdate := cfg.AutoUpdate == nil || *cfg.AutoUpdate // default true
+		if autoUpdate {
+			latest, downloadURL, err := checkLatestRelease()
+			if err == nil && latest != "" {
+				latestClean := strings.TrimPrefix(latest, "v")
+				if latestClean != version && latestClean > version && downloadURL != "" {
+					fmt.Printf("Updating to %s...\n", latest)
+					exePath, _ := os.Executable()
+					exePath, _ = filepath.EvalSymlinks(exePath)
+					tmpPath := exePath + ".new"
+					if err := downloadBinary(downloadURL, tmpPath); err == nil {
+						os.Chmod(tmpPath, 0755)
+						backupPath := exePath + ".bak"
+						os.Remove(backupPath)
+						if os.Rename(exePath, backupPath) == nil {
+							if os.Rename(tmpPath, exePath) == nil {
+								os.Remove(backupPath)
+								fmt.Printf("Updated to %s. Restarting...\n", latest)
+								// Re-exec the new binary with the same args.
+								syscall.Exec(exePath, os.Args, os.Environ())
+							} else {
+								os.Rename(backupPath, exePath)
+							}
+						}
+						os.Remove(tmpPath)
+					}
+				}
+			}
+		}
 
 		slackSvc := slack.NewSlackClient(cfg.BotToken, cfg.UserToken)
 		socketSvc := slack.NewSocketClient(cfg.BotToken, cfg.AppToken)

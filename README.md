@@ -13,49 +13,16 @@ A lightweight, terminal-based Slack client.
 
 ## Features
 
-**Messaging**
-- Read and send messages as yourself across channels, DMs, and group chats
-- Unread indicators (`*`) with smart batched polling (respects Slack rate limits)
-- Priority polling -- most-active channels checked every cycle; hidden channels skipped
-- Message search (`Ctrl-F`) across current or all channels with context view
-- Search context -- view surrounding messages with target highlighted, load more with PgUp
-- Emoji rendering -- `:smiley:` `:thumbsup:` `:fire:` etc. as real Unicode
-- Date headers and sticky date bar in message viewport
-- Input history -- Up/Down in input bar recalls sent messages
-
-**Channels**
-- Channel search (`Ctrl-K`) -- filter and jump to any channel
-- Collapsible channel groups -- Enter/Space on section headers
-- Hide (`Ctrl-X`), unhide (`Ctrl-G`), toggle hidden (`Ctrl-O`)
-- Rename/alias any channel (`Ctrl-A`) -- great for group chats
-- Sort by type, name, or most recent activity
-- Jump to next unread (`Ctrl-N`)
-
-**Files**
-- File uploads (`Ctrl-U`) with built-in file browser and `[FILE:<path>]` syntax
-- File downloads -- select files in chat history (`f` or `Ctrl-Up`), Enter to download
-- Files browser (`Ctrl-L`) -- browse all files with search filter and channel scope toggle
-- Download cancel (`Ctrl-D`) with partial file cleanup
-- Click `[FILE:name]` items in chat to download (mouse mode)
-
-**UI**
-- Full screen chat mode (`Ctrl-W`) -- hide sidebar, auto-show when focused
-- Mouse support -- click channels, panels, files; scroll wheel; Ctrl/Shift for fast scroll
-- Configurable sidebar width
-- Terminal notifications (bell, desktop, urgency hints)
-
-**Customization**
-- Fully customizable keyboard shortcuts -- rebind any key in Settings > Keyboard Shortcuts
-- All settings configurable in-app (`Ctrl-S`) with instant effect
-- All state persisted locally: tokens, shortcuts, hidden channels, aliases, collapsed groups, sort, last channel
-
-**Infrastructure**
-- Auto-away detection -- configurable idle timeout, full refresh on return
-- Auto-reconnect -- socket connection recovers from drops
-- Self-update (`slackers update`) -- checks GitHub releases, downloads correct platform binary
-- OAuth browser login (`slackers login`) with team ID verification
-- Team onboarding (`slackers join <url>`) -- one command setup
-- Single static binary, cross-platform (Linux, macOS, Windows)
+- **Smart unread detection** -- batched polling with priority channels, rate-limit aware
+- **Message search** -- search current or all channels, jump to results with context view
+- **File drop and browser** -- drop files, upload, download, browse/search all files across channels
+- **Mouse support** -- click channels, scroll panels, drag sidebar, click files to download
+- **Multi-line editor** -- expandable textarea with normal/edit mode toggle
+- **Customizable shortcuts** -- rebind any key in-app, changes take effect immediately
+- **Channel management** -- hide, alias, collapse groups, sort by type/name/recent
+- **Auto-update** -- new versions downloaded and installed on startup
+- **One-command onboarding** -- `slackers join <url>` for team setup, OAuth browser login
+- **Single binary** -- cross-platform (Linux, macOS, Windows), no dependencies
 
 ## Install
 
@@ -154,6 +121,7 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 
 | Setting | Options | Description |
 |---------|---------|-------------|
+| Auto Update | on / off | Auto-update on startup when new version available |
 | Sidebar Width | 10-80 | Sidebar width in characters |
 | Timestamp Format | Go format | e.g. `15:04`, `3:04 PM` |
 | Away Timeout | 0+ seconds | Auto-away after idle (0 = disabled) |
