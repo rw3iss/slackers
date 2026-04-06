@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/debug"
+	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/secure"
 	"github.com/rw3iss/slackers/internal/shortcuts"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
@@ -38,6 +39,7 @@ const (
 	overlayFilesList
 	overlayShortcuts
 	overlayWhitelist
+	overlayFriendRequest
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -107,14 +109,30 @@ type WhitelistOpenMsg struct{}
 
 // P2PReceivedMsg is sent when a message arrives over the P2P connection.
 type P2PReceivedMsg struct {
-	SenderID string
-	Text     string
+	SenderID  string
+	Text      string
+	PubKey    string // for friend requests
+	Multiaddr string // for friend requests
 }
 
 // SecureSessionReadyMsg signals that a secure session was established with a peer.
 type SecureSessionReadyMsg struct {
 	PeerID string
 	State  secure.SessionState
+}
+
+// FriendsLoadedMsg carries friend channels to display in the sidebar.
+type FriendsLoadedMsg struct {
+	Channels []types.Channel
+	Online   map[string]bool
+}
+
+// friendPingTickMsg triggers a friend online check.
+type friendPingTickMsg struct{}
+
+// FriendPingMsg carries online status for friends.
+type FriendPingMsg struct {
+	Online map[string]bool
 }
 
 // channelInfo stores the name and alias for a channel.
@@ -163,6 +181,11 @@ type Model struct {
 	shortcutsEditor ShortcutsEditorModel
 	whitelist       WhitelistModel
 	help            HelpModel
+	friendRequest   FriendRequestModel
+
+	// Friends
+	friendStore    *friends.FriendStore
+	friendMessages map[string][]types.Message // userID -> P2P message history
 
 	// State
 	focus      types.Focus
@@ -224,7 +247,7 @@ type Model struct {
 }
 
 // NewModel creates a new root TUI model.
-func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, cfg *config.Config, version string) Model {
+func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, cfg *config.Config, version string, friendStore *friends.FriendStore) Model {
 	ch := NewChannelList()
 	ch.SetFocused(true)
 
@@ -267,7 +290,22 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		}
 		p2pChan = make(chan P2PReceivedMsg, 64)
 		onMsg := func(peerSlackID string, msg secure.P2PMessage) {
-			p2pChan <- P2PReceivedMsg{SenderID: peerSlackID, Text: msg.Text}
+			switch msg.Type {
+			case secure.MsgTypeFriendRequest, secure.MsgTypeFriendAccept:
+				parts := strings.SplitN(msg.Text, "|", 2)
+				pubKey, maddr := "", ""
+				if len(parts) == 2 {
+					pubKey, maddr = parts[0], parts[1]
+				}
+				p2pChan <- P2PReceivedMsg{
+					SenderID:  peerSlackID,
+					Text:      "__" + msg.Type + "__",
+					PubKey:    pubKey,
+					Multiaddr: maddr,
+				}
+			default:
+				p2pChan <- P2PReceivedMsg{SenderID: peerSlackID, Text: msg.Text}
+			}
 		}
 		p2pNode, _ = secure.NewP2PNode(port, cfg.P2PAddress, onMsg)
 	}
@@ -300,9 +338,11 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		splash:       true,
 		initialLoad:  true,
 		version:      version,
-		slackSvc:     slackSvc,
-		socketSvc: socketSvc,
-		eventChan: make(chan slackpkg.SocketEvent, 100),
+		friendStore:    friendStore,
+		friendMessages: make(map[string][]types.Message),
+		slackSvc:       slackSvc,
+		socketSvc:      socketSvc,
+		eventChan:      make(chan slackpkg.SocketEvent, 100),
 	}
 }
 
@@ -312,15 +352,28 @@ func (m Model) Init() tea.Cmd {
 		tea.EnterAltScreen,
 		splashTimerCmd(),
 		checkUpdateCmd(m.version),
-		loadUsersCmd(m.slackSvc),
-		connectSocketCmd(m.socketSvc, m.eventChan),
-		waitForSocketEvent(m.eventChan),
-		pollTickCmd(m.cfg.PollInterval),
-		bgPollTickCmd(m.cfg.PollIntervalBg),
-		activityCheckCmd(m.cfg.AwayTimeout),
+		loadFriendsCmd(m.friendStore, m.p2pNode),
 	}
+	// Workspace commands — only if Slack services are configured.
+	if m.slackSvc != nil {
+		cmds = append(cmds,
+			loadUsersCmd(m.slackSvc),
+			pollTickCmd(m.cfg.PollInterval),
+			bgPollTickCmd(m.cfg.PollIntervalBg),
+		)
+	}
+	if m.socketSvc != nil {
+		cmds = append(cmds,
+			connectSocketCmd(m.socketSvc, m.eventChan),
+			waitForSocketEvent(m.eventChan),
+		)
+	}
+	cmds = append(cmds, activityCheckCmd(m.cfg.AwayTimeout))
 	if m.p2pChan != nil {
 		cmds = append(cmds, waitForP2PMsg(m.p2pChan))
+	}
+	if m.friendStore != nil && m.friendStore.Count() > 0 {
+		cmds = append(cmds, friendPingTickCmd())
 	}
 	return tea.Batch(cmds...)
 }
@@ -459,6 +512,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.overlay = overlayHidden
 			}
 			return m, nil
+
+		case key.Matches(msg, m.keymap.Befriend):
+			if m.currentCh != nil && m.currentCh.IsDM && m.currentCh.UserID != "" {
+				if m.friendStore != nil && m.friendStore.Get(m.currentCh.UserID) != nil {
+					m.warning = "Already friends with " + m.currentCh.Name
+					return m, nil
+				}
+				m.friendRequest = NewOutgoingFriendRequest(m.currentCh.UserID, m.currentCh.Name)
+				m.friendRequest.SetSize(m.width, m.height)
+				m.overlay = overlayFriendRequest
+			} else {
+				m.warning = "Select a DM channel to befriend"
+			}
+			return m, nil
 		}
 
 		// If an overlay is open, handle its input
@@ -555,6 +622,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.whitelist, cmd = m.whitelist.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayFriendRequest {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.friendRequest, cmd = m.friendRequest.Update(msg)
 			return m, cmd
 		}
 
@@ -711,6 +787,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.channels.ClearUnread(ch.ID)
 					m.setChannelHeader()
 					m.saveLastChannel(ch.ID)
+
+					// Friend channel — load local P2P message history.
+					if ch.IsFriend {
+						if history, ok := m.friendMessages[ch.UserID]; ok {
+							m.messages.SetMessages(history)
+						} else {
+							m.messages.SetMessages(nil)
+						}
+						return m, nil
+					}
+
 					cmds := []tea.Cmd{loadHistoryCmd(m.slackSvc, ch.ID)}
 					// Trigger peer discovery for whitelisted DM peers.
 					if ch.IsDM && ch.UserID != "" && m.secureMgr != nil {
@@ -1223,6 +1310,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go config.Save(m.cfg)
 			m.input.Reset()
 
+			// Friend channel — send via P2P, not Slack.
+			if m.currentCh.IsFriend && m.p2pNode != nil {
+				friendMsg := secure.P2PMessage{
+					Type:      secure.MsgTypeMessage,
+					Text:      text,
+					SenderID:  m.currentCh.UserID,
+					Timestamp: time.Now().Unix(),
+				}
+				go m.p2pNode.SendMessage(m.currentCh.UserID, friendMsg)
+				localMsg := types.Message{
+					UserID:    "me",
+					UserName:  "You",
+					Text:      text,
+					Timestamp: time.Now(),
+				}
+				m.messages.AppendMessage(localMsg)
+				m.friendMessages[m.currentCh.UserID] = append(m.friendMessages[m.currentCh.UserID], localMsg)
+				return m, nil
+			}
+
 			// If secure mode is active and this is a DM with a whitelisted peer,
 			// encrypt the message before sending.
 			sendText := text
@@ -1286,21 +1393,75 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case P2PReceivedMsg:
-		// A message arrived over P2P — display it in the current DM if it matches.
-		if m.currentCh != nil && m.currentCh.IsDM && m.currentCh.UserID == msg.SenderID {
-			userName := msg.SenderID
+		// Handle friend request messages.
+		if msg.Text == "__friend_request__" {
+			senderName := msg.SenderID
 			if u, ok := m.users[msg.SenderID]; ok {
-				userName = u.DisplayName
+				senderName = u.DisplayName
 			}
-			p2pMsg := types.Message{
-				UserID:    msg.SenderID,
-				UserName:  userName,
-				Text:      "🔒 " + msg.Text,
-				Timestamp: time.Now(),
+			m.friendRequest = NewIncomingFriendRequest(msg.SenderID, senderName, msg.PubKey, msg.Multiaddr)
+			m.friendRequest.SetSize(m.width, m.height)
+			m.overlay = overlayFriendRequest
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
 			}
-			m.messages.AppendMessage(p2pMsg)
+			return m, nil
 		}
-		// Continue listening for more P2P messages.
+		if msg.Text == "__friend_accept__" {
+			// Peer accepted our friend request — add them.
+			if m.friendStore != nil {
+				senderName := msg.SenderID
+				if u, ok := m.users[msg.SenderID]; ok {
+					senderName = u.DisplayName
+				}
+				f := friends.Friend{
+					UserID:    msg.SenderID,
+					Name:      senderName,
+					PublicKey: msg.PubKey,
+					Multiaddr: msg.Multiaddr,
+					Online:    true,
+				}
+				_ = m.friendStore.Add(f)
+				_ = m.friendStore.Save()
+				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.warning = senderName + " accepted your friend request!"
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
+		// Regular P2P message — display in current channel or friend channel.
+		userName := msg.SenderID
+		if u, ok := m.users[msg.SenderID]; ok {
+			userName = u.DisplayName
+		}
+		p2pMsg := types.Message{
+			UserID:    msg.SenderID,
+			UserName:  userName,
+			Text:      msg.Text,
+			Timestamp: time.Now(),
+		}
+
+		friendChID := "friend:" + msg.SenderID
+		if m.currentCh != nil && m.currentCh.ID == friendChID {
+			// Viewing this friend's channel — append directly.
+			m.messages.AppendMessage(p2pMsg)
+			m.friendMessages[msg.SenderID] = append(m.friendMessages[msg.SenderID], p2pMsg)
+		} else if m.currentCh != nil && m.currentCh.IsDM && m.currentCh.UserID == msg.SenderID {
+			// Viewing this user's Slack DM — show as encrypted.
+			p2pMsg.Text = "🔒 " + p2pMsg.Text
+			m.messages.AppendMessage(p2pMsg)
+		} else if m.friendStore != nil && m.friendStore.Get(msg.SenderID) != nil {
+			// Message from a friend, not viewing their channel — mark unread.
+			m.friendMessages[msg.SenderID] = append(m.friendMessages[msg.SenderID], p2pMsg)
+			m.channels.MarkUnread(friendChID)
+		} else {
+			// Regular P2P message from non-friend.
+			m.channels.MarkUnread(msg.SenderID)
+		}
+
 		if m.p2pChan != nil {
 			return m, waitForP2PMsg(m.p2pChan)
 		}
@@ -1320,6 +1481,86 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cfg.SecureWhitelist = msg.Whitelist
 		go config.Save(m.cfg)
 		return m, nil
+
+	case FriendsLoadedMsg:
+		if len(msg.Channels) > 0 {
+			m.channels.SetFriendChannels(msg.Channels)
+			for uid, on := range msg.Online {
+				if on {
+					m.channels.MarkUnread("friend:" + uid)
+				}
+			}
+		}
+		return m, nil
+
+	case FriendRequestSentMsg:
+		m.overlay = overlayNone
+		if m.p2pNode != nil && m.secureMgr != nil {
+			pubKey := m.secureMgr.OwnPublicKeyBase64()
+			multiaddr := m.p2pNode.Multiaddr()
+			go func() {
+				req := secure.P2PMessage{
+					Type:     secure.MsgTypeFriendRequest,
+					Text:     pubKey + "|" + multiaddr,
+					SenderID: msg.UserID,
+				}
+				if err := m.p2pNode.SendMessage(msg.UserID, req); err != nil {
+					// Fallback: send invite via Slack DM.
+					if m.slackSvc != nil && m.currentCh != nil {
+						inviteText := fmt.Sprintf("Hey! I'd like to chat privately using Slackers TUI. "+
+							"Check it out: https://github.com/rw3iss/slackers")
+						_ = m.slackSvc.SendMessage(m.currentCh.ID, inviteText)
+					}
+				}
+			}()
+			m.warning = "Friend request sent to " + msg.Name
+		} else {
+			m.warning = "P2P not available — enable Secure Mode in settings"
+		}
+		return m, nil
+
+	case FriendRequestRespondMsg:
+		m.overlay = overlayNone
+		if msg.Accepted && m.friendStore != nil {
+			f := friends.Friend{
+				UserID:    msg.UserID,
+				Name:      msg.Name,
+				PublicKey: msg.PublicKey,
+				Multiaddr: msg.Multiaddr,
+			}
+			_ = m.friendStore.Add(f)
+			_ = m.friendStore.Save()
+			m.channels.SetFriendChannels(m.buildFriendChannels())
+			m.warning = msg.Name + " added as friend!"
+			// Send accept response over P2P.
+			if m.p2pNode != nil && m.secureMgr != nil {
+				go func() {
+					resp := secure.P2PMessage{
+						Type:     secure.MsgTypeFriendAccept,
+						Text:     m.secureMgr.OwnPublicKeyBase64() + "|" + m.p2pNode.Multiaddr(),
+						SenderID: msg.UserID,
+					}
+					_ = m.p2pNode.SendMessage(msg.UserID, resp)
+				}()
+			}
+		} else if !msg.Accepted && msg.UserID != "" {
+			m.warning = "Friend request declined"
+		}
+		return m, nil
+
+	case friendPingTickMsg:
+		return m, friendPingCmd(m.friendStore, m.p2pNode)
+
+	case FriendPingMsg:
+		for uid, on := range msg.Online {
+			chID := "friend:" + uid
+			if on {
+				m.channels.MarkUnread(chID)
+			} else {
+				m.channels.ClearUnread(chID)
+			}
+		}
+		return m, friendPingTickCmd()
 
 	case ErrMsg:
 		return m, setError(&m, msg.Err)
@@ -1360,6 +1601,8 @@ func (m Model) View() string {
 		return m.shortcutsEditor.View()
 	case overlayWhitelist:
 		return m.whitelist.View()
+	case overlayFriendRequest:
+		return m.friendRequest.View()
 	}
 
 	msgView := m.messages.View()
@@ -1715,11 +1958,33 @@ func (m *Model) persistLastSeen() {
 }
 
 // setChannelHeader updates the message view header with channel name and secure indicator.
+// buildFriendChannels creates Channel entries from the friend store.
+func (m *Model) buildFriendChannels() []types.Channel {
+	if m.friendStore == nil {
+		return nil
+	}
+	var channels []types.Channel
+	for _, f := range m.friendStore.All() {
+		channels = append(channels, types.Channel{
+			ID:       "friend:" + f.UserID,
+			Name:     f.Name,
+			IsFriend: true,
+			IsDM:     true,
+			UserID:   f.UserID,
+		})
+	}
+	return channels
+}
+
 func (m *Model) setChannelHeader() {
 	if m.currentCh == nil {
 		return
 	}
-	m.messages.SetChannelName("#" + m.channels.displayName(*m.currentCh))
+	prefix := "#"
+	if m.currentCh.IsFriend {
+		prefix = ""
+	}
+	m.messages.SetChannelName(prefix + m.channels.displayName(*m.currentCh))
 	m.messages.SetSecureLabel(m.secureIndicator())
 }
 
@@ -2169,5 +2434,61 @@ func checkNewMessagesBgCmd(svc slackpkg.SlackService, lastSeen map[string]string
 			return UnreadChannelsMsg{LatestTS: latestTS, IsBackground: true}
 		}
 		return UnreadChannelsMsg{ChannelIDs: ids, LatestTS: latestTS, IsBackground: true}
+	}
+}
+
+// loadFriendsCmd loads friend channels and pings each friend for online status.
+func loadFriendsCmd(store *friends.FriendStore, p2p *secure.P2PNode) tea.Cmd {
+	return func() tea.Msg {
+		if store == nil {
+			return FriendsLoadedMsg{}
+		}
+		all := store.All()
+		var channels []types.Channel
+		online := make(map[string]bool)
+		for _, f := range all {
+			ch := types.Channel{
+				ID:       "friend:" + f.UserID,
+				Name:     f.Name,
+				IsFriend: true,
+				IsDM:     true,
+				UserID:   f.UserID,
+			}
+			channels = append(channels, ch)
+			if p2p != nil && f.Multiaddr != "" {
+				_ = p2p.ConnectToPeer(f.UserID, f.Multiaddr)
+				if p2p.IsConnected(f.UserID) {
+					online[f.UserID] = true
+					store.SetOnline(f.UserID, true)
+				}
+			}
+		}
+		return FriendsLoadedMsg{Channels: channels, Online: online}
+	}
+}
+
+func friendPingTickCmd() tea.Cmd {
+	return tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
+		return friendPingTickMsg{}
+	})
+}
+
+func friendPingCmd(store *friends.FriendStore, p2p *secure.P2PNode) tea.Cmd {
+	return func() tea.Msg {
+		if store == nil || p2p == nil {
+			return FriendPingMsg{}
+		}
+		online := make(map[string]bool)
+		for _, f := range store.All() {
+			if f.Multiaddr != "" {
+				if !p2p.IsConnected(f.UserID) {
+					_ = p2p.ConnectToPeer(f.UserID, f.Multiaddr)
+				}
+				on := p2p.IsConnected(f.UserID)
+				online[f.UserID] = on
+				store.SetOnline(f.UserID, on)
+			}
+		}
+		return FriendPingMsg{Online: online}
 	}
 }

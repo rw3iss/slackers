@@ -17,6 +17,7 @@ import (
 	"github.com/rw3iss/slackers/internal/auth"
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/debug"
+	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/slack"
 	"github.com/rw3iss/slackers/internal/tui"
 	"github.com/spf13/cobra"
@@ -138,10 +139,16 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
+		// Load friends list.
+		friendStore := friends.NewFriendStore(friends.DefaultPath())
+		if err := friendStore.Load(); err != nil {
+			debug.Log("[friends] load error: %v", err)
+		}
+
 		slackSvc := slack.NewSlackClient(cfg.BotToken, cfg.UserToken)
 		socketSvc := slack.NewSocketClient(cfg.BotToken, cfg.AppToken)
 
-		model := tui.NewModel(slackSvc, socketSvc, cfg, version)
+		model := tui.NewModel(slackSvc, socketSvc, cfg, version, friendStore)
 		opts := []tea.ProgramOption{tea.WithAltScreen()}
 		if cfg.MouseEnabled {
 			opts = append(opts, tea.WithMouseCellMotion())
