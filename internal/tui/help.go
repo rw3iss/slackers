@@ -6,72 +6,136 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rw3iss/slackers/internal/shortcuts"
 )
 
-var helpSections = []struct {
-	title string
-	items []struct{ key, desc string }
-}{
+// helpEntry maps a shortcut action to its display description.
+type helpEntry struct {
+	action string // key in ShortcutMap (e.g. "quit")
+	desc   string
+	extra  string // optional hardcoded key text appended (for non-shortcut keys)
+}
+
+// helpSection defines a group of help entries.
+type helpSection struct {
+	title   string
+	entries []helpEntry
+}
+
+// helpLayout defines all sections and their entries.
+// The action field maps to the ShortcutMap key; the actual binding
+// is resolved at generation time so user overrides are reflected.
+var helpLayout = []helpSection{
 	{
 		title: "Navigation",
-		items: []struct{ key, desc string }{
-			{"Tab / Shift-Tab", "Cycle focus between panels"},
-			{"Esc", "Toggle between sidebar and input"},
-			{"Up / Down / k / j", "Navigate channels or scroll messages"},
-			{"Up / Down (input)", "Browse sent message history"},
-			{"PgUp / PgDn", "Scroll messages by page"},
-			{"Ctrl-U / Ctrl-D", "Half-page scroll (messages focused)"},
-			{"Home / End", "Jump to top / bottom of messages"},
+		entries: []helpEntry{
+			{"tab", "Cycle focus (forward)", ""},
+			{"shift_tab", "Cycle focus (backward)", ""},
+			{"escape", "Toggle between sidebar and input", ""},
+			{"up", "Navigate / scroll up", ""},
+			{"down", "Navigate / scroll down", ""},
+			{"page_up", "Scroll messages by page", ""},
+			{"page_down", "Scroll messages by page", ""},
+			{"half_page_up", "Half-page scroll (messages focused)", ""},
+			{"half_page_down", "Half-page scroll (messages focused)", ""},
+			{"home", "Jump to top", ""},
+			{"end", "Jump to bottom", ""},
 		},
 	},
 	{
 		title: "Messages & Files",
-		items: []struct{ key, desc string }{
-			{"Enter", "Select channel (sidebar) or send message (input)"},
-			{"i  or  /", "Focus the message input"},
-			{"Ctrl-F", "Search messages (Tab toggles scope)"},
-			{"Ctrl-U", "Attach file to send (opens file browser)"},
-			{"f (messages)", "Toggle file select mode"},
-			{"Ctrl-Up", "Enter file select mode from anywhere"},
-			{"Ctrl-Down", "Exit file select, focus input"},
-			{"Ctrl-L", "Browse all files across channels"},
-			{"Ctrl-D", "Cancel file download"},
-			{"Ctrl-\\", "Toggle input mode (normal/edit)"},
-			{"Alt-Enter", "New line (normal) or send (edit)"},
-			{"Shift-Enter", "Insert new line (both modes)"},
-			{"Ctrl-W", "Toggle full screen chat mode"},
+		entries: []helpEntry{
+			{"enter", "Select channel or send message", ""},
+			{"focus_input", "Focus the message input", ""},
+			{"search_messages", "Search messages (Tab toggles scope)", ""},
+			{"attach_file", "Attach file to send", ""},
+			{"toggle_file_select", "Toggle file select mode (messages)", ""},
+			{"enter_file_select", "Enter file select from anywhere", ""},
+			{"focus_input_global", "Exit file select, focus input", ""},
+			{"files_list", "Browse all files across channels", ""},
+			{"cancel_download", "Cancel file download", ""},
+			{"toggle_input_mode", "Toggle input mode (normal/edit)", ""},
+			{"", "New line (normal) or send (edit)", "Alt-Enter"},
+			{"", "Insert new line (both modes)", "Shift-Enter"},
+			{"toggle_full_mode", "Toggle full screen chat mode", ""},
 		},
 	},
 	{
 		title: "Channels",
-		items: []struct{ key, desc string }{
-			{"Ctrl-K", "Search and jump to a channel"},
-			{"Ctrl-N", "Jump to next unread channel"},
-			{"Ctrl-R", "Refresh channel list"},
-			{"Ctrl-X", "Hide selected channel"},
-			{"Ctrl-G", "View and unhide hidden channels"},
-			{"Ctrl-O", "Toggle hidden channels visible"},
-			{"Ctrl-A", "Rename/alias selected channel"},
-			{"Enter / Space", "Collapse/expand channel group"},
+		entries: []helpEntry{
+			{"search_channels", "Search and jump to a channel", ""},
+			{"next_unread", "Jump to next unread channel", ""},
+			{"refresh", "Refresh channel list", ""},
+			{"hide_channel", "Hide selected channel", ""},
+			{"show_hidden", "View and unhide hidden channels", ""},
+			{"toggle_hidden", "Toggle hidden channels visible", ""},
+			{"rename_group", "Rename/alias selected channel", ""},
+			{"sidebar_collapse", "Collapse/expand channel group", ""},
 		},
 	},
 	{
 		title: "Mouse (enable in settings)",
-		items: []struct{ key, desc string }{
-			{"Click", "Focus panel, select channel, download file"},
-			{"Scroll wheel", "Scroll messages or channels"},
-			{"Ctrl/Shift+scroll", "Fast scroll (5x)"},
-			{"Shift+click", "Select text (bypass mouse capture)"},
+		entries: []helpEntry{
+			{"", "Focus panel, select channel, download file", "Click"},
+			{"", "Scroll messages or channels", "Scroll wheel"},
+			{"", "Fast scroll (5x)", "Ctrl/Shift+scroll"},
+			{"", "Select text (bypass mouse capture)", "Shift+click"},
 		},
 	},
 	{
 		title: "App",
-		items: []struct{ key, desc string }{
-			{"Ctrl-H", "Toggle this help page"},
-			{"Ctrl-S", "Open settings"},
-			{"Ctrl-Q / Ctrl-C", "Quit"},
+		entries: []helpEntry{
+			{"help", "Toggle this help page", ""},
+			{"settings", "Open settings", ""},
+			{"quit", "Quit", ""},
 		},
 	},
+}
+
+// formatKeys returns a display string for a shortcut's key bindings.
+func formatKeys(sm shortcuts.ShortcutMap, action string) string {
+	keys := shortcuts.KeysForAction(sm, action)
+	if len(keys) == 0 {
+		return "???"
+	}
+	// Format each key for display.
+	display := make([]string, len(keys))
+	for i, k := range keys {
+		display[i] = formatKeyName(k)
+	}
+	return strings.Join(display, " / ")
+}
+
+// formatKeyName converts a shortcut key string to a readable display name.
+func formatKeyName(k string) string {
+	k = strings.ReplaceAll(k, "ctrl+", "Ctrl-")
+	k = strings.ReplaceAll(k, "shift+", "Shift-")
+	k = strings.ReplaceAll(k, "alt+", "Alt-")
+	switch k {
+	case "tab":
+		return "Tab"
+	case "Shift-tab":
+		return "Shift-Tab"
+	case "enter":
+		return "Enter"
+	case "esc":
+		return "Esc"
+	case "pgup":
+		return "PgUp"
+	case "pgdown":
+		return "PgDn"
+	case "home":
+		return "Home"
+	case "end":
+		return "End"
+	case "up":
+		return "Up"
+	case "down":
+		return "Down"
+	case " ":
+		return "Space"
+	}
+	return k
 }
 
 // HelpModel holds state for the scrollable help overlay.
@@ -79,6 +143,7 @@ type HelpModel struct {
 	scrollOffset int
 	totalLines   int
 	visibleLines int
+	lines        []string // cached rendered lines
 	width        int
 	height       int
 	version      string
@@ -89,23 +154,47 @@ func NewHelpModel(version string) HelpModel {
 	return HelpModel{version: version}
 }
 
+// BuildLines generates the help content lines from the current shortcut map.
+func (m *HelpModel) BuildLines(sm shortcuts.ShortcutMap) {
+	sectionTitleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorAccent)
+
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("229")).
+		Width(24)
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	var lines []string
+	for si, section := range helpLayout {
+		if si > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, sectionTitleStyle.Render(section.title))
+		for _, entry := range section.entries {
+			var keyText string
+			if entry.action != "" {
+				keyText = formatKeys(sm, entry.action)
+			} else {
+				keyText = entry.extra
+			}
+			lines = append(lines, "  "+keyStyle.Render(keyText)+descStyle.Render(entry.desc))
+		}
+	}
+
+	m.lines = lines
+	m.totalLines = len(lines)
+}
+
 // SetSize sets the overlay dimensions.
 func (m *HelpModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	// Box height minus border(2) + padding(2) + header(4) + footer(3) = 11
 	m.visibleLines = h - 4 - 11
 	if m.visibleLines < 3 {
 		m.visibleLines = 3
-	}
-	// Count total content lines.
-	m.totalLines = 0
-	for si, section := range helpSections {
-		if si > 0 {
-			m.totalLines++ // blank line between sections
-		}
-		m.totalLines++ // section title
-		m.totalLines += len(section.items)
 	}
 }
 
@@ -166,17 +255,6 @@ func (m *HelpModel) View() string {
 		Width(boxWidth).
 		Align(lipgloss.Center)
 
-	sectionTitleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorAccent)
-
-	keyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("229")).
-		Width(24)
-
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
-
 	dimStyle := lipgloss.NewStyle().
 		Foreground(ColorMuted).
 		Italic(true)
@@ -186,35 +264,18 @@ func (m *HelpModel) View() string {
 		Width(boxWidth).
 		Align(lipgloss.Center)
 
-	// Build all lines.
-	var lines []string
-	for si, section := range helpSections {
-		if si > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, sectionTitleStyle.Render(section.title))
-		for _, item := range section.items {
-			lines = append(lines, "  "+keyStyle.Render(item.key)+descStyle.Render(item.desc))
-		}
-	}
-
-	m.totalLines = len(lines)
-
 	// Apply scroll window.
-	maxScroll := m.totalLines - m.visibleLines
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if m.scrollOffset > maxScroll {
-		m.scrollOffset = maxScroll
-	}
+	m.clampScroll()
 
 	start := m.scrollOffset
 	end := start + m.visibleLines
-	if end > len(lines) {
-		end = len(lines)
+	if end > len(m.lines) {
+		end = len(m.lines)
 	}
-	visible := lines[start:end]
+	if start > len(m.lines) {
+		start = len(m.lines)
+	}
+	visible := m.lines[start:end]
 
 	// Build final content.
 	var b strings.Builder
@@ -226,8 +287,8 @@ func (m *HelpModel) View() string {
 	b.WriteString(strings.Join(visible, "\n"))
 
 	b.WriteString("\n\n")
-	if maxScroll > 0 {
-		scrollInfo := dimStyle.Render(fmt.Sprintf("  [%d/%d] ", m.scrollOffset+1, maxScroll+1))
+	if m.maxScroll() > 0 {
+		scrollInfo := dimStyle.Render(fmt.Sprintf("  [%d/%d] ", m.scrollOffset+1, m.maxScroll()+1))
 		b.WriteString(scrollInfo)
 	}
 	b.WriteString(dimStyle.Render("Arrow keys/scroll to navigate | Esc or Ctrl-H to close"))

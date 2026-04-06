@@ -387,6 +387,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.help = NewHelpModel(m.version)
 				m.help.SetSize(m.width, m.height)
+				m.help.BuildLines(m.shortcutMap)
 				m.overlay = overlayHelp
 			}
 			return m, nil
