@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +41,9 @@ type Config struct {
 	PollIntervalBg  int               `json:"poll_interval_bg,omitempty"`
 	PollPriority    int               `json:"poll_priority,omitempty"`
 	Notifications   bool              `json:"notifications,omitempty"`
+	SlackerID       string            `json:"slacker_id,omitempty"`
+	MyName          string            `json:"my_name,omitempty"`
+	MyEmail         string            `json:"my_email,omitempty"`
 	ConfigPath      string            `json:"-"`
 }
 
@@ -107,7 +112,20 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.ConfigPath = path
 
+	// Generate a unique SlackerID on first run.
+	if cfg.SlackerID == "" {
+		cfg.SlackerID = generateSlackerID()
+		_ = Save(cfg)
+	}
+
 	return cfg, nil
+}
+
+// generateSlackerID creates a random 16-byte hex identifier.
+func generateSlackerID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // Save writes the configuration to its ConfigPath as formatted JSON,
