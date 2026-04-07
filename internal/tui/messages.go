@@ -115,6 +115,10 @@ type MessageViewModel struct {
 	// Inline collapse — track which message replies are collapsed
 	collapsedReplies map[string]bool
 
+	// boxFirstMessage tells renderMessageList to wrap the first message in
+	// horizontal rules so it stands out (used by the thread view).
+	boxFirstMessage bool
+
 	// Line-to-message map for click resolution (rebuilt in renderMessages).
 	lineToMsgID    map[int]string // line index → message ID for the message at that line
 	replyLineMsgID map[int]string // line index → parent message ID for "X replies" lines
@@ -1039,8 +1043,13 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 // View returns the rendered viewport with a sticky date header.
 func (m MessageViewModel) View() string {
 	headerParts := []string{}
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	if m.channelName != "" {
-		headerParts = append(headerParts, lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render(m.channelName))
+		title := m.channelName
+		if m.threadMode {
+			title = "[Thread] " + title
+		}
+		headerParts = append(headerParts, titleStyle.Render(title))
 	}
 	if m.secureLabel != "" {
 		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00")).Render(" "+m.secureLabel))
@@ -1060,6 +1069,10 @@ func (m MessageViewModel) View() string {
 		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorMuted).Render("  [f: select files]"))
 	}
 
+	if m.threadMode {
+		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorMuted).Italic(true).Render("  (Esc to exit thread, type to reply)"))
+	}
+
 	header := strings.Join(headerParts, "") + "\n"
 
 	content := header + m.viewport.View()
@@ -1077,6 +1090,11 @@ func (m MessageViewModel) View() string {
 
 // visibleDate estimates the date of messages currently visible at the top of the viewport.
 func (m MessageViewModel) visibleDate() string {
+	// In thread view, always show the parent message's date — the thread is
+	// pinned to that message, not to the user's full chat history.
+	if m.threadMode && m.threadParent != nil {
+		return formatRelativeDate(m.threadParent.Timestamp)
+	}
 	var msgs []types.Message
 	if m.contextMode {
 		msgs = m.contextMessages
@@ -1097,7 +1115,10 @@ func (m MessageViewModel) visibleDate() string {
 		approxIdx = len(msgs) - 1
 	}
 
-	ts := msgs[approxIdx].Timestamp
+	return formatRelativeDate(msgs[approxIdx].Timestamp)
+}
+
+func formatRelativeDate(ts time.Time) string {
 	today := time.Now()
 	if ts.Year() == today.Year() && ts.YearDay() == today.YearDay() {
 		return "Today"
@@ -1154,32 +1175,28 @@ func (m *MessageViewModel) rebuildContent() {
 }
 
 // renderThreadView renders the thread parent + its replies in a focused view.
+// The thread title and exit hint are now part of the pane header (View()) so
+// they don't take up viewport rows here.
 func (m *MessageViewModel) renderThreadView() string {
 	if m.threadParent == nil {
 		return ""
 	}
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
-	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
-
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("── Thread ──"))
-	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("(Esc to exit thread, type to reply)"))
-	b.WriteString("\n\n")
 
 	// Render parent + replies as a temporary message slice.
 	saved := m.messages
 	saveReplyFmt := m.replyFormat
+	saveBox := m.boxFirstMessage
 	thread := []types.Message{*m.threadParent}
 	thread = append(thread, m.threadParent.Replies...)
 	m.messages = thread
-	m.replyFormat = "" // don't recursively render replies inside thread
+	m.replyFormat = ""        // don't recursively render replies inside thread
+	m.boxFirstMessage = true  // visually box the parent message
 	rendered := m.renderMessages()
 	m.messages = saved
 	m.replyFormat = saveReplyFmt
+	m.boxFirstMessage = saveBox
 
-	b.WriteString(rendered)
-	return b.String()
+	return rendered
 }
 
 func (m *MessageViewModel) renderMessages() string {
@@ -1279,6 +1296,16 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		text := format.FormatMessage(msg.Text, m.users)
 		wrapped := wordWrap(text, maxWidth)
 		textLines := strings.Split(wrapped, "\n")
+
+		// Top rule for the boxed first message (used by thread view).
+		if m.boxFirstMessage && i == 0 {
+			ruleStyle := lipgloss.NewStyle().Foreground(ColorPrimary)
+			ruleW := maxWidth - 2
+			if ruleW < 10 {
+				ruleW = 10
+			}
+			lines = append(lines, ruleStyle.Render("  "+strings.Repeat("─", ruleW)))
+		}
 
 		// Track which line this message starts at.
 		if msg.MessageID != "" {
@@ -1454,6 +1481,16 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 					lines = append(lines, replyIndent+"  "+strings.Join(parts, " "))
 				}
 			}
+		}
+
+		// Bottom rule for the boxed first message (used by thread view).
+		if m.boxFirstMessage && i == 0 {
+			ruleStyle := lipgloss.NewStyle().Foreground(ColorPrimary)
+			ruleW := maxWidth - 2
+			if ruleW < 10 {
+				ruleW = 10
+			}
+			lines = append(lines, ruleStyle.Render("  "+strings.Repeat("─", ruleW)))
 		}
 
 		lines = append(lines, "")
