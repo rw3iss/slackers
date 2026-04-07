@@ -43,6 +43,7 @@ const (
 	overlayFriendRequest
 	overlayFriendsConfig
 	overlayEmojiPicker
+	overlayMsgOptions
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -193,6 +194,7 @@ type Model struct {
 	friendRequest   FriendRequestModel
 	friendsConfig   FriendsConfigModel
 	emojiPicker     EmojiPickerModel
+	msgOptions      MsgOptionsModel
 
 	// Reactions
 	reactMsgID string // message ID for pending reaction
@@ -701,6 +703,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.emojiPicker, cmd = m.emojiPicker.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayMsgOptions {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.msgOptions, cmd = m.msgOptions.Update(msg)
 			return m, cmd
 		}
 
@@ -1305,6 +1316,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayNone
 		// Refresh friend channels in sidebar after config changes.
 		m.channels.SetFriendChannels(m.buildFriendChannels())
+		return m, nil
+
+	case MsgOptionsSelectMsg:
+		m.overlay = overlayNone
+		switch msg.Action {
+		case MsgActionReact:
+			m.reactMsgID = msg.MessageID
+			m.emojiPicker = NewEmojiPicker(m.cfg.EmojiFavorites, EmojiPurposeReaction)
+			m.emojiPicker.SetSize(m.width, m.height)
+			m.overlay = overlayEmojiPicker
+		case MsgActionReply:
+			return m, func() tea.Msg {
+				return ReplyToMessageMsg{MessageID: msg.MessageID, Preview: msg.Preview}
+			}
+		}
 		return m, nil
 
 	case ReplyToMessageMsg:
@@ -1936,6 +1962,10 @@ func (m Model) View() string {
 		return m.friendsConfig.View()
 	case overlayEmojiPicker:
 		return m.emojiPicker.View()
+	case overlayMsgOptions:
+		// Render base view, then overlay options on top.
+		base := m.renderBaseView()
+		return m.msgOptions.View(base)
 	}
 
 	msgView := m.messages.View()
@@ -1956,6 +1986,22 @@ func (m Model) View() string {
 		inputBar,
 		statusLine,
 	)
+}
+
+// renderBaseView builds the base TUI view (channels + messages + input + status).
+func (m Model) renderBaseView() string {
+	msgView := m.messages.View()
+	var topRow string
+	showSidebar := !m.fullMode || m.focus == types.FocusSidebar
+	if showSidebar {
+		sidebar := m.channels.View()
+		topRow = lipgloss.JoinHorizontal(lipgloss.Top, sidebar, msgView)
+	} else {
+		topRow = msgView
+	}
+	inputBar := m.input.View()
+	statusLine := m.renderStatusBar()
+	return lipgloss.JoinVertical(lipgloss.Left, topRow, inputBar, statusLine)
 }
 
 // applySettings reads the current config and resizes components.
@@ -2130,6 +2176,17 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				// Messages area clicked.
 				m.focus = types.FocusMessages
 				m.updateFocus()
+
+				// Right-click: show options menu.
+				if msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress {
+					msgID, preview := m.messages.MessageAtClick(y)
+					if msgID != "" {
+						m.msgOptions = NewMsgOptions(msgID, preview, x+1, y+1)
+						m.msgOptions.SetSize(m.width, m.height)
+						m.overlay = overlayMsgOptions
+						return m, nil
+					}
+				}
 
 				// Check if a file was clicked.
 				file := m.messages.FileAtClick(y)

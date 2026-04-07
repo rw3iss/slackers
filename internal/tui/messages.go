@@ -211,6 +211,47 @@ func (m *MessageViewModel) SetFocused(focused bool) {
 }
 
 // FileAtClick returns the file at the given Y coordinate in the viewport, or nil.
+// MessageAtClick returns the message ID and preview at the given Y coordinate, or empty.
+func (m *MessageViewModel) MessageAtClick(y int) (string, string) {
+	// Find which message corresponds to the clicked line.
+	// Walk through messages and count rendered lines.
+	content := m.viewport.View()
+	lines := strings.Split(content, "\n")
+	clickedLine := y - 1
+	if clickedLine < 0 || clickedLine >= len(lines) {
+		return "", ""
+	}
+	target := strings.TrimSpace(lines[clickedLine])
+	if target == "" {
+		return "", ""
+	}
+	// Walk messages and find the one whose user/text appears on this line.
+	// Match by checking if any field of the message appears in the clicked line.
+	for _, msg := range m.messages {
+		if msg.MessageID == "" {
+			continue
+		}
+		if msg.UserName != "" && strings.Contains(target, msg.UserName) {
+			preview := msg.Text
+			if len(preview) > 40 {
+				preview = preview[:40] + "..."
+			}
+			return msg.MessageID, preview
+		}
+	}
+	// Fallback: return the last message before this line.
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].MessageID != "" {
+			preview := m.messages[i].Text
+			if len(preview) > 40 {
+				preview = preview[:40] + "..."
+			}
+			return m.messages[i].MessageID, preview
+		}
+	}
+	return "", ""
+}
+
 func (m *MessageViewModel) FileAtClick(y int) *types.FileInfo {
 	// Get the rendered content and find which line was clicked.
 	content := m.viewport.View()
