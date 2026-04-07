@@ -332,6 +332,13 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 					PubKey:    msg.TargetMsgID,
 					Multiaddr: msg.ReactionEmoji,
 				}
+			case secure.MsgTypeReactionRemove:
+				p2pChan <- P2PReceivedMsg{
+					SenderID:  peerSlackID,
+					Text:      "__reaction_remove__",
+					PubKey:    msg.TargetMsgID,
+					Multiaddr: msg.ReactionEmoji,
+				}
 			case secure.MsgTypeFileOffer:
 				p2pChan <- P2PReceivedMsg{
 					SenderID: peerSlackID,
@@ -1381,6 +1388,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case ToggleReactionMsg:
+		m.toggleReaction(msg.MessageID, msg.Emoji)
+		return m, nil
+
 	case ReactModeSelectMsg:
 		if msg.MessageID != "" {
 			m.reactMsgID = msg.MessageID
@@ -1731,6 +1742,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Handle incoming reactions.
+		if msg.Text == "__reaction_remove__" {
+			targetMsgID := msg.PubKey
+			emoji := msg.Multiaddr
+			if m.friendHistory != nil {
+				m.friendHistory.RemoveReaction(msg.SenderID, targetMsgID, emoji, msg.SenderID)
+			}
+			friendChID := "friend:" + msg.SenderID
+			if m.currentCh != nil && m.currentCh.ID == friendChID {
+				m.messages.RemoveReactionLocal(targetMsgID, emoji, msg.SenderID)
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
 		if msg.Text == "__reaction__" {
 			targetMsgID := msg.PubKey
 			emoji := msg.Multiaddr
@@ -2268,6 +2295,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.focus = types.FocusMessages
 				m.updateFocus()
 
+				// Check if a reaction badge was clicked — toggle the reaction.
+				msgPaneX := x - m.sidebarWidth - 2
+				if reactMsgID, emoji := m.messages.ReactionAtClick(msgPaneX, y); reactMsgID != "" {
+					m.toggleReaction(reactMsgID, emoji)
+					return m, nil
+				}
+
 				// Check if a "X replies" line was clicked.
 				if replyParentID := m.messages.ReplyLineMessageID(y); replyParentID != "" {
 					if m.cfg.ReplyFormat == "inside" {
@@ -2456,6 +2490,64 @@ func (m *Model) persistLastSeen() {
 }
 
 // setChannelHeader updates the message view header with channel name and secure indicator.
+// toggleReaction adds or removes the user's reaction on a message.
+// If the user has already reacted with this emoji, removes it; otherwise adds it.
+func (m *Model) toggleReaction(messageID, emoji string) {
+	// Check if "me" is already in the reaction's user list.
+	hasReacted := false
+	for _, r := range m.messages.MessageReactions(messageID) {
+		if r.Emoji == emoji {
+			for _, uid := range r.UserIDs {
+				if uid == "me" {
+					hasReacted = true
+					break
+				}
+			}
+			break
+		}
+	}
+
+	if m.currentCh == nil {
+		return
+	}
+
+	if m.currentCh.IsFriend && m.p2pNode != nil {
+		peerUID := m.currentCh.UserID
+		msgType := secure.MsgTypeReaction
+		if hasReacted {
+			msgType = secure.MsgTypeReactionRemove
+			m.messages.RemoveReactionLocal(messageID, emoji, "me")
+			if m.friendHistory != nil {
+				m.friendHistory.RemoveReaction(peerUID, messageID, emoji, "me")
+			}
+		} else {
+			m.messages.AddReactionLocal(messageID, emoji, "me")
+			if m.friendHistory != nil {
+				m.friendHistory.UpdateReaction(peerUID, messageID, emoji, "me")
+			}
+		}
+		go m.p2pNode.SendMessage(peerUID, secure.P2PMessage{
+			Type:          msgType,
+			TargetMsgID:   messageID,
+			ReactionEmoji: emoji,
+			SenderID:      peerUID,
+			Timestamp:     time.Now().Unix(),
+		})
+		return
+	}
+
+	if m.slackSvc != nil {
+		channelID := m.currentCh.ID
+		if hasReacted {
+			m.messages.RemoveReactionLocal(messageID, emoji, "me")
+			go m.slackSvc.RemoveReaction(channelID, messageID, emoji)
+		} else {
+			m.messages.AddReactionLocal(messageID, emoji, "me")
+			go m.slackSvc.AddReaction(channelID, messageID, emoji)
+		}
+	}
+}
+
 // addLocalReaction updates in-memory friend message reactions and refreshes the view.
 func (m *Model) addLocalReaction(friendUID, messageID, emoji string) {
 	msgs := m.friendMessages[friendUID]

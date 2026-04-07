@@ -35,7 +35,8 @@ const (
 	MsgTypeFileOffer     = "file_offer"    // sender offers a file
 	MsgTypeFileRequest   = "file_request"  // receiver requests the file data
 	MsgTypeFileData      = "file_data"     // sender sends file chunk (base64)
-	MsgTypeReaction      = "reaction"      // emoji reaction on a message
+	MsgTypeReaction       = "reaction"        // add an emoji reaction
+	MsgTypeReactionRemove = "reaction_remove" // remove an emoji reaction
 
 	// Protocol for file transfers (separate from messaging).
 	P2PFileProtocol = protocol.ID("/slackers/file/1.0.0")

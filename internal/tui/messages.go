@@ -27,6 +27,12 @@ type ThreadOpenedMsg struct {
 	MessageID string
 }
 
+// ToggleReactionMsg is sent when the user wants to toggle a reaction on a message.
+type ToggleReactionMsg struct {
+	MessageID string
+	Emoji     string
+}
+
 // emojiLookup maps shortcodes to unicode for reaction rendering.
 var emojiLookup map[string]string
 
@@ -58,6 +64,15 @@ type selectableItem struct {
 	file types.FileInfo
 }
 
+// reactionHit tracks a clickable reaction badge for mouse hit-testing.
+type reactionHit struct {
+	messageID string
+	emoji     string
+	line      int // absolute line in viewport content
+	startCol  int // visible column where the badge starts
+	endCol    int // visible column where the badge ends
+}
+
 // MessageViewModel displays messages in a scrollable viewport.
 type MessageViewModel struct {
 	viewport    viewport.Model
@@ -77,8 +92,9 @@ type MessageViewModel struct {
 	selectIdx   int
 
 	// React mode — select a message to react to
-	reactMode bool
-	reactIdx  int // index into messages
+	reactMode       bool
+	reactIdx        int // index into messages
+	reactionSelIdx  int // -1 = no reaction selected; otherwise index into reactions of selected message
 
 	// Thread view — viewing a single message + its replies
 	threadMode      bool
@@ -92,6 +108,7 @@ type MessageViewModel struct {
 	// Line-to-message map for click resolution (rebuilt in renderMessages).
 	lineToMsgID    map[int]string // line index → message ID for the message at that line
 	replyLineMsgID map[int]string // line index → parent message ID for "X replies" lines
+	reactionHits   []reactionHit  // clickable reaction badges with positions
 
 	// Context mode (search result viewing)
 	contextMode     bool
@@ -232,6 +249,31 @@ func (m *MessageViewModel) SetSize(w, h int) {
 
 func (m *MessageViewModel) SetFocused(focused bool) {
 	m.focused = focused
+}
+
+// ReactionAtClick returns the (messageID, emoji) of a reaction badge at the click position, or empty.
+func (m *MessageViewModel) ReactionAtClick(x, y int) (string, string) {
+	// x is the click X relative to the messages pane (0 = pane left edge).
+	// y is the click Y relative to the messages pane (0 = pane top).
+	// Account for: pane border (1 col) and the header line (1 row).
+	contentX := x - 1 // strip border
+	absLine := y - 1 + m.viewport.YOffset
+	for _, h := range m.reactionHits {
+		if h.line == absLine && contentX >= h.startCol && contentX < h.endCol {
+			return h.messageID, h.emoji
+		}
+	}
+	return "", ""
+}
+
+// MessageReactions returns the reactions on the message at the given index in the cache.
+func (m *MessageViewModel) MessageReactions(messageID string) []types.Reaction {
+	for _, msg := range m.messages {
+		if msg.MessageID == messageID {
+			return msg.Reactions
+		}
+	}
+	return nil
 }
 
 // ReplyLineMessageID returns the parent message ID if the line clicked is a "X replies" line.
@@ -386,6 +428,7 @@ func (m *MessageViewModel) EnterReactMode() bool {
 		m.selectMode = false
 		m.reactMode = true
 		m.reactIdx = len(m.messages) - 1
+		m.reactionSelIdx = -1
 		m.rebuildContent()
 		return true
 	}
@@ -603,6 +646,7 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 			case "up":
 				if m.reactIdx > 0 {
 					m.reactIdx--
+					m.reactionSelIdx = -1
 					m.rebuildContent()
 					m.scrollToReactCursor()
 				}
@@ -610,11 +654,46 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 			case "down":
 				if m.reactIdx < len(m.messages)-1 {
 					m.reactIdx++
+					m.reactionSelIdx = -1
 					m.rebuildContent()
 					m.scrollToReactCursor()
 				}
 				return m, nil
+			case "left":
+				sel := m.SelectedMessage()
+				if sel != nil && len(sel.Reactions) > 0 {
+					if m.reactionSelIdx <= 0 {
+						m.reactionSelIdx = len(sel.Reactions) - 1
+					} else {
+						m.reactionSelIdx--
+					}
+					m.rebuildContent()
+				}
+				return m, nil
+			case "right":
+				sel := m.SelectedMessage()
+				if sel != nil && len(sel.Reactions) > 0 {
+					if m.reactionSelIdx >= len(sel.Reactions)-1 {
+						m.reactionSelIdx = 0
+					} else {
+						m.reactionSelIdx++
+					}
+					m.rebuildContent()
+				}
+				return m, nil
 			case "enter":
+				// If a reaction is selected, toggle it via parent model.
+				selR := m.SelectedMessage()
+				if selR != nil && m.reactionSelIdx >= 0 && m.reactionSelIdx < len(selR.Reactions) {
+					emoji := selR.Reactions[m.reactionSelIdx].Emoji
+					msgID := selR.MessageID
+					m.reactMode = false
+					m.reactionSelIdx = -1
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return ToggleReactionMsg{MessageID: msgID, Emoji: emoji}
+					}
+				}
 				// Enter on a message:
 				// - inside mode + has replies → enter thread view
 				// - otherwise → start reply mode (insert [REPLY:id] in input)
@@ -864,6 +943,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 	// Reset line maps for click resolution.
 	m.lineToMsgID = make(map[int]string)
 	m.replyLineMsgID = make(map[int]string)
+	m.reactionHits = nil
 
 	var lines []string
 	maxWidth := m.width - 4
@@ -911,7 +991,11 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		// Highlight selected message in select mode.
 		if m.reactMode && i == m.reactIdx {
 			selectHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
-			headerLine = selectHighlight.Render(headerLine + " [Enter to reply, r to react]")
+			label := " [Enter: reply  r: react  ←/→: select reaction]"
+			if len(msg.Reactions) == 0 {
+				label = " [Enter: reply  r: react]"
+			}
+			headerLine = selectHighlight.Render(headerLine + label)
 		}
 
 		text := format.FormatMessage(msg.Text, m.users)
@@ -959,27 +1043,63 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				replyLabel = replyStyle.Render(fmt.Sprintf("%d %s", replyCount, pluralReplies(replyCount)))
 			}
 			var reactionParts []string
+			var reactionWidths []int
 			if len(msg.Reactions) > 0 {
 				reactionStyle := lipgloss.NewStyle().
 					Background(lipgloss.Color("236")).
 					Foreground(lipgloss.Color("252")).
 					Padding(0, 1)
-				for _, r := range msg.Reactions {
+				selectedReactionStyle := lipgloss.NewStyle().
+					Background(lipgloss.Color("240")).
+					Foreground(ColorPrimary).
+					Bold(true).
+					Padding(0, 1)
+				for ri, r := range msg.Reactions {
 					emoji := r.Emoji
 					if e, ok := emojiLookup[r.Emoji]; ok {
 						emoji = e
 					}
-					reactionParts = append(reactionParts, reactionStyle.Render(
-						fmt.Sprintf("%s %d", emoji, r.Count)))
+					var rendered string
+					if m.reactMode && i == m.reactIdx && ri == m.reactionSelIdx {
+						rendered = selectedReactionStyle.Render(fmt.Sprintf("%s %d", emoji, r.Count))
+					} else {
+						rendered = reactionStyle.Render(fmt.Sprintf("%s %d", emoji, r.Count))
+					}
+					reactionParts = append(reactionParts, rendered)
+					reactionWidths = append(reactionWidths, lipgloss.Width(rendered))
 				}
 			}
 			reactionsStr := strings.Join(reactionParts, " ")
-			// Reply count on left, reactions on right (or stacked).
+
+			// Compute the start column of the reactions block.
+			// Layout: "    " (4 spaces) + replyLabel + "  " (2 spaces) + reactions (if both)
+			//        OR "    " + reactions (if no reply)
+			reactionStartCol := 4
 			if replyLabel != "" && reactionsStr != "" {
-				m.replyLineMsgID[len(lines)] = msg.MessageID
+				reactionStartCol = 4 + lipgloss.Width(replyLabel) + 2
+			}
+
+			// Record reaction badge positions for click hit-testing.
+			currentLine := len(lines)
+			if len(msg.Reactions) > 0 {
+				col := reactionStartCol
+				for i, w := range reactionWidths {
+					m.reactionHits = append(m.reactionHits, reactionHit{
+						messageID: msg.MessageID,
+						emoji:     msg.Reactions[i].Emoji,
+						line:      currentLine,
+						startCol:  col,
+						endCol:    col + w,
+					})
+					col += w + 1 // +1 for space separator
+				}
+			}
+
+			if replyLabel != "" && reactionsStr != "" {
+				m.replyLineMsgID[currentLine] = msg.MessageID
 				lines = append(lines, "    "+replyLabel+"  "+reactionsStr)
 			} else if replyLabel != "" {
-				m.replyLineMsgID[len(lines)] = msg.MessageID
+				m.replyLineMsgID[currentLine] = msg.MessageID
 				lines = append(lines, "    "+replyLabel)
 			} else {
 				lines = append(lines, "    "+reactionsStr)
