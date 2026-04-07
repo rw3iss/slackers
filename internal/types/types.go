@@ -43,7 +43,9 @@ type Message struct {
 	ChannelID   string     `json:"channel_id,omitempty"`
 	Files       []FileInfo `json:"files,omitempty"`
 	Reactions   []Reaction `json:"reactions,omitempty"`
-	IsEncrypted bool       `json:"is_encrypted,omitempty"` // true if stored encrypted on disk
+	Replies     []Message  `json:"replies,omitempty"`     // child messages (replies)
+	ReplyTo     string     `json:"reply_to,omitempty"`    // parent message ID if this is a reply
+	IsEncrypted bool       `json:"is_encrypted,omitempty"`
 }
 
 // User represents a Slack workspace member.

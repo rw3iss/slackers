@@ -16,6 +16,12 @@ import (
 // ReactModeSelectMsg is sent when the user selects a message to react to.
 type ReactModeSelectMsg struct{ MessageID string }
 
+// ReplyToMessageMsg is sent when the user starts a reply to a message.
+type ReplyToMessageMsg struct {
+	MessageID string
+	Preview   string
+}
+
 // emojiLookup maps shortcodes to unicode for reaction rendering.
 var emojiLookup map[string]string
 
@@ -54,6 +60,7 @@ type MessageViewModel struct {
 	users       map[string]string
 	channelName string
 	secureLabel string
+	replyFormat string
 	focused     bool
 	autoScroll  bool
 	width       int
@@ -184,6 +191,11 @@ func (m *MessageViewModel) SetChannelName(name string) {
 
 func (m *MessageViewModel) SetSecureLabel(label string) {
 	m.secureLabel = label
+}
+
+func (m *MessageViewModel) SetReplyFormat(format string) {
+	m.replyFormat = format
+	m.rebuildContent()
 }
 
 func (m *MessageViewModel) SetSize(w, h int) {
@@ -351,6 +363,22 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				m.rebuildContent()
 				return m, func() tea.Msg {
 					return ReactModeSelectMsg{MessageID: msgID}
+				}
+			case "r":
+				// Reply to selected message.
+				msgID := m.SelectedMessageID()
+				preview := ""
+				if m.reactIdx >= 0 && m.reactIdx < len(m.messages) {
+					t := m.messages[m.reactIdx].Text
+					if len(t) > 40 {
+						t = t[:40] + "..."
+					}
+					preview = t
+				}
+				m.reactMode = false
+				m.rebuildContent()
+				return m, func() tea.Msg {
+					return ReplyToMessageMsg{MessageID: msgID, Preview: preview}
 				}
 			case "esc":
 				m.reactMode = false
@@ -603,28 +631,70 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			fileIdx++
 		}
 
-		// Render reactions.
-		if len(msg.Reactions) > 0 {
-			var reactionParts []string
-			reactionStyle := lipgloss.NewStyle().
-				Background(lipgloss.Color("236")).
-				Foreground(lipgloss.Color("252")).
-				Padding(0, 1)
-			for _, r := range msg.Reactions {
-				emoji := r.Emoji
-				if e, ok := emojiLookup[r.Emoji]; ok {
-					emoji = e
-				}
-				reactionParts = append(reactionParts, reactionStyle.Render(
-					fmt.Sprintf("%s %d", emoji, r.Count)))
+		// Build reply count + reactions row.
+		replyCount := len(msg.Replies)
+		if replyCount > 0 || len(msg.Reactions) > 0 {
+			replyLabel := ""
+			if replyCount > 0 {
+				replyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Italic(true)
+				replyLabel = replyStyle.Render(fmt.Sprintf("%d %s", replyCount, pluralReplies(replyCount)))
 			}
-			lines = append(lines, "    "+strings.Join(reactionParts, " "))
+			var reactionParts []string
+			if len(msg.Reactions) > 0 {
+				reactionStyle := lipgloss.NewStyle().
+					Background(lipgloss.Color("236")).
+					Foreground(lipgloss.Color("252")).
+					Padding(0, 1)
+				for _, r := range msg.Reactions {
+					emoji := r.Emoji
+					if e, ok := emojiLookup[r.Emoji]; ok {
+						emoji = e
+					}
+					reactionParts = append(reactionParts, reactionStyle.Render(
+						fmt.Sprintf("%s %d", emoji, r.Count)))
+				}
+			}
+			reactionsStr := strings.Join(reactionParts, " ")
+			// Reply count on left, reactions on right (or stacked).
+			if replyLabel != "" && reactionsStr != "" {
+				lines = append(lines, "    "+replyLabel+"  "+reactionsStr)
+			} else if replyLabel != "" {
+				lines = append(lines, "    "+replyLabel)
+			} else {
+				lines = append(lines, "    "+reactionsStr)
+			}
+		}
+
+		// Inline reply rendering (if enabled).
+		if m.replyFormat == "inline" && replyCount > 0 {
+			replyIndent := "        "
+			replyHeaderStyle := lipgloss.NewStyle().Foreground(ColorMuted)
+			for _, reply := range msg.Replies {
+				rTime := reply.Timestamp.Format("15:04")
+				rName := reply.UserName
+				if rName == "" {
+					rName = reply.UserID
+				}
+				header := replyHeaderStyle.Render(fmt.Sprintf("↳ %s %s", rName, rTime))
+				lines = append(lines, replyIndent+header)
+				rText := format.FormatMessage(reply.Text, m.users)
+				for _, rLine := range strings.Split(rText, "\n") {
+					lines = append(lines, replyIndent+"  "+rLine)
+				}
+			}
 		}
 
 		lines = append(lines, "")
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func pluralReplies(n int) string {
+	if n == 1 {
+		return "reply"
+	}
+	return "replies"
 }
 
 func wordWrap(text string, width int) string {

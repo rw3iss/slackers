@@ -42,6 +42,7 @@ type Config struct {
 	PollPriority    int               `json:"poll_priority,omitempty"`
 	Notifications   bool              `json:"notifications,omitempty"`
 	EmojiFavorites      []string      `json:"emoji_favorites,omitempty"`
+	ReplyFormat         string        `json:"reply_format,omitempty"` // "inline" or "inside"
 	FriendHistoryDays   int          `json:"friend_history_days,omitempty"`   // 0 = keep all
 	FriendHistoryEncrypt bool        `json:"friend_history_encrypt,omitempty"`
 	SlackerID       string            `json:"slacker_id,omitempty"`

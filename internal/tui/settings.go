@@ -150,6 +150,13 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				description: "Manage users allowed for E2E encrypted messaging",
 			},
 			{
+				label:       "Reply Format",
+				key:         "reply_format",
+				value:       replyFormatVal(cfg.ReplyFormat),
+				description: "How replies appear in chat (inline = nested below, inside = enter to view)",
+				options:     []string{"inline", "inside"},
+			},
+			{
 				label:       "Friends Config",
 				key:         "friends_config",
 				value:       "Manage...",
@@ -233,6 +240,13 @@ func bgPollVal(n int) int {
 		return 30
 	}
 	return n
+}
+
+func replyFormatVal(s string) string {
+	if s == "" {
+		return "inline"
+	}
+	return s
 }
 
 func inputHistMax(n int) int {
@@ -535,6 +549,10 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 		}
 		m.cfg.PollIntervalBg = n
 		m.message = fmt.Sprintf("Background poll interval: %ds", n)
+
+	case "reply_format":
+		m.cfg.ReplyFormat = value
+		m.message = "Reply format: " + value
 
 	case "channel_sort_by":
 		m.cfg.ChannelSortBy = value

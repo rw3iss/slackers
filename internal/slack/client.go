@@ -25,6 +25,7 @@ type SlackService interface {
 	ListUsers() (map[string]types.User, error)
 	FetchHistory(channelID string, limit int) ([]types.Message, error)
 	SendMessage(channelID, text string) error
+	SendThreadReply(channelID, threadTS, text string) error
 	ResolveUserName(userID string) string
 	// FetchHistoryAround fetches messages around a specific timestamp for context.
 	// Returns messages, the index of the target message (or -1), and any error.
@@ -271,12 +272,14 @@ func (c *slackClient) FetchHistory(channelID string, limit int) ([]types.Message
 	messages := make([]types.Message, 0, len(resp.Messages))
 	for _, msg := range resp.Messages {
 		messages = append(messages, types.Message{
+			MessageID: msg.Timestamp,
 			UserID:    msg.User,
 			UserName:  c.ResolveUserName(msg.User),
 			Text:      msg.Text,
 			Timestamp: parseSlackTimestamp(msg.Timestamp),
 			ChannelID: channelID,
 			Files:     extractFiles(msg.Files),
+			Reactions: extractReactions(msg.Reactions),
 		})
 	}
 
@@ -299,6 +302,17 @@ func (c *slackClient) SendMessage(channelID, text string) error {
 		return fmt.Errorf("slack send message to %s: %w", channelID, err)
 	}
 	return nil
+}
+
+func (c *slackClient) SendThreadReply(channelID, threadTS, text string) error {
+	debug.Log("[api] SendThreadReply channel=%s thread=%s", channelID, threadTS)
+	return c.tryWithFallback("send thread reply", func(api *slack.Client) error {
+		_, _, e := api.PostMessage(channelID,
+			slack.MsgOptionText(text, false),
+			slack.MsgOptionTS(threadTS),
+		)
+		return e
+	})
 }
 
 // FetchHistoryAround fetches messages before and after a specific timestamp.
@@ -348,12 +362,14 @@ func (c *slackClient) FetchHistoryAround(channelID string, timestamp string, con
 	for i := len(beforeResp.Messages) - 1; i >= 0; i-- {
 		msg := beforeResp.Messages[i]
 		messages = append(messages, types.Message{
+			MessageID: msg.Timestamp,
 			UserID:    msg.User,
 			UserName:  c.ResolveUserName(msg.User),
 			Text:      msg.Text,
 			Timestamp: parseSlackTimestamp(msg.Timestamp),
 			ChannelID: channelID,
 			Files:     extractFiles(msg.Files),
+			Reactions: extractReactions(msg.Reactions),
 		})
 	}
 
@@ -363,12 +379,14 @@ func (c *slackClient) FetchHistoryAround(channelID string, timestamp string, con
 	for i := len(afterResp.Messages) - 1; i >= 0; i-- {
 		msg := afterResp.Messages[i]
 		messages = append(messages, types.Message{
+			MessageID: msg.Timestamp,
 			UserID:    msg.User,
 			UserName:  c.ResolveUserName(msg.User),
 			Text:      msg.Text,
 			Timestamp: parseSlackTimestamp(msg.Timestamp),
 			ChannelID: channelID,
 			Files:     extractFiles(msg.Files),
+			Reactions: extractReactions(msg.Reactions),
 		})
 	}
 
@@ -671,6 +689,21 @@ func extractFiles(files []slack.File) []types.FileInfo {
 			Size:     int64(f.Size),
 			MimeType: f.Mimetype,
 			URL:      f.URLPrivateDownload,
+		})
+	}
+	return result
+}
+
+func extractReactions(reactions []slack.ItemReaction) []types.Reaction {
+	if len(reactions) == 0 {
+		return nil
+	}
+	result := make([]types.Reaction, 0, len(reactions))
+	for _, r := range reactions {
+		result = append(result, types.Reaction{
+			Emoji:   r.Name,
+			UserIDs: r.Users,
+			Count:   r.Count,
 		})
 	}
 	return result

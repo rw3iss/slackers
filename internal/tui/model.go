@@ -145,6 +145,12 @@ type channelInfo struct {
 }
 
 var filePattern = regexp.MustCompile(`\[FILE:([^\]]+)\]`)
+var replyPattern = regexp.MustCompile(`^\s*\[REPLY:([^\]]+)\][^\n]*\n?`)
+
+// generateMessageID creates a unique ID for a P2P message.
+func generateMessageID() string {
+	return fmt.Sprintf("p2p-%d", time.Now().UnixNano())
+}
 
 // ContextHistoryMsg carries messages around a search result for context viewing.
 type ContextHistoryMsg struct {
@@ -377,6 +383,13 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 
 // Init returns the initial commands to run at startup.
 func (m Model) Init() tea.Cmd {
+	// Apply reply format from config.
+	rf := m.cfg.ReplyFormat
+	if rf == "" {
+		rf = "inline"
+	}
+	m.messages.SetReplyFormat(rf)
+
 	cmds := []tea.Cmd{
 		tea.EnterAltScreen,
 		splashTimerCmd(),
@@ -549,7 +562,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keymap.ReactMessage):
-			if m.focus == types.FocusMessages && m.currentCh != nil {
+			if m.currentCh != nil {
+				m.focus = types.FocusMessages
+				m.updateFocus()
 				m.messages.EnterReactMode()
 			}
 			return m, nil
@@ -1292,6 +1307,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.channels.SetFriendChannels(m.buildFriendChannels())
 		return m, nil
 
+	case ReplyToMessageMsg:
+		if msg.MessageID != "" {
+			replyText := fmt.Sprintf("[REPLY:%s] %q\n", msg.MessageID, msg.Preview)
+			m.input.InsertAtCursor(replyText)
+			m.focus = types.FocusInput
+			m.updateFocus()
+		}
+		return m, nil
+
 	case ReactModeSelectMsg:
 		if msg.MessageID != "" {
 			m.reactMsgID = msg.MessageID
@@ -1445,6 +1469,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go config.Save(m.cfg)
 			m.input.Reset()
 
+			// Detect [REPLY:id] syntax and strip it.
+			replyToID := ""
+			if rm := replyPattern.FindStringSubmatch(text); rm != nil {
+				replyToID = rm[1]
+				text = strings.TrimSpace(replyPattern.ReplaceAllString(text, ""))
+			}
+
 			// Friend channel — send via P2P, not Slack.
 			if m.currentCh.IsFriend && m.p2pNode != nil {
 				peerUID := m.currentCh.UserID
@@ -1496,15 +1527,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					displayText = cleanText
 				}
+				// Generate a unique message ID for this reply/message.
 				localMsg := types.Message{
+					MessageID: generateMessageID(),
 					UserID:    "me",
 					UserName:  "You",
 					Text:      displayText,
 					Timestamp: time.Now(),
 					Files:     fileInfos,
+					ReplyTo:   replyToID,
+				}
+
+				// If reply, attach to parent in friend history.
+				if replyToID != "" && m.friendHistory != nil {
+					m.friendHistory.AppendReply(peerUID, replyToID, localMsg)
+				} else {
+					m.appendFriendMessage(peerUID, localMsg)
 				}
 				m.messages.AppendMessage(localMsg)
-				m.appendFriendMessage(peerUID, localMsg)
+				// Refresh viewport to show the new reply tree.
+				if replyToID != "" {
+					pairKey := ""
+					if f := m.friendStore.Get(peerUID); f != nil {
+						pairKey = f.PairKey
+					}
+					msgs := m.friendHistory.GetDecrypted(peerUID, pairKey)
+					m.friendMessages[peerUID] = msgs
+					m.messages.SetMessages(msgs)
+				}
 				return m, nil
 			}
 
@@ -1520,6 +1570,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+			// Slack thread reply if reply ID set.
+			if replyToID != "" && m.slackSvc != nil {
+				go m.slackSvc.SendThreadReply(m.currentCh.ID, replyToID, sendText)
+				return m, nil
+			}
 			return m, sendMessageWithFilesCmd(m.slackSvc, m.currentCh.ID, sendText)
 		}
 		return m, nil
@@ -1906,6 +1961,9 @@ func (m Model) View() string {
 // applySettings reads the current config and resizes components.
 func (m *Model) applySettings() {
 	m.cfg = m.settings.Config()
+	if m.cfg.ReplyFormat != "" {
+		m.messages.SetReplyFormat(m.cfg.ReplyFormat)
+	}
 	sortAsc := true
 	if m.cfg.ChannelSortAsc != nil {
 		sortAsc = *m.cfg.ChannelSortAsc

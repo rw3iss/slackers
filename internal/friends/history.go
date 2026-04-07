@@ -192,6 +192,21 @@ func (s *ChatHistoryStore) Prune(days int) {
 	}
 }
 
+// AppendReply adds a reply message as a child of a parent message.
+func (s *ChatHistoryStore) AppendReply(userID, parentMsgID string, reply types.Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	msgs := s.cache[userID]
+	for i, msg := range msgs {
+		if msg.MessageID == parentMsgID {
+			msgs[i].Replies = append(msgs[i].Replies, reply)
+			s.dirty[userID] = true
+			break
+		}
+	}
+}
+
 // UpdateReaction adds or updates a reaction on a message in the cache.
 func (s *ChatHistoryStore) UpdateReaction(userID, messageID, emoji, reactUserID string) {
 	s.mu.Lock()
