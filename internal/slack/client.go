@@ -271,7 +271,7 @@ func (c *slackClient) FetchHistory(channelID string, limit int) ([]types.Message
 
 	messages := make([]types.Message, 0, len(resp.Messages))
 	for _, msg := range resp.Messages {
-		messages = append(messages, types.Message{
+		m := types.Message{
 			MessageID: msg.Timestamp,
 			UserID:    msg.User,
 			UserName:  c.ResolveUserName(msg.User),
@@ -280,7 +280,13 @@ func (c *slackClient) FetchHistory(channelID string, limit int) ([]types.Message
 			ChannelID: channelID,
 			Files:     extractFiles(msg.Files),
 			Reactions: extractReactions(msg.Reactions),
-		})
+		}
+		// Fetch threaded replies if any.
+		if msg.ReplyCount > 0 && msg.Timestamp != "" {
+			replies := c.fetchReplies(channelID, msg.Timestamp)
+			m.Replies = replies
+		}
+		messages = append(messages, m)
 	}
 
 	// Slack returns newest first; reverse to chronological order.
@@ -289,6 +295,41 @@ func (c *slackClient) FetchHistory(channelID string, limit int) ([]types.Message
 	}
 
 	return messages, nil
+}
+
+// fetchReplies fetches threaded replies for a parent message timestamp.
+func (c *slackClient) fetchReplies(channelID, parentTS string) []types.Message {
+	debug.Log("[api] fetchReplies channel=%s parent=%s", channelID, parentTS)
+	params := &slack.GetConversationRepliesParameters{
+		ChannelID: channelID,
+		Timestamp: parentTS,
+		Limit:     50,
+	}
+	var msgs []slack.Message
+	err := c.tryWithFallback("fetch replies", func(api *slack.Client) error {
+		var e error
+		msgs, _, _, e = api.GetConversationReplies(params)
+		return e
+	})
+	if err != nil || len(msgs) <= 1 {
+		return nil
+	}
+	// First message is the parent, skip it.
+	out := make([]types.Message, 0, len(msgs)-1)
+	for _, r := range msgs[1:] {
+		out = append(out, types.Message{
+			MessageID: r.Timestamp,
+			UserID:    r.User,
+			UserName:  c.ResolveUserName(r.User),
+			Text:      r.Text,
+			Timestamp: parseSlackTimestamp(r.Timestamp),
+			ChannelID: channelID,
+			Files:     extractFiles(r.Files),
+			Reactions: extractReactions(r.Reactions),
+			ReplyTo:   parentTS,
+		})
+	}
+	return out
 }
 
 // SendMessage posts a text message to the specified channel.

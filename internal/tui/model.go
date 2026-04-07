@@ -2130,6 +2130,19 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Action {
 	case tea.MouseActionPress:
+		// Right-click on messages area opens options menu.
+		if msg.Button == tea.MouseButtonRight {
+			if y < m.inputTop && x >= m.sidebarWidth+1 {
+				msgID, preview := m.messages.MessageAtClick(y)
+				if msgID != "" {
+					m.msgOptions = NewMsgOptions(msgID, preview, x+1, y+1)
+					m.msgOptions.SetSize(m.width, m.height)
+					m.overlay = overlayMsgOptions
+					return m, nil
+				}
+			}
+			return m, nil
+		}
 		if msg.Button == tea.MouseButtonLeft {
 			// Check if clicking on the sidebar divider (within 1 char of the border).
 			if !m.fullMode && y < m.inputTop {
@@ -2176,17 +2189,6 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				// Messages area clicked.
 				m.focus = types.FocusMessages
 				m.updateFocus()
-
-				// Right-click: show options menu.
-				if msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress {
-					msgID, preview := m.messages.MessageAtClick(y)
-					if msgID != "" {
-						m.msgOptions = NewMsgOptions(msgID, preview, x+1, y+1)
-						m.msgOptions.SetSize(m.width, m.height)
-						m.overlay = overlayMsgOptions
-						return m, nil
-					}
-				}
 
 				// Check if a file was clicked.
 				file := m.messages.FileAtClick(y)
