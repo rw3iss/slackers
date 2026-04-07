@@ -207,6 +207,30 @@ func (s *ChatHistoryStore) AppendReply(userID, parentMsgID string, reply types.M
 	}
 }
 
+// DeleteMessage removes a message (top-level or nested reply) from the cache.
+// Returns true if a message was found and removed.
+func (s *ChatHistoryStore) DeleteMessage(userID, messageID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	msgs := s.cache[userID]
+	for i := range msgs {
+		if msgs[i].MessageID == messageID {
+			s.cache[userID] = append(msgs[:i], msgs[i+1:]...)
+			s.dirty[userID] = true
+			return true
+		}
+		for j := range msgs[i].Replies {
+			if msgs[i].Replies[j].MessageID == messageID {
+				msgs[i].Replies = append(msgs[i].Replies[:j], msgs[i].Replies[j+1:]...)
+				s.dirty[userID] = true
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // findMsgPtr returns a pointer to the message with the given ID, searching
 // both top-level messages and their nested replies.
 func findMsgPtr(msgs []types.Message, messageID string) *types.Message {

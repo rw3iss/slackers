@@ -37,6 +37,8 @@ const (
 	MsgTypeFileData      = "file_data"     // sender sends file chunk (base64)
 	MsgTypeReaction       = "reaction"        // add an emoji reaction
 	MsgTypeReactionRemove = "reaction_remove" // remove an emoji reaction
+	MsgTypeDelete         = "delete"          // request to delete a message authored by sender
+	MsgTypeDeleteAck      = "delete_ack"      // ack from peer that the deletion succeeded
 
 	// Protocol for file transfers (separate from messaging).
 	P2PFileProtocol = protocol.ID("/slackers/file/1.0.0")

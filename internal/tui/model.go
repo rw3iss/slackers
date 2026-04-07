@@ -199,6 +199,10 @@ type Model struct {
 	// Reactions
 	reactMsgID string // message ID for pending reaction
 
+	// Pending message deletion confirmation. When non-empty, the next y/Enter
+	// confirms deleting that message; any other key cancels.
+	pendingDeleteMsgID string
+
 	// Friends
 	friendStore    *friends.FriendStore
 	friendHistory  *friends.ChatHistoryStore
@@ -340,6 +344,18 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 					PubKey:    msg.TargetMsgID,
 					Multiaddr: msg.ReactionEmoji,
 				}
+			case secure.MsgTypeDelete:
+				p2pChan <- P2PReceivedMsg{
+					SenderID: peerSlackID,
+					Text:     "__delete__",
+					PubKey:   msg.TargetMsgID,
+				}
+			case secure.MsgTypeDeleteAck:
+				p2pChan <- P2PReceivedMsg{
+					SenderID: peerSlackID,
+					Text:     "__delete_ack__",
+					PubKey:   msg.TargetMsgID,
+				}
 			case secure.MsgTypeFileOffer:
 				p2pChan <- P2PReceivedMsg{
 					SenderID: peerSlackID,
@@ -472,6 +488,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.shortcutsEditor, cmd = m.shortcutsEditor.Update(msg)
 			return m, cmd
+		}
+
+		// Pending message-delete confirmation: y/Enter confirm, anything else cancel.
+		if m.pendingDeleteMsgID != "" {
+			s := msg.String()
+			if s == "y" || s == "Y" || s == "enter" {
+				return m, m.confirmMessageDelete()
+			}
+			m.pendingDeleteMsgID = ""
+			m.warning = "Delete cancelled"
+			return m, nil
 		}
 
 		// If returning from away, refresh the current channel only.
@@ -1380,6 +1407,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return ReplyToMessageMsg{MessageID: msg.MessageID, Preview: msg.Preview}
 			}
+		case MsgActionDelete:
+			m.requestMessageDelete(msg.MessageID)
 		}
 		return m, nil
 
@@ -1404,6 +1433,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ToggleReactionMsg:
 		m.toggleReaction(msg.MessageID, msg.Emoji)
+		return m, nil
+
+	case DeleteMessageRequestMsg:
+		m.requestMessageDelete(msg.MessageID)
 		return m, nil
 
 	case ReactModeSelectMsg:
@@ -1749,6 +1782,61 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.friendStore.UpdateLastOnline(msg.SenderID)
 				m.channels.ClearUnread("friend:" + msg.SenderID)
 			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
+		// Handle incoming delete request: peer wants to delete one of THEIR messages.
+		// Verify the target message's author matches the sender, then delete locally
+		// and ack back so the initiator can finalize on their side.
+		if msg.Text == "__delete__" {
+			targetMsgID := msg.PubKey
+			senderID := msg.SenderID
+			// Look up the message by ID in the friend cache to verify authorship.
+			authorOK := false
+			if msgs, ok := m.friendMessages[senderID]; ok {
+				if mm := findFriendMsgPtr(msgs, targetMsgID); mm != nil {
+					// Sender's messages are stored with their slacker ID as UserID.
+					if mm.UserID == senderID || mm.UserID == "me" {
+						authorOK = true
+					}
+				}
+			}
+			if authorOK {
+				if m.friendHistory != nil {
+					m.friendHistory.DeleteMessage(senderID, targetMsgID)
+					go m.friendHistory.Save(senderID)
+				}
+				if msgs, ok := m.friendMessages[senderID]; ok {
+					m.friendMessages[senderID] = deleteFriendMessage(msgs, targetMsgID)
+				}
+				// Refresh visible chat if we're looking at this friend.
+				friendChID := "friend:" + senderID
+				if m.currentCh != nil && m.currentCh.ID == friendChID {
+					m.messages.DeleteMessageLocal(targetMsgID)
+				}
+				// Ack back to the initiator.
+				if m.p2pNode != nil {
+					go m.p2pNode.SendMessage(senderID, secure.P2PMessage{
+						Type:        secure.MsgTypeDeleteAck,
+						TargetMsgID: targetMsgID,
+						SenderID:    senderID,
+						Timestamp:   time.Now().Unix(),
+					})
+				}
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
+		if msg.Text == "__delete_ack__" {
+			// Peer confirmed they deleted the message; we already deleted optimistically
+			// when the user requested it, so this is just an acknowledgment we can log.
+			debug.Log("[p2p] received delete ack for %s from %s", msg.PubKey, msg.SenderID)
 			if m.p2pChan != nil {
 				return m, waitForP2PMsg(m.p2pChan)
 			}
@@ -2251,7 +2339,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				if msgID != "" {
 					// Popup minimum X is the chat history left edge.
 					minX := m.sidebarWidth + 2
-					m.msgOptions = NewMsgOptions(msgID, preview, x+1, y, minX)
+					allowDelete := false
+					if mm := m.messages.MessageByID(msgID); mm != nil && m.isMyMessage(*mm) {
+						allowDelete = true
+					}
+					m.msgOptions = NewMsgOptions(msgID, preview, x+1, y, minX, allowDelete)
 					m.msgOptions.SetSize(m.width, m.height)
 					m.overlay = overlayMsgOptions
 					return m, nil
@@ -2498,6 +2590,106 @@ func (m *Model) persistLastSeen() {
 		}
 	}
 	go config.Save(m.cfg)
+}
+
+// isMyMessage returns true if the given message was authored by the local user.
+// Friend messages stored locally use UserID == "me"; Slack messages use the
+// real user ID, cached as m.myUserID.
+func (m *Model) isMyMessage(msg types.Message) bool {
+	if msg.UserID == "me" {
+		return true
+	}
+	if m.myUserID != "" && msg.UserID == m.myUserID {
+		return true
+	}
+	return false
+}
+
+// requestMessageDelete handles a user-initiated delete: validates authorship,
+// then prompts in the status bar for confirmation.
+func (m *Model) requestMessageDelete(messageID string) {
+	mm := m.messages.MessageByID(messageID)
+	if mm == nil {
+		m.warning = "Message not found"
+		return
+	}
+	if !m.isMyMessage(*mm) {
+		m.warning = "You can only delete your own messages"
+		return
+	}
+	m.pendingDeleteMsgID = messageID
+	m.warning = "Delete this message? (y to confirm, Esc to cancel)"
+}
+
+// confirmMessageDelete performs the actual deletion that was requested via
+// requestMessageDelete. Routes to Slack API or P2P delete request as appropriate.
+func (m *Model) confirmMessageDelete() tea.Cmd {
+	messageID := m.pendingDeleteMsgID
+	m.pendingDeleteMsgID = ""
+	m.warning = ""
+	if messageID == "" {
+		return nil
+	}
+	mm := m.messages.MessageByID(messageID)
+	if mm == nil {
+		m.warning = "Message not found"
+		return nil
+	}
+	if !m.isMyMessage(*mm) {
+		m.warning = "You can only delete your own messages"
+		return nil
+	}
+
+	// Friend / P2P channel: send delete request, wait for ack to delete locally.
+	if m.currentCh != nil && m.currentCh.IsFriend && m.p2pNode != nil {
+		peerUID := m.currentCh.UserID
+		go m.p2pNode.SendMessage(peerUID, secure.P2PMessage{
+			Type:        secure.MsgTypeDelete,
+			TargetMsgID: messageID,
+			SenderID:    peerUID,
+			Timestamp:   time.Now().Unix(),
+		})
+		// Optimistically delete locally — the peer's ack confirms persistence
+		// on their side, but we don't want to leave the message hanging on
+		// our screen if the peer is briefly unreachable.
+		m.messages.DeleteMessageLocal(messageID)
+		if m.friendHistory != nil {
+			m.friendHistory.DeleteMessage(peerUID, messageID)
+			go m.friendHistory.Save(peerUID)
+		}
+		// Also drop from in-memory cache.
+		if msgs, ok := m.friendMessages[peerUID]; ok {
+			m.friendMessages[peerUID] = deleteFriendMessage(msgs, messageID)
+		}
+		m.warning = "Message deleted"
+		return nil
+	}
+
+	// Slack channel: call API, then drop locally.
+	if m.slackSvc != nil && m.currentCh != nil {
+		channelID := m.currentCh.ID
+		go m.slackSvc.DeleteMessage(channelID, messageID)
+		m.messages.DeleteMessageLocal(messageID)
+		m.warning = "Message deleted"
+		return nil
+	}
+	return nil
+}
+
+// deleteFriendMessage removes a message (top-level or nested reply) from a slice.
+func deleteFriendMessage(msgs []types.Message, messageID string) []types.Message {
+	for i := range msgs {
+		if msgs[i].MessageID == messageID {
+			return append(msgs[:i], msgs[i+1:]...)
+		}
+		for j := range msgs[i].Replies {
+			if msgs[i].Replies[j].MessageID == messageID {
+				msgs[i].Replies = append(msgs[i].Replies[:j], msgs[i].Replies[j+1:]...)
+				return msgs
+			}
+		}
+	}
+	return msgs
 }
 
 // setChannelHeader updates the message view header with channel name and secure indicator.

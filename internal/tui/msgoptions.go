@@ -15,6 +15,7 @@ const (
 	MsgActionNone MsgOptionsAction = iota
 	MsgActionReact
 	MsgActionReply
+	MsgActionDelete
 )
 
 // MsgOptionsSelectMsg signals which option the user chose.
@@ -24,10 +25,17 @@ type MsgOptionsSelectMsg struct {
 	Preview   string
 }
 
+// msgOptionsItem is a single menu entry in the popup.
+type msgOptionsItem struct {
+	label  string
+	action MsgOptionsAction
+}
+
 // MsgOptionsModel is a small popup menu shown next to a clicked message.
 type MsgOptionsModel struct {
 	messageID  string
 	preview    string
+	items      []msgOptionsItem
 	selected   int
 	x, y       int // anchor position (click coords)
 	minX       int // minimum X (e.g. chat history left edge)
@@ -40,10 +48,19 @@ type MsgOptionsModel struct {
 
 // NewMsgOptions creates an options popup at the given position.
 // minX is the minimum left X (e.g. chat history left edge) — popup never starts left of this.
-func NewMsgOptions(messageID, preview string, x, y, minX int) MsgOptionsModel {
+// allowDelete controls whether the "Delete" entry appears (only when the user authored the message).
+func NewMsgOptions(messageID, preview string, x, y, minX int, allowDelete bool) MsgOptionsModel {
+	items := []msgOptionsItem{
+		{"React", MsgActionReact},
+		{"Reply", MsgActionReply},
+	}
+	if allowDelete {
+		items = append(items, msgOptionsItem{"Delete", MsgActionDelete})
+	}
 	return MsgOptionsModel{
 		messageID: messageID,
 		preview:   preview,
+		items:     items,
 		x:         x,
 		y:         y,
 		minX:      minX,
@@ -99,7 +116,7 @@ func (m MsgOptionsModel) renderBox() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Options"))
 	b.WriteString("\n")
-	for i, item := range msgOptionsItems {
+	for i, item := range m.items {
 		// Blank line before each item.
 		b.WriteString("\n")
 		cursor := "  "
@@ -123,14 +140,6 @@ func (m MsgOptionsModel) renderBox() string {
 	return boxStyle.Render(b.String())
 }
 
-var msgOptionsItems = []struct {
-	label  string
-	action MsgOptionsAction
-}{
-	{"React", MsgActionReact},
-	{"Reply", MsgActionReply},
-}
-
 func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -140,11 +149,11 @@ func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
 				m.selected--
 			}
 		case "down", "j":
-			if m.selected < len(msgOptionsItems)-1 {
+			if m.selected < len(m.items)-1 {
 				m.selected++
 			}
 		case "enter":
-			item := msgOptionsItems[m.selected]
+			item := m.items[m.selected]
 			return m, func() tea.Msg {
 				return MsgOptionsSelectMsg{
 					Action:    item.action,
@@ -155,16 +164,13 @@ func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-			// Items each span 2 rows now (blank line before each).
-			// Layout (relative to finalY): 0=border, 1=title, 2=blank, 3=React, 4=blank, 5=Reply, 6=blank, 7=hint, 8=border
-			// Click on Y in [finalY+2..finalY+3] → React (row 0)
-			// Click on Y in [finalY+4..finalY+5] → Reply (row 1)
+			// Items each span 2 rows (blank line before each).
 			delta := msg.Y - m.finalY - 2
 			row := delta / 2
-			debug.Log("[msgoptions] click at (%d,%d) finalY=%d row=%d items=%d", msg.X, msg.Y, m.finalY, row, len(msgOptionsItems))
-			if row >= 0 && row < len(msgOptionsItems) {
+			debug.Log("[msgoptions] click at (%d,%d) finalY=%d row=%d items=%d", msg.X, msg.Y, m.finalY, row, len(m.items))
+			if row >= 0 && row < len(m.items) {
 				m.selected = row
-				item := msgOptionsItems[row]
+				item := m.items[row]
 				return m, func() tea.Msg {
 					return MsgOptionsSelectMsg{
 						Action:    item.action,

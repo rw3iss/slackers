@@ -33,6 +33,12 @@ type ToggleReactionMsg struct {
 	Emoji     string
 }
 
+// DeleteMessageRequestMsg is sent when the user requests to delete a message.
+// The model performs authorship + confirmation handling.
+type DeleteMessageRequestMsg struct {
+	MessageID string
+}
+
 // emojiLookup maps shortcodes to unicode for reaction rendering.
 var emojiLookup map[string]string
 
@@ -278,6 +284,39 @@ func (m *MessageViewModel) MessageReactions(messageID string) []types.Reaction {
 		return msg.Reactions
 	}
 	return nil
+}
+
+// MessageByID returns a pointer to the message with the given ID (top-level
+// or nested reply), or nil if not found.
+func (m *MessageViewModel) MessageByID(messageID string) *types.Message {
+	return m.findMessage(messageID)
+}
+
+// DeleteMessageLocal removes a message (top-level or nested reply) from the
+// in-memory view. Returns true if a message was removed.
+func (m *MessageViewModel) DeleteMessageLocal(messageID string) bool {
+	for i := range m.messages {
+		if m.messages[i].MessageID == messageID {
+			m.messages = append(m.messages[:i], m.messages[i+1:]...)
+			// Clamp react cursor.
+			if m.reactIdx >= len(m.messages) {
+				m.reactIdx = len(m.messages) - 1
+			}
+			if m.reactIdx < 0 {
+				m.reactIdx = 0
+			}
+			m.rebuildContent()
+			return true
+		}
+		for j := range m.messages[i].Replies {
+			if m.messages[i].Replies[j].MessageID == messageID {
+				m.messages[i].Replies = append(m.messages[i].Replies[:j], m.messages[i].Replies[j+1:]...)
+				m.rebuildContent()
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findMessage returns a pointer to the message with the given ID, searching
@@ -921,6 +960,19 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				return m, func() tea.Msg {
 					return ReactModeSelectMsg{MessageID: msgID}
 				}
+			case "d", "x":
+				// 'd' / 'x' requests deletion of the selected message (parent or reply).
+				// The model verifies authorship and prompts for confirmation.
+				msgID := m.SelectedReplyMessageID()
+				if msgID == "" {
+					msgID = m.SelectedMessageID()
+				}
+				if msgID == "" {
+					return m, nil
+				}
+				return m, func() tea.Msg {
+					return DeleteMessageRequestMsg{MessageID: msgID}
+				}
 			case "esc":
 				// Esc unwinds: reply-reaction → reply → reactionSelIdx → exit react mode.
 				if onReplyList && m.replyReactionSelIdx >= 0 {
@@ -1210,13 +1262,13 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			var hint string
 			switch {
 			case hasReactions && hasInlineReplies:
-				hint = " [Enter: reply  r: react  ←/→: reactions/replies  ↓: into replies]"
+				hint = " [Enter: reply  r: react  d: delete  ←/→: reactions/replies  ↓: into replies]"
 			case hasReactions:
-				hint = " [Enter: reply  r: react  ←/→: select reaction]"
+				hint = " [Enter: reply  r: react  d: delete  ←/→: select reaction]"
 			case hasInlineReplies:
-				hint = " [Enter: reply  r: react  →: select reply list  ↓: into replies]"
+				hint = " [Enter: reply  r: react  d: delete  →: select reply list  ↓: into replies]"
 			default:
-				hint = " [Enter: reply  r: react]"
+				hint = " [Enter: reply  r: react  d: delete]"
 			}
 			headerLine = selectHighlight.Render(headerLine + hint)
 		}
