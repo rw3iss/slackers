@@ -250,7 +250,7 @@ func (m HelpModel) Update(msg tea.Msg) (HelpModel, tea.Cmd) {
 
 // View renders the scrollable help overlay.
 func (m *HelpModel) View() string {
-	boxWidth := min(85, m.width-4) - 8
+	boxWidth := min(105, m.width-4) - 8
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -307,7 +307,7 @@ func (m *HelpModel) View() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
-		Width(min(85, m.width-4)).
+		Width(min(105, m.width-4)).
 		Height(boxHeight)
 
 	box := boxStyle.Render(content)

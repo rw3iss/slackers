@@ -9,29 +9,53 @@ import (
 // can switch themes at runtime. Components should reference the package
 // vars directly (e.g. ColorPrimary, MessagePaneStyle) at render time so
 // any theme reapply is picked up immediately.
+//
+// Each theme key has both a foreground (Color*) and background (Color*Bg)
+// slot. The background is empty unless the theme value uses the "fg/bg"
+// syntax (e.g. "12/240"); when empty, lipgloss falls through to the
+// terminal default.
 var (
 	// Core palette colors — populated from the active theme.
-	ColorPrimary   lipgloss.Color
-	ColorSecondary lipgloss.Color
-	ColorAccent    lipgloss.Color
-	ColorError     lipgloss.Color
-	ColorMuted     lipgloss.Color
-	ColorHighlight lipgloss.Color
+	ColorPrimary     lipgloss.Color
+	ColorPrimaryBg   lipgloss.Color
+	ColorSecondary   lipgloss.Color
+	ColorSecondaryBg lipgloss.Color
+	ColorAccent      lipgloss.Color
+	ColorAccentBg    lipgloss.Color
+	ColorError       lipgloss.Color
+	ColorErrorBg     lipgloss.Color
+	ColorMuted       lipgloss.Color
+	ColorMutedBg     lipgloss.Color
+	ColorHighlight   lipgloss.Color
+	ColorHighlightBg lipgloss.Color
 
 	// Semantic colors — populated from the active theme.
-	ColorMessageText   lipgloss.Color
-	ColorInfoText      lipgloss.Color
-	ColorDayLabel      lipgloss.Color
-	ColorTimestamp     lipgloss.Color
-	ColorBackground    lipgloss.Color
-	ColorPageHeader    lipgloss.Color
-	ColorGroupHeader   lipgloss.Color
-	ColorStatusMessage lipgloss.Color
-	ColorFileButton    lipgloss.Color
-	ColorReplyLabel    lipgloss.Color
-	ColorSelection     lipgloss.Color
-	ColorBorderDefault lipgloss.Color
-	ColorBorderActive  lipgloss.Color
+	ColorMessageText     lipgloss.Color
+	ColorMessageTextBg   lipgloss.Color
+	ColorInfoText        lipgloss.Color
+	ColorInfoTextBg      lipgloss.Color
+	ColorDayLabel        lipgloss.Color
+	ColorDayLabelBg      lipgloss.Color
+	ColorTimestamp       lipgloss.Color
+	ColorTimestampBg     lipgloss.Color
+	ColorBackground      lipgloss.Color
+	ColorBackgroundBg    lipgloss.Color
+	ColorPageHeader      lipgloss.Color
+	ColorPageHeaderBg    lipgloss.Color
+	ColorGroupHeader     lipgloss.Color
+	ColorGroupHeaderBg   lipgloss.Color
+	ColorStatusMessage   lipgloss.Color
+	ColorStatusMessageBg lipgloss.Color
+	ColorFileButton      lipgloss.Color
+	ColorFileButtonBg    lipgloss.Color
+	ColorReplyLabel      lipgloss.Color
+	ColorReplyLabelBg    lipgloss.Color
+	ColorSelection       lipgloss.Color
+	ColorSelectionBg     lipgloss.Color
+	ColorBorderDefault   lipgloss.Color
+	ColorBorderDefaultBg lipgloss.Color
+	ColorBorderActive    lipgloss.Color
+	ColorBorderActiveBg  lipgloss.Color
 
 	// IsDarkTheme is true when the active theme self-identifies as dark.
 	IsDarkTheme = true
@@ -71,32 +95,38 @@ func ActiveTheme() theme.Theme {
 	return activeTheme
 }
 
+// applyKey reads a theme key and returns its (fg, bg) lipgloss colors.
+func applyKey(t theme.Theme, key string) (lipgloss.Color, lipgloss.Color) {
+	fg, bg := theme.ParseColor(t.Get(key))
+	return lipgloss.Color(fg), lipgloss.Color(bg)
+}
+
 // ApplyTheme reassigns every theme-driven color and rebuilds derived
 // styles. Safe to call at runtime — subsequent View() calls will pick
 // up the new colors automatically.
 func ApplyTheme(t theme.Theme) {
 	activeTheme = t
 
-	ColorPrimary = lipgloss.Color(t.Get(theme.KeyPrimary))
-	ColorSecondary = lipgloss.Color(t.Get(theme.KeySecondary))
-	ColorAccent = lipgloss.Color(t.Get(theme.KeyAccent))
-	ColorError = lipgloss.Color(t.Get(theme.KeyError))
-	ColorMuted = lipgloss.Color(t.Get(theme.KeyMuted))
-	ColorHighlight = lipgloss.Color(t.Get(theme.KeyHighlight))
+	ColorPrimary, ColorPrimaryBg = applyKey(t, theme.KeyPrimary)
+	ColorSecondary, ColorSecondaryBg = applyKey(t, theme.KeySecondary)
+	ColorAccent, ColorAccentBg = applyKey(t, theme.KeyAccent)
+	ColorError, ColorErrorBg = applyKey(t, theme.KeyError)
+	ColorMuted, ColorMutedBg = applyKey(t, theme.KeyMuted)
+	ColorHighlight, ColorHighlightBg = applyKey(t, theme.KeyHighlight)
 
-	ColorMessageText = lipgloss.Color(t.Get(theme.KeyMessageText))
-	ColorInfoText = lipgloss.Color(t.Get(theme.KeyInfoText))
-	ColorDayLabel = lipgloss.Color(t.Get(theme.KeyDayLabel))
-	ColorTimestamp = lipgloss.Color(t.Get(theme.KeyTimestamp))
-	ColorBackground = lipgloss.Color(t.Get(theme.KeyBackground))
-	ColorPageHeader = lipgloss.Color(t.Get(theme.KeyPageHeader))
-	ColorGroupHeader = lipgloss.Color(t.Get(theme.KeyGroupHeader))
-	ColorStatusMessage = lipgloss.Color(t.Get(theme.KeyStatusMessage))
-	ColorFileButton = lipgloss.Color(t.Get(theme.KeyFileButton))
-	ColorReplyLabel = lipgloss.Color(t.Get(theme.KeyReplyLabel))
-	ColorSelection = lipgloss.Color(t.Get(theme.KeySelection))
-	ColorBorderDefault = lipgloss.Color(t.Get(theme.KeyBorderDefault))
-	ColorBorderActive = lipgloss.Color(t.Get(theme.KeyBorderActive))
+	ColorMessageText, ColorMessageTextBg = applyKey(t, theme.KeyMessageText)
+	ColorInfoText, ColorInfoTextBg = applyKey(t, theme.KeyInfoText)
+	ColorDayLabel, ColorDayLabelBg = applyKey(t, theme.KeyDayLabel)
+	ColorTimestamp, ColorTimestampBg = applyKey(t, theme.KeyTimestamp)
+	ColorBackground, ColorBackgroundBg = applyKey(t, theme.KeyBackground)
+	ColorPageHeader, ColorPageHeaderBg = applyKey(t, theme.KeyPageHeader)
+	ColorGroupHeader, ColorGroupHeaderBg = applyKey(t, theme.KeyGroupHeader)
+	ColorStatusMessage, ColorStatusMessageBg = applyKey(t, theme.KeyStatusMessage)
+	ColorFileButton, ColorFileButtonBg = applyKey(t, theme.KeyFileButton)
+	ColorReplyLabel, ColorReplyLabelBg = applyKey(t, theme.KeyReplyLabel)
+	ColorSelection, ColorSelectionBg = applyKey(t, theme.KeySelection)
+	ColorBorderDefault, ColorBorderDefaultBg = applyKey(t, theme.KeyBorderDefault)
+	ColorBorderActive, ColorBorderActiveBg = applyKey(t, theme.KeyBorderActive)
 
 	IsDarkTheme = t.IsDark()
 
@@ -104,45 +134,62 @@ func ApplyTheme(t theme.Theme) {
 }
 
 // rebuildDerivedStyles is split out so it can run from init() and from
-// ApplyTheme() with the same effect.
+// ApplyTheme() with the same effect. Empty bg colors are no-ops in
+// lipgloss so we can safely call .Background() unconditionally.
 func rebuildDerivedStyles() {
 	SidebarStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorderDefault).
+		Background(ColorBackgroundBg).
 		Padding(0, 1)
 	SidebarActiveStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorderActive).
+		Background(ColorBackgroundBg).
 		Padding(0, 1)
 
 	ChannelItemStyle = lipgloss.NewStyle().Foreground(ColorMessageText)
-	ChannelSelectedStyle = lipgloss.NewStyle().Foreground(ColorSelection).Bold(true)
+	ChannelSelectedStyle = lipgloss.NewStyle().
+		Foreground(ColorSelection).
+		Background(ColorSelectionBg).
+		Bold(true)
 	ChannelUnreadStyle = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	SectionHeaderStyle = lipgloss.NewStyle().Foreground(ColorGroupHeader).Bold(true)
+	SectionHeaderStyle = lipgloss.NewStyle().
+		Foreground(ColorGroupHeader).
+		Background(ColorGroupHeaderBg).
+		Bold(true)
 
 	MessagePaneStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorderDefault).
+		Background(ColorBackgroundBg).
 		Padding(0, 1)
 	MessagePaneActiveStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorderActive).
+		Background(ColorBackgroundBg).
 		Padding(0, 1)
 
 	UserNameStyle = lipgloss.NewStyle().Bold(true)
-	TimestampStyle = lipgloss.NewStyle().Foreground(ColorTimestamp)
+	TimestampStyle = lipgloss.NewStyle().
+		Foreground(ColorTimestamp).
+		Background(ColorTimestampBg)
 	MessageTextStyle = lipgloss.NewStyle().Foreground(ColorMessageText)
 
 	InputStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorderDefault).
+		Background(ColorBackgroundBg).
 		Padding(0, 1)
 	InputActiveStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ColorAccent).
+		Background(ColorBackgroundBg).
 		Padding(0, 1)
 
-	StatusBarStyle = lipgloss.NewStyle().Foreground(ColorStatusMessage)
+	StatusBarStyle = lipgloss.NewStyle().
+		Foreground(ColorStatusMessage).
+		Background(ColorStatusMessageBg)
 	StatusConnected = lipgloss.NewStyle().Foreground(ColorAccent)
 	StatusDisconnected = lipgloss.NewStyle().Foreground(ColorError)
 

@@ -499,9 +499,17 @@ func (m ThemeEditorModel) View() string {
 // Color Picker
 // =====================================================================
 
+// pickerSlot identifies which color slot (fg or bg) the picker is currently editing.
+type pickerSlot int
+
+const (
+	pickerSlotFg pickerSlot = iota
+	pickerSlotBg
+)
+
 // ThemeColorPickerModel renders a 16x16 grid of the 256 standard terminal
-// colors. The user navigates with arrows or mouse, and Enter selects the
-// current cell.
+// colors. The user can pick BOTH a foreground and a background, then accept
+// to commit the combined "fg/bg" value back to the theme editor.
 type ThemeColorPickerModel struct {
 	key           string
 	width, height int
@@ -513,18 +521,25 @@ type ThemeColorPickerModel struct {
 	cellH         int
 	manualEntry   bool
 	manualInput   textinput.Model
+
+	// Active slot the next pick / clear targets.
+	slot pickerSlot
+	// Working fg/bg values (raw color strings, "" = default).
+	fg string
+	bg string
 }
 
-// NewThemeColorPicker constructs a new color picker for the given key,
-// initial color value (e.g. "12" or "#ff8800").
+// NewThemeColorPicker constructs a new color picker for the given key
+// and the initial combined value (e.g. "12" or "12/240").
 func NewThemeColorPicker(key, initial string) ThemeColorPickerModel {
+	fg, bg := theme.ParseColor(initial)
 	cursorR, cursorC := 0, 0
-	if n, err := strconv.Atoi(initial); err == nil && n >= 0 && n < 256 {
+	if n, err := strconv.Atoi(fg); err == nil && n >= 0 && n < 256 {
 		cursorR = n / 16
 		cursorC = n % 16
 	}
 	ti := textinput.New()
-	ti.CharLimit = 16
+	ti.CharLimit = 32
 	ti.SetValue(initial)
 	return ThemeColorPickerModel{
 		key:         key,
@@ -533,6 +548,9 @@ func NewThemeColorPicker(key, initial string) ThemeColorPickerModel {
 		cellW:       4,
 		cellH:       2,
 		manualInput: ti,
+		slot:        pickerSlotFg,
+		fg:          fg,
+		bg:          bg,
 	}
 }
 
@@ -547,6 +565,24 @@ func (m *ThemeColorPickerModel) currentIndex() int {
 	return m.cursorR*16 + m.cursorC
 }
 
+// commit emits the combined fg/bg value back to the editor.
+func (m *ThemeColorPickerModel) commit() tea.Cmd {
+	k := m.key
+	value := theme.JoinColor(m.fg, m.bg)
+	return func() tea.Msg { return ThemeColorPickedMsg{Key: k, Color: value} }
+}
+
+// applyCursor stores the cursor cell's color into the active slot.
+// Returns true if the active slot changed (so the editor preview can blink).
+func (m *ThemeColorPickerModel) applyCursor() {
+	val := strconv.Itoa(m.currentIndex())
+	if m.slot == pickerSlotFg {
+		m.fg = val
+	} else {
+		m.bg = val
+	}
+}
+
 // Update handles input.
 func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.Cmd) {
 	if m.manualEntry {
@@ -554,12 +590,9 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 			switch keyMsg.String() {
 			case "enter":
 				val := strings.TrimSpace(m.manualInput.Value())
-				if val == "" {
-					m.manualEntry = false
-					return m, nil
-				}
-				k := m.key
-				return m, func() tea.Msg { return ThemeColorPickedMsg{Key: k, Color: val} }
+				m.fg, m.bg = theme.ParseColor(val)
+				m.manualEntry = false
+				return m, nil
 			case "esc":
 				m.manualEntry = false
 				return m, nil
@@ -593,14 +626,39 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 			if m.cursorR < 15 {
 				m.cursorR++
 			}
-		case "enter", " ":
-			val := strconv.Itoa(m.currentIndex())
-			k := m.key
-			return m, func() tea.Msg { return ThemeColorPickedMsg{Key: k, Color: val} }
+		case " ":
+			// Space: assign the cursor cell to the active slot, then auto-flip
+			// to the other slot for a smooth fg→bg flow on first use.
+			m.applyCursor()
+			if m.slot == pickerSlotFg {
+				m.slot = pickerSlotBg
+			} else {
+				m.slot = pickerSlotFg
+			}
+		case "enter":
+			// Enter: assign the cursor cell to the active slot AND accept.
+			m.applyCursor()
+			return m, m.commit()
+		case "a":
+			// Accept without re-assigning (use whatever fg/bg are already set).
+			return m, m.commit()
+		case "f":
+			m.slot = pickerSlotFg
+		case "b":
+			m.slot = pickerSlotBg
+		case "t":
+			if m.slot == pickerSlotFg {
+				m.slot = pickerSlotBg
+			} else {
+				m.slot = pickerSlotFg
+			}
 		case "x":
-			val := ""
-			k := m.key
-			return m, func() tea.Msg { return ThemeColorPickedMsg{Key: k, Color: val} }
+			// Clear the active slot.
+			if m.slot == pickerSlotFg {
+				m.fg = ""
+			} else {
+				m.bg = ""
+			}
 		case "m":
 			m.manualEntry = true
 			m.manualInput.Focus()
@@ -616,9 +674,9 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 				if col >= 0 && col < 16 && row >= 0 && row < 16 {
 					m.cursorC = col
 					m.cursorR = row
-					val := strconv.Itoa(m.currentIndex())
-					k := m.key
-					return m, func() tea.Msg { return ThemeColorPickedMsg{Key: k, Color: val} }
+					m.applyCursor()
+					// Click does NOT auto-commit so the user can pick fg, click 'b'
+					// or 't', click again for bg, then Enter / 'a' to accept.
 				}
 			}
 		}
@@ -630,6 +688,8 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 func (m *ThemeColorPickerModel) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(ColorMuted)
+	activeSlotStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Pick a color: " + m.key))
@@ -637,7 +697,6 @@ func (m *ThemeColorPickerModel) View() string {
 
 	// Build a 16x16 grid. Each cell shows " NNN " on a background of color N
 	// so the user sees the actual color sample.
-	rowsStart := strings.Count(b.String(), "\n")
 	for r := 0; r < 16; r++ {
 		for c := 0; c < 16; c++ {
 			idx := r*16 + c
@@ -655,25 +714,50 @@ func (m *ThemeColorPickerModel) View() string {
 		}
 		b.WriteString("\n")
 	}
-	_ = rowsStart // Layout coords are computed in the box-positioning logic below.
 
 	b.WriteString("\n")
 	if m.manualEntry {
-		b.WriteString("  Manual: ")
+		b.WriteString("  Manual (fg or fg/bg): ")
 		b.WriteString(m.manualInput.View())
 		b.WriteString("\n")
 	} else {
-		val := strconv.Itoa(m.currentIndex())
-		preview := lipgloss.NewStyle().
-			Background(lipgloss.Color(val)).
-			Foreground(lipgloss.Color(contrastFor(m.currentIndex()))).
-			Padding(0, 2).
-			Render(" sample " + val + " ")
-		b.WriteString("  Selected: " + preview)
-		b.WriteString("\n")
+		// Two slots side by side, with the active one bolded.
+		fgLabel := "FG"
+		bgLabel := "BG"
+		if m.slot == pickerSlotFg {
+			fgLabel = activeSlotStyle.Render("▶ FG")
+		} else {
+			fgLabel = mutedStyle.Render("  FG")
+		}
+		if m.slot == pickerSlotBg {
+			bgLabel = activeSlotStyle.Render("▶ BG")
+		} else {
+			bgLabel = mutedStyle.Render("  BG")
+		}
+		fgVal := m.fg
+		if fgVal == "" {
+			fgVal = "(default)"
+		}
+		bgVal := m.bg
+		if bgVal == "" {
+			bgVal = "(default)"
+		}
+		// Live preview rendered with the actual fg+bg pair.
+		previewStyle := lipgloss.NewStyle().Padding(0, 2)
+		if m.fg != "" {
+			previewStyle = previewStyle.Foreground(lipgloss.Color(m.fg))
+		}
+		if m.bg != "" {
+			previewStyle = previewStyle.Background(lipgloss.Color(m.bg))
+		} else {
+			previewStyle = previewStyle.Background(lipgloss.Color("236"))
+		}
+		preview := previewStyle.Render(" sample text ")
+		b.WriteString(fmt.Sprintf("  %s: %-12s   %s: %-12s   %s\n",
+			fgLabel, fgVal, bgLabel, bgVal, preview))
 	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  Arrows / mouse · Enter pick · m manual hex · x clear · Esc cancel"))
+	b.WriteString(dimStyle.Render("  Arrows/mouse move · Space assign+toggle · Enter accept · f/b/t slot · x clear · m manual · Esc cancel"))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

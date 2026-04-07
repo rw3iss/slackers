@@ -376,6 +376,45 @@ func (t Theme) Get(key string) string {
 	return ""
 }
 
+// GetFg returns just the foreground portion of a key's value.
+func (t Theme) GetFg(key string) string {
+	fg, _ := ParseColor(t.Get(key))
+	return fg
+}
+
+// GetBg returns just the background portion of a key's value.
+func (t Theme) GetBg(key string) string {
+	_, bg := ParseColor(t.Get(key))
+	return bg
+}
+
+// ParseColor splits a theme value into foreground and background parts.
+// Theme values support an optional "fg/bg" syntax:
+//
+//	""        -> fg="",   bg=""    (default)
+//	"12"      -> fg="12", bg=""
+//	"12/240"  -> fg="12", bg="240"
+//	"/240"    -> fg="",   bg="240" (background only)
+//	"#ff0/#003" works the same with hex strings.
+func ParseColor(value string) (fg, bg string) {
+	if value == "" {
+		return "", ""
+	}
+	if i := strings.Index(value, "/"); i >= 0 {
+		return value[:i], value[i+1:]
+	}
+	return value, ""
+}
+
+// JoinColor produces a fg/bg value string. Empty strings are preserved so
+// "/240" (bg only) and "12" (fg only) round-trip correctly.
+func JoinColor(fg, bg string) string {
+	if bg == "" {
+		return fg
+	}
+	return fg + "/" + bg
+}
+
 // IsDark returns true if the theme self-identifies as dark mode.
 func (t Theme) IsDark() bool {
 	return strings.ToLower(t.Mode) != "light"
