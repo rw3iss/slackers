@@ -13,6 +13,16 @@ import (
 	"github.com/rw3iss/slackers/internal/types"
 )
 
+// emojiLookup maps shortcodes to unicode for reaction rendering.
+var emojiLookup map[string]string
+
+func init() {
+	emojiLookup = make(map[string]string)
+	for _, e := range format.AllEmojis() {
+		emojiLookup[e.Code] = e.Emoji
+	}
+}
+
 // LoadMoreContextMsg requests loading more messages before the current context.
 type LoadMoreContextMsg struct {
 	ChannelID string
@@ -516,6 +526,24 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 					fmt.Sprintf("    [FILE:%s] (%s)", f.Name, sizeStr)))
 			}
 			fileIdx++
+		}
+
+		// Render reactions.
+		if len(msg.Reactions) > 0 {
+			var reactionParts []string
+			reactionStyle := lipgloss.NewStyle().
+				Background(lipgloss.Color("236")).
+				Foreground(lipgloss.Color("252")).
+				Padding(0, 1)
+			for _, r := range msg.Reactions {
+				emoji := r.Emoji
+				if e, ok := emojiLookup[r.Emoji]; ok {
+					emoji = e
+				}
+				reactionParts = append(reactionParts, reactionStyle.Render(
+					fmt.Sprintf("%s %d", emoji, r.Count)))
+			}
+			lines = append(lines, "    "+strings.Join(reactionParts, " "))
 		}
 
 		lines = append(lines, "")

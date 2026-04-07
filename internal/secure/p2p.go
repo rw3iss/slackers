@@ -35,6 +35,7 @@ const (
 	MsgTypeFileOffer     = "file_offer"    // sender offers a file
 	MsgTypeFileRequest   = "file_request"  // receiver requests the file data
 	MsgTypeFileData      = "file_data"     // sender sends file chunk (base64)
+	MsgTypeReaction      = "reaction"      // emoji reaction on a message
 
 	// Protocol for file transfers (separate from messaging).
 	P2PFileProtocol = protocol.ID("/slackers/file/1.0.0")
@@ -50,7 +51,11 @@ type P2PMessage struct {
 	// File transfer fields (only used for file_offer/file_request/file_data).
 	FileName string `json:"file_name,omitempty"`
 	FileSize int64  `json:"file_size,omitempty"`
-	FileID   string `json:"file_id,omitempty"` // unique ID for this transfer
+	FileID   string `json:"file_id,omitempty"`
+
+	// Reaction fields (only used for reaction type).
+	TargetMsgID   string `json:"target_msg_id,omitempty"`
+	ReactionEmoji string `json:"reaction_emoji,omitempty"`
 }
 
 // P2PNode manages the libp2p host and peer connections.

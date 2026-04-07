@@ -188,6 +188,9 @@ type Model struct {
 	friendsConfig   FriendsConfigModel
 	emojiPicker     EmojiPickerModel
 
+	// Reactions
+	reactMsgID string // message ID for pending reaction
+
 	// Friends
 	friendStore    *friends.FriendStore
 	friendHistory  *friends.ChatHistoryStore
@@ -313,6 +316,13 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 				p2pChan <- P2PReceivedMsg{
 					SenderID: peerSlackID,
 					Text:     "__disconnect__",
+				}
+			case secure.MsgTypeReaction:
+				p2pChan <- P2PReceivedMsg{
+					SenderID:  peerSlackID,
+					Text:      "__reaction__",
+					PubKey:    msg.TargetMsgID,
+					Multiaddr: msg.ReactionEmoji,
 				}
 			case secure.MsgTypeFileOffer:
 				p2pChan <- P2PReceivedMsg{
@@ -1290,7 +1300,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = types.FocusInput
 			m.updateFocus()
 		case EmojiPurposeReaction:
-			// TODO: wire to reaction system in Phase 3
+			// Send reaction to the selected message.
+			if m.currentCh != nil && m.reactMsgID != "" {
+				if m.currentCh.IsFriend && m.p2pNode != nil {
+					// P2P reaction.
+					go m.p2pNode.SendMessage(m.currentCh.UserID, secure.P2PMessage{
+						Type:          secure.MsgTypeReaction,
+						TargetMsgID:   m.reactMsgID,
+						ReactionEmoji: msg.Code,
+						SenderID:      m.currentCh.UserID,
+						Timestamp:     time.Now().Unix(),
+					})
+					// Update local history.
+					if m.friendHistory != nil {
+						m.friendHistory.UpdateReaction(m.currentCh.UserID, m.reactMsgID, msg.Code, "me")
+					}
+					// Update in-memory.
+					m.addLocalReaction(m.currentCh.UserID, m.reactMsgID, msg.Code)
+				} else if m.slackSvc != nil {
+					// Slack reaction.
+					go m.slackSvc.AddReaction(m.currentCh.ID, m.reactMsgID, msg.Code)
+				}
+				m.reactMsgID = ""
+			}
 		}
 		return m, nil
 
@@ -1530,6 +1562,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.friendStore.SetOnline(msg.SenderID, false)
 				m.friendStore.UpdateLastOnline(msg.SenderID)
 				m.channels.ClearUnread("friend:" + msg.SenderID)
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
+		// Handle incoming reactions.
+		if msg.Text == "__reaction__" {
+			targetMsgID := msg.PubKey
+			emoji := msg.Multiaddr
+			if m.friendHistory != nil {
+				m.friendHistory.UpdateReaction(msg.SenderID, targetMsgID, emoji, msg.SenderID)
+			}
+			// Update in-memory cache too.
+			if msgs, ok := m.friendMessages[msg.SenderID]; ok {
+				for i, m2 := range msgs {
+					if m2.MessageID == targetMsgID {
+						found := false
+						for j, r := range m2.Reactions {
+							if r.Emoji == emoji {
+								msgs[i].Reactions[j].Count++
+								msgs[i].Reactions[j].UserIDs = append(msgs[i].Reactions[j].UserIDs, msg.SenderID)
+								found = true
+								break
+							}
+						}
+						if !found {
+							msgs[i].Reactions = append(msgs[i].Reactions, types.Reaction{
+								Emoji: emoji, UserIDs: []string{msg.SenderID}, Count: 1,
+							})
+						}
+						break
+					}
+				}
+				// Refresh view if we're looking at this channel.
+				friendChID := "friend:" + msg.SenderID
+				if m.currentCh != nil && m.currentCh.ID == friendChID {
+					m.messages.SetMessages(msgs)
+				}
 			}
 			if m.p2pChan != nil {
 				return m, waitForP2PMsg(m.p2pChan)
@@ -2157,6 +2229,34 @@ func (m *Model) persistLastSeen() {
 }
 
 // setChannelHeader updates the message view header with channel name and secure indicator.
+// addLocalReaction updates in-memory friend message reactions and refreshes the view.
+func (m *Model) addLocalReaction(friendUID, messageID, emoji string) {
+	msgs := m.friendMessages[friendUID]
+	for i, msg := range msgs {
+		if msg.MessageID == messageID {
+			found := false
+			for j, r := range msg.Reactions {
+				if r.Emoji == emoji {
+					msgs[i].Reactions[j].Count++
+					msgs[i].Reactions[j].UserIDs = append(msgs[i].Reactions[j].UserIDs, "me")
+					found = true
+					break
+				}
+			}
+			if !found {
+				msgs[i].Reactions = append(msgs[i].Reactions, types.Reaction{
+					Emoji: emoji, UserIDs: []string{"me"}, Count: 1,
+				})
+			}
+			break
+		}
+	}
+	friendChID := "friend:" + friendUID
+	if m.currentCh != nil && m.currentCh.ID == friendChID {
+		m.messages.SetMessages(msgs)
+	}
+}
+
 // appendFriendMessage adds a message to a friend's history and persists it.
 func (m *Model) appendFriendMessage(userID string, msg types.Message) {
 	m.friendMessages[userID] = append(m.friendMessages[userID], msg)

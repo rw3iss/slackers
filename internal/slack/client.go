@@ -39,6 +39,10 @@ type SlackService interface {
 	DownloadFile(ctx context.Context, url, destPath string) error
 	// CheckNewMessages returns channel IDs with new messages and a map of all latest timestamps.
 	CheckNewMessages(lastSeen map[string]string) ([]string, map[string]string, error)
+	// AddReaction adds an emoji reaction to a message.
+	AddReaction(channelID, timestamp, emoji string) error
+	// RemoveReaction removes an emoji reaction from a message.
+	RemoveReaction(channelID, timestamp, emoji string) error
 	// Warnings returns and clears any accumulated fallback warnings.
 	Warnings() []string
 }
@@ -83,6 +87,20 @@ func (c *slackClient) Warnings() []string {
 	w := c.warnings
 	c.warnings = nil
 	return w
+}
+
+func (c *slackClient) AddReaction(channelID, timestamp, emoji string) error {
+	debug.Log("[api] AddReaction channel=%s ts=%s emoji=%s", channelID, timestamp, emoji)
+	return c.tryWithFallback("add reaction", func(api *slack.Client) error {
+		return api.AddReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: timestamp})
+	})
+}
+
+func (c *slackClient) RemoveReaction(channelID, timestamp, emoji string) error {
+	debug.Log("[api] RemoveReaction channel=%s ts=%s emoji=%s", channelID, timestamp, emoji)
+	return c.tryWithFallback("remove reaction", func(api *slack.Client) error {
+		return api.RemoveReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: timestamp})
+	})
 }
 
 func (c *slackClient) addWarning(msg string) {
