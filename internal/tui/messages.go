@@ -13,6 +13,9 @@ import (
 	"github.com/rw3iss/slackers/internal/types"
 )
 
+// ReactModeSelectMsg is sent when the user selects a message to react to.
+type ReactModeSelectMsg struct{ MessageID string }
+
 // emojiLookup maps shortcodes to unicode for reaction rendering.
 var emojiLookup map[string]string
 
@@ -60,6 +63,10 @@ type MessageViewModel struct {
 	selectMode  bool
 	selectables []selectableItem
 	selectIdx   int
+
+	// React mode — select a message to react to
+	reactMode bool
+	reactIdx  int // index into messages
 
 	// Context mode (search result viewing)
 	contextMode     bool
@@ -228,6 +235,38 @@ func (m *MessageViewModel) ExitSelectMode() {
 	}
 }
 
+// EnterReactMode enters message selection mode for adding reactions.
+func (m *MessageViewModel) EnterReactMode() bool {
+	if len(m.messages) > 0 {
+		m.reactMode = true
+		m.reactIdx = len(m.messages) - 1
+		m.rebuildContent()
+		return true
+	}
+	return false
+}
+
+// ExitReactMode exits react mode.
+func (m *MessageViewModel) ExitReactMode() {
+	if m.reactMode {
+		m.reactMode = false
+		m.rebuildContent()
+	}
+}
+
+// InReactMode returns whether react mode is active.
+func (m *MessageViewModel) InReactMode() bool {
+	return m.reactMode
+}
+
+// SelectedMessageID returns the MessageID of the currently selected message in react mode.
+func (m *MessageViewModel) SelectedMessageID() string {
+	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(m.messages) {
+		return ""
+	}
+	return m.messages[m.reactIdx].MessageID
+}
+
 // EnterFileSelectMode activates file selection if there are files available.
 func (m *MessageViewModel) EnterFileSelectMode() bool {
 	if len(m.selectables) > 0 {
@@ -285,6 +324,36 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				}
 			case "esc":
 				m.selectMode = false
+				m.rebuildContent()
+				return m, nil
+			}
+		}
+
+		// React mode navigation.
+		if m.reactMode {
+			switch keyMsg.String() {
+			case "up":
+				if m.reactIdx > 0 {
+					m.reactIdx--
+					m.rebuildContent()
+				}
+				return m, nil
+			case "down":
+				if m.reactIdx < len(m.messages)-1 {
+					m.reactIdx++
+					m.rebuildContent()
+				}
+				return m, nil
+			case "enter":
+				// Signal react mode selection — model.go opens emoji picker.
+				msgID := m.SelectedMessageID()
+				m.reactMode = false
+				m.rebuildContent()
+				return m, func() tea.Msg {
+					return ReactModeSelectMsg{MessageID: msgID}
+				}
+			case "esc":
+				m.reactMode = false
 				m.rebuildContent()
 				return m, nil
 			}
@@ -496,6 +565,12 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			nameStyle.Render(name),
 			TimestampStyle.Render(ts),
 		)
+
+		// Highlight selected message in react mode.
+		if m.reactMode && i == m.reactIdx {
+			reactHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
+			headerLine = reactHighlight.Render(headerLine + " [react: Enter to pick emoji]")
+		}
 
 		text := format.FormatMessage(msg.Text, m.users)
 		wrapped := wordWrap(text, maxWidth)

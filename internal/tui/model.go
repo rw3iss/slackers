@@ -548,6 +548,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overlay = overlayEmojiPicker
 			return m, nil
 
+		case key.Matches(msg, m.keymap.ReactMessage):
+			if m.focus == types.FocusMessages && m.currentCh != nil {
+				m.messages.EnterReactMode()
+			}
+			return m, nil
+
 		case key.Matches(msg, m.keymap.Befriend):
 			if m.currentCh != nil && m.currentCh.IsDM && m.currentCh.UserID != "" {
 				if m.friendStore != nil && m.friendStore.Get(m.currentCh.UserID) != nil {
@@ -1284,6 +1290,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayNone
 		// Refresh friend channels in sidebar after config changes.
 		m.channels.SetFriendChannels(m.buildFriendChannels())
+		return m, nil
+
+	case ReactModeSelectMsg:
+		if msg.MessageID != "" {
+			m.reactMsgID = msg.MessageID
+			m.emojiPicker = NewEmojiPicker(m.cfg.EmojiFavorites, EmojiPurposeReaction)
+			m.emojiPicker.SetSize(m.width, m.height)
+			m.overlay = overlayEmojiPicker
+		}
 		return m, nil
 
 	case EmojiSelectedMsg:

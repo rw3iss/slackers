@@ -33,5 +33,6 @@
   "sidebar_collapse": [" "],
   "toggle_input_mode": ["ctrl+\\"],
   "befriend": ["ctrl+b"],
-  "emoji_picker": ["ctrl+e"]
+  "emoji_picker": ["ctrl+e"],
+  "react_message": ["ctrl+j"]
 }
