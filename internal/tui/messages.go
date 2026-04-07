@@ -850,7 +850,7 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					m.rebuildContent()
 				}
 				return m, nil
-			case "enter":
+			case "enter", " ":
 				// If a reply-reaction is selected, toggle it.
 				if onReplyList && m.replyIdx >= 0 && m.replyIdx < len(sel.Replies) {
 					reply := sel.Replies[m.replyIdx]
