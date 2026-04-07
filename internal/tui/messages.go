@@ -273,8 +273,12 @@ func (m *MessageViewModel) ReactionAtClick(x, y int) (string, string) {
 	contentX := x - 2
 	absLine := y - 2 + m.viewport.YOffset
 	const xBuffer = 2 // extra forgiving cells on each side
+	// Accept clicks on the line above the reaction badge as well, so the
+	// "top half" of wide emoji glyphs (which often render slightly above
+	// their reported row) still register.
 	for _, h := range m.reactionHits {
-		if h.line == absLine && contentX >= h.startCol-xBuffer && contentX < h.endCol+xBuffer {
+		matchesY := h.line == absLine || h.line == absLine+1
+		if matchesY && contentX >= h.startCol-xBuffer && contentX < h.endCol+xBuffer {
 			return h.messageID, h.emoji
 		}
 	}
