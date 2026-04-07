@@ -163,8 +163,9 @@ func (m *EmojiPickerModel) computeLayout() {
 
 	// Box content area: top border(1) + padding(1) = +2 from box top.
 	// Then "Emoji Picker" title row (1) + blank (1) = tabs at +4.
-	contentLeftX := m.boxX + 1 + 2 // border + padding-left
-	m.tabRowY = m.boxY + 4
+	// Tabs render 1 row higher and 1 col left of computed (observed offset).
+	contentLeftX := m.boxX + 2 // border + 1 padding (observed)
+	m.tabRowY = m.boxY + 3
 
 	m.tabsPositions = nil
 	tabRowOffset := 0

@@ -116,7 +116,7 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Enter` / `Space` (header) | Collapse/expand channel group |
 | `Ctrl-B` | Send friend request to current DM user |
 | `Ctrl-E` | Open emoji picker (insert at cursor) |
-| `Ctrl-J` | Enter message select mode (or `s`/`↑`/`↓` in chat history) |
+| `Ctrl-J` | Message select mode (or `s`/`↑`/`↓` in chat history) |
 | `Esc` | Exit current mode → focus chat input → first/second clears input |
 | `Ctrl-H` | Help (shows current bindings) |
 | `Ctrl-S` | Settings |
