@@ -55,8 +55,9 @@ const (
 type fileBrowserPurpose int
 
 const (
-	fbPurposeAttach   fileBrowserPurpose = iota // selecting a file to send
-	fbPurposeSettings                           // selecting a download folder
+	fbPurposeAttach     fileBrowserPurpose = iota // selecting a file to send
+	fbPurposeSettings                             // selecting a download folder
+	fbPurposeImportTheme                          // selecting a theme JSON to import
 )
 
 // Custom message types for the TUI update loop.
@@ -287,6 +288,7 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	}
 	ch := NewChannelList()
 	ch.SetFocused(true)
+	ch.SetItemSpacing(cfg.SidebarItemSpacing)
 
 	inp := NewInput()
 	inp.SetHistory(cfg.InputHistory)
@@ -505,6 +507,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		// When the theme color picker is open, route every key through it
+		// before any global shortcut so e.g. Ctrl-B doesn't open the
+		// befriend dialog.
+		if m.overlay == overlayThemeColorPicker {
+			var cmd tea.Cmd
+			m.themeColorPicker, cmd = m.themeColorPicker.Update(msg)
+			return m, cmd
+		}
+
 		// Pending message-delete confirmation: y/Enter confirm, anything else cancel.
 		if m.pendingDeleteMsgID != "" {
 			s := msg.String()
@@ -554,6 +565,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.settings = NewSettingsModel(m.cfg, m.version)
 				m.settings.SetSize(m.width, m.height)
 				m.overlay = overlaySettings
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keymap.ToggleTheme):
+			// Swap the active theme with the configured alternate so the user
+			// can flip between, e.g., a dark and a light theme on the fly.
+			if m.cfg.AltTheme != "" {
+				newPrimary := m.cfg.AltTheme
+				m.cfg.AltTheme = m.cfg.Theme
+				m.cfg.Theme = newPrimary
+				if t, ok := theme.FindByName(newPrimary); ok {
+					ApplyTheme(t)
+					m.messages.Refresh()
+				}
+				go config.Save(m.cfg)
+				m.warning = "Switched to theme: " + newPrimary
+			} else {
+				m.warning = "No alternate theme set (configure in Settings → Appearance)"
 			}
 			return m, nil
 
@@ -1453,7 +1482,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ThemePickerOpenMsg:
-		m.themePicker = NewThemePicker()
+		m.themePicker = NewThemePicker(msg.ForAlt)
 		m.themePicker.SetSize(m.width, m.height)
 		m.overlay = overlayThemePicker
 		return m, nil
@@ -1462,10 +1491,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayNone
 		return m, nil
 
+	case ThemeImportBrowseMsg:
+		m.fileBrowser = NewFileBrowser(FileBrowserConfig{
+			Title:     "Select theme JSON to import",
+			ShowFiles: true,
+			ShowFolders: true,
+			FileTypes: []string{".json"},
+		})
+		m.fileBrowser.SetSize(m.width, m.height)
+		m.fbPurpose = fbPurposeImportTheme
+		m.overlay = overlayFileBrowser
+		return m, nil
+
+	case ThemeImportFileMsg:
+		m.themePicker.BeginImport(msg.Path)
+		m.overlay = overlayThemePicker
+		return m, nil
+
 	case ThemeAppliedMsg:
-		// Persist the user's chosen theme.
-		m.cfg.Theme = msg.Name
+		// Persist the user's chosen theme — to either slot depending on
+		// what the picker said it was selecting.
+		if msg.ForAlt {
+			m.cfg.AltTheme = msg.Name
+			// Don't change the renderer — restore the primary theme so the
+			// user keeps seeing what they were using.
+			if t, ok := theme.FindByName(m.cfg.Theme); ok {
+				ApplyTheme(t)
+			}
+		} else {
+			m.cfg.Theme = msg.Name
+		}
 		go config.Save(m.cfg)
+		m.messages.Refresh()
 		return m, nil
 
 	case ThemeEditorOpenMsg:
@@ -1477,21 +1534,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ThemeEditorCloseMsg:
 		// Return to the picker so the user can re-select / continue editing.
 		m.themePicker.Refresh()
+		m.messages.Refresh()
 		m.overlay = overlayThemePicker
 		return m, nil
 
+	case ThemeEditorSavedMsg:
+		// Editor saved a theme to disk; refresh any cached message lines so
+		// the new colors apply immediately to the chat history without a
+		// restart.
+		m.messages.Refresh()
+		return m, nil
+
 	case ThemeColorPickerOpenMsg:
+		m.themeEditor.BeginPreview(msg.Key)
 		m.themeColorPicker = NewThemeColorPicker(msg.Key, msg.Initial)
 		m.themeColorPicker.SetSize(m.width, m.height)
 		m.overlay = overlayThemeColorPicker
 		return m, nil
 
+	case ThemeColorPreviewMsg:
+		m.themeEditor.PreviewColor(msg.Color)
+		m.messages.Refresh()
+		return m, nil
+
 	case ThemeColorPickerCloseMsg:
+		// Cancelled — revert the editor's working theme to the original.
+		m.themeEditor.EndPreview(false)
+		m.messages.Refresh()
 		m.overlay = overlayThemeEditor
 		return m, nil
 
 	case ThemeColorPickedMsg:
+		// Committed — finalize and write the value into the working theme.
+		m.themeEditor.EndPreview(true)
 		m.themeEditor.SetColor(msg.Key, msg.Color)
+		m.messages.Refresh()
 		m.overlay = overlayThemeEditor
 		return m, nil
 
@@ -1630,6 +1707,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.settings.SetSize(m.width, m.height)
 				m.overlay = overlaySettings
 				return m, nil
+			}
+		case fbPurposeImportTheme:
+			if !msg.IsDir {
+				path := msg.Path
+				return m, func() tea.Msg { return ThemeImportFileMsg{Path: path} }
 			}
 		}
 		return m, nil
@@ -2222,6 +2304,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the full TUI layout.
 func (m Model) View() string {
+	return ApplyBackgroundReset(m.viewInner())
+}
+
+func (m Model) viewInner() string {
 	if !m.ready {
 		return ""
 	}
@@ -2323,6 +2409,7 @@ func (m *Model) applySettings() {
 		sortBy = SortByType
 	}
 	m.channels.SetSort(sortBy, sortAsc)
+	m.channels.SetItemSpacing(m.cfg.SidebarItemSpacing)
 	m.resizeComponents()
 }
 

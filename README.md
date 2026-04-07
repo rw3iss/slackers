@@ -19,6 +19,8 @@ A lightweight, terminal-based Slack client.
 - **Mouse support** -- click channels, scroll panels, drag sidebar resize, click files
 - **Multi-line editor** -- expandable textarea with normal/edit mode toggle
 - **Customizable shortcuts** -- rebind any key in-app, changes take effect immediately
+- **Color themes** -- 11 built-in themes, an in-app editor with a 256-color picker (fg/bg + bold/italic), live preview, and Ctrl-Y to flip between a primary + alternate theme
+- **Reactions on replies, message delete, inline reply selection** -- everything Slack does, in a TUI
 - **Channel management** -- hide, alias, collapse groups, sort by type/name/recent
 - **E2E encrypted messaging** -- optional P2P secure mode with X25519 key exchange
 - **Friends list** -- private P2P chat with befriended Slackers users, works without a Slack workspace
@@ -237,6 +239,126 @@ See [How_It_Works.md](How_It_Works.md#friends--private-chat) for the technical d
 
 ---
 
+## Themes
+
+Slackers ships with 11 built-in color themes — **Default, Dracula, Cyberpunk,
+Solarized Light, Forest, Nord, Synthwave, Monokai, Paper, Matrix, Sunset** —
+selectable from **Settings → Theme** with live preview as you arrow through
+the list.
+
+Custom themes live in `~/.config/slackers/themes/*.json` and are flat
+key/value maps from semantic color names to terminal colors. Values support
+an optional `fg/bg+attrs` syntax:
+
+```
+"primary": "12"           # 256-color foreground
+"selection": "12/240"     # foreground 12 on background 240
+"messageText": "/235"     # background only, default fg
+"pageHeader": "12+b"      # 256 fg, bold
+"highlight": "229+bi"     # bold + italic
+"replyLabel": "#ff8800"   # truecolor hex
+```
+
+The in-app **theme editor** (Settings → Theme → `e`) lets you tweak each color
+key with a 16×16 color picker that supports separate foreground / background
+slots, bold / italic, live preview through the rest of the app, and a `r`
+reset to revert your edits. The picker can be navigated with arrows or the
+mouse; `Tab` flips between FG and BG slots, `Alt-B` / `Alt-I` toggle bold and
+italic.
+
+**Sharing themes:**
+
+- In the editor: scroll to the **Export** row and press Enter — the theme
+  JSON is written to `~/Downloads/<name>.json`.
+- From the picker: press **`i`** (or pick the **Import…** row at the top) to
+  open a file browser and import a theme JSON. If a theme with the same name
+  already exists you'll be asked to overwrite or add it alongside (with an
+  auto-numbered name).
+- From the command line: `slackers import-theme <file>` validates and copies
+  the JSON straight into `~/.config/slackers/themes/`.
+
+**Alternate theme + toggle shortcut:**
+
+Set both **Theme** and **Alt Theme** in Settings → Appearance, then press
+**Ctrl-Y** anywhere in the app to swap between them. Useful for flipping
+between a dark and a light theme on the fly.
+
+---
+
+## Backup & Restore
+
+All of slackers' state lives under a single directory:
+
+```
+$XDG_CONFIG_HOME/slackers/        # Linux: ~/.config/slackers/
+                                  # macOS: ~/Library/Application Support/slackers/
+```
+
+That folder contains:
+
+| Path | Contents |
+|---|---|
+| `config.json` | Tokens, settings, sort order, theme name, mouse mode, ... |
+| `themes/` | Your custom theme JSON files |
+| `friends.json` | Friend list (slacker IDs, public keys, profile data) |
+| `friend_history/` | Encrypted P2P chat history per friend |
+| `secure.key` | Your local Curve25519 key pair (do not share) |
+| `shortcuts.json` | Custom keyboard-shortcut overrides |
+| `debug.log` | Debug output (when `--debug` is set) |
+
+### Manual backup
+
+Just copy the whole `slackers/` directory to a new machine. Place it in
+the same location relative to `XDG_CONFIG_HOME`/`HOME` and it will load
+on next launch.
+
+### `slackers export`
+
+Bundles the entire config directory into a single zip file in
+`~/Downloads`:
+
+```bash
+slackers export                  # ~/Downloads/slackers-export-YYYYMMDD-HHMMSS.zip
+slackers export ~/backups/me.zip # explicit destination
+slackers export --yes            # skip the confirmation prompt
+```
+
+Inside the app, **Settings → Backup → Export Settings** runs the same
+export and writes to `~/Downloads`.
+
+> ⚠️  The archive contains your tokens and chat history. Treat it like
+> a credential file.
+
+### `slackers import`
+
+Restores a previously exported archive:
+
+```bash
+slackers import ~/backups/me.zip                # interactive: choose mode
+slackers import ~/backups/me.zip --mode replace # wipe local config first
+slackers import ~/backups/me.zip --mode merge   # keep local data, add archive
+slackers import ~/backups/me.zip --mode merge --yes
+```
+
+Modes:
+
+- **replace** — wipes the local `slackers/` directory and unpacks the
+  archive on top. Use this when moving to a fresh machine.
+- **merge** — keeps your existing data and merges the archive on top:
+  - **friends.json**: union by `user_id`. Local entries win on conflict;
+    new friends from the archive are added.
+  - **friend_history/**: union by `message_id` (skipped for encrypted
+    histories where merging would corrupt the file).
+  - **emoji_favorites**: union, preserving local order first.
+  - **themes/**: archived themes by the same name overwrite local copies;
+    new themes are added.
+  - **config.json**: any field set in the archive overrides the local
+    value; unset fields stay as-is. Tokens you keep locally aren't
+    clobbered unless the archive sets them.
+  - Other files (like `secure.key`) are only written if missing locally.
+
+---
+
 ## Development
 
 ### Build
@@ -346,13 +468,13 @@ configs/            Default config, Slack app manifest
 
 ## About
 
-Designed by Ryan Weiss (www.ryanweiss.net)
+Designed by Ryan Weiss (https://ryanweiss.net)
 
-Developed by Wet Dream (my Claude friend) (www.claude.ai)
+Developed by Claude (https://claude.ai)
 
-Project was started 4/5/2026, and mostly built in one weekend.
+Project started on 4/5/2026, mostly built in one weekend.
 
-If you find Slackers useful, star the repo, or throw some coin:
+If you find Slackers useful, star the repo, or throw me some coin:
 
 [buymeacoffee.com/ttv1xp6yAj](https://buymeacoffee.com/ttv1xp6yAj)
 

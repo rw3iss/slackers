@@ -49,6 +49,25 @@ func init() {
 	}
 }
 
+// resolveEmoji turns a Slack reaction shortcode into a renderable string.
+// Handles modifier suffixes (e.g. "pray::skin-tone-5") by stripping the
+// "::..." tail and falling back to the base emoji. Wraps the result in
+// colons (":code:") if no unicode emoji is known so the user still sees
+// a recognizable label.
+func resolveEmoji(code string) string {
+	if e, ok := emojiLookup[code]; ok {
+		return e
+	}
+	// Strip Slack modifier suffix and try the base.
+	if i := strings.Index(code, "::"); i >= 0 {
+		base := code[:i]
+		if e, ok := emojiLookup[base]; ok {
+			return e
+		}
+	}
+	return ":" + code + ":"
+}
+
 // LoadMoreContextMsg requests loading more messages before the current context.
 type LoadMoreContextMsg struct {
 	ChannelID string
@@ -113,7 +132,7 @@ type MessageViewModel struct {
 	savedScrollOff  int // viewport YOffset before entering thread, restored on exit
 
 	// Inline collapse — track which message replies are collapsed
-	collapsedReplies map[string]bool
+	expandedReplies map[string]bool
 
 	// boxFirstMessage tells renderMessageList to wrap the first message in
 	// horizontal rules so it stands out (used by the thread view).
@@ -138,7 +157,7 @@ func NewMessageView() MessageViewModel {
 		viewport:         vp,
 		users:            make(map[string]string),
 		autoScroll:       true,
-		collapsedReplies: make(map[string]bool),
+		expandedReplies: make(map[string]bool),
 	}
 }
 
@@ -262,7 +281,27 @@ func (m *MessageViewModel) SetSize(w, h int) {
 }
 
 func (m *MessageViewModel) SetFocused(focused bool) {
+	wasFocused := m.focused
 	m.focused = focused
+	// Leaving the messages pane should drop the user out of any modal sub-modes
+	// (react/select, file-select) so they don't get stuck in a hidden state.
+	if wasFocused && !focused {
+		dirty := false
+		if m.reactMode {
+			m.reactMode = false
+			m.reactionSelIdx = -1
+			m.replyIdx = -1
+			m.replyReactionSelIdx = -1
+			dirty = true
+		}
+		if m.selectMode {
+			m.selectMode = false
+			dirty = true
+		}
+		if dirty {
+			m.rebuildContent()
+		}
+	}
 }
 
 // ReactionAtClick returns the (messageID, emoji) of a reaction badge at the click position, or empty.
@@ -298,6 +337,12 @@ func (m *MessageViewModel) MessageReactions(messageID string) []types.Reaction {
 // or nested reply), or nil if not found.
 func (m *MessageViewModel) MessageByID(messageID string) *types.Message {
 	return m.findMessage(messageID)
+}
+
+// Refresh re-renders the cached viewport content. Call this after a theme
+// switch so the cached ANSI codes are rebuilt against the new colors.
+func (m *MessageViewModel) Refresh() {
+	m.rebuildContent()
 }
 
 // DeleteMessageLocal removes a message (top-level or nested reply) from the
@@ -693,10 +738,10 @@ func (m *MessageViewModel) ThreadParentID() string {
 
 // ToggleReplyCollapse toggles inline reply collapse for a message ID.
 func (m *MessageViewModel) ToggleReplyCollapse(msgID string) {
-	if m.collapsedReplies == nil {
-		m.collapsedReplies = make(map[string]bool)
+	if m.expandedReplies == nil {
+		m.expandedReplies = make(map[string]bool)
 	}
-	m.collapsedReplies[msgID] = !m.collapsedReplies[msgID]
+	m.expandedReplies[msgID] = !m.expandedReplies[msgID]
 	m.rebuildContent()
 }
 
@@ -797,7 +842,7 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 			sel := m.SelectedMessage()
 			// Whether the parent has an inline reply list (a virtual sub-element after reactions).
 			// Disabled in thread mode since replies are first-class items there.
-			hasInlineReplies := !m.threadMode && sel != nil && m.replyFormat == "inline" && len(sel.Replies) > 0 && !m.collapsedReplies[sel.MessageID]
+			hasInlineReplies := !m.threadMode && sel != nil && m.replyFormat == "inline" && len(sel.Replies) > 0 && m.expandedReplies[sel.MessageID]
 			subElems := 0
 			if sel != nil {
 				subElems = len(sel.Reactions)
@@ -1291,7 +1336,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		if m.reactMode && i == m.reactIdx {
 			selectHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
 			hasReactions := len(msg.Reactions) > 0
-			hasInlineReplies := !m.threadMode && m.replyFormat == "inline" && len(msg.Replies) > 0 && !m.collapsedReplies[msg.MessageID]
+			hasInlineReplies := !m.threadMode && m.replyFormat == "inline" && len(msg.Replies) > 0 && m.expandedReplies[msg.MessageID]
 			var hint string
 			switch {
 			case hasReactions && hasInlineReplies:
@@ -1308,7 +1353,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 
 		text := format.FormatMessage(msg.Text, m.users)
 		wrapped := wordWrap(text, maxWidth)
-		textLines := strings.Split(wrapped, "\n")
+		var textLines []string
+		if wrapped != "" {
+			textLines = strings.Split(wrapped, "\n")
+		}
 
 		// Top rule for the boxed first message (used by thread view).
 		if m.boxFirstMessage && i == 0 {
@@ -1373,10 +1421,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 					Bold(true).
 					Padding(0, 1)
 				for ri, r := range msg.Reactions {
-					emoji := r.Emoji
-					if e, ok := emojiLookup[r.Emoji]; ok {
-						emoji = e
-					}
+					emoji := resolveEmoji(r.Emoji)
 					var rendered string
 					if m.reactMode && i == m.reactIdx && ri == m.reactionSelIdx {
 						rendered = selectedReactionStyle.Render(fmt.Sprintf("%s %d", emoji, r.Count))
@@ -1390,11 +1435,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			reactionsStr := strings.Join(reactionParts, " ")
 
 			// Compute the start column of the reactions block.
-			// Layout: "    " (4 spaces) + replyLabel + "  " (2 spaces) + reactions (if both)
-			//        OR "    " + reactions (if no reply)
-			reactionStartCol := 4
+			// Layout: "   " (3 spaces) + replyLabel + "  " (2 spaces) + reactions
+			reactionStartCol := 3
 			if replyLabel != "" && reactionsStr != "" {
-				reactionStartCol = 4 + lipgloss.Width(replyLabel) + 2
+				reactionStartCol = 3 + lipgloss.Width(replyLabel) + 2
 			}
 
 			// Record reaction badge positions for click hit-testing.
@@ -1415,18 +1459,18 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 
 			if replyLabel != "" && reactionsStr != "" {
 				m.replyLineMsgID[currentLine] = msg.MessageID
-				lines = append(lines, "    "+replyLabel+"  "+reactionsStr)
+				lines = append(lines, "   "+replyLabel+"  "+reactionsStr)
 			} else if replyLabel != "" {
 				m.replyLineMsgID[currentLine] = msg.MessageID
-				lines = append(lines, "    "+replyLabel)
+				lines = append(lines, "   "+replyLabel)
 			} else {
-				lines = append(lines, "    "+reactionsStr)
+				lines = append(lines, "   "+reactionsStr)
 			}
 		}
 
 		// Inline reply rendering (if enabled).
-		if m.replyFormat == "inline" && replyCount > 0 && !m.collapsedReplies[msg.MessageID] {
-			replyIndent := "        "
+		if m.replyFormat == "inline" && replyCount > 0 && m.expandedReplies[msg.MessageID] {
+			replyIndent := "    "
 			replyHeaderStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 			reactionStyle := lipgloss.NewStyle().
 				Background(lipgloss.Color("236")).
@@ -1457,17 +1501,14 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				lines = append(lines, replyIndent+header)
 				rText := format.FormatMessage(reply.Text, m.users)
 				for _, rLine := range strings.Split(rText, "\n") {
-					lines = append(lines, replyIndent+"  "+rLine)
+					lines = append(lines, replyIndent+"  "+MessageTextStyle.Render(rLine))
 				}
 				// Reactions row for this reply.
 				if len(reply.Reactions) > 0 {
 					var parts []string
 					var widths []int
 					for rj, r := range reply.Reactions {
-						emoji := r.Emoji
-						if e, ok := emojiLookup[r.Emoji]; ok {
-							emoji = e
-						}
+						emoji := resolveEmoji(r.Emoji)
 						var rendered string
 						if replyListActive && ri == m.replyIdx && rj == m.replyReactionSelIdx {
 							rendered = selectedReactionStyle.Render(fmt.Sprintf("%s %d", emoji, r.Count))

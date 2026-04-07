@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -15,21 +18,31 @@ import (
 // Messages
 // =====================================================================
 
-// ThemePickerOpenMsg requests opening the theme list overlay.
-type ThemePickerOpenMsg struct{}
+// ThemePickerOpenMsg requests opening the theme list overlay. ForAlt=true
+// makes the picker store its result as the alternate theme instead of the
+// primary one.
+type ThemePickerOpenMsg struct{ ForAlt bool }
 
 // ThemePickerCloseMsg signals the picker should close.
 type ThemePickerCloseMsg struct{}
 
 // ThemeAppliedMsg fires after a theme is applied so the model can save
-// the choice to config.
-type ThemeAppliedMsg struct{ Name string }
+// the choice to config. ForAlt is true when the picker was opened to
+// select the alternate theme rather than the primary one.
+type ThemeAppliedMsg struct {
+	Name   string
+	ForAlt bool
+}
 
 // ThemeEditorOpenMsg opens the editor for the named theme.
 type ThemeEditorOpenMsg struct{ Theme theme.Theme }
 
 // ThemeEditorCloseMsg dismisses the editor.
 type ThemeEditorCloseMsg struct{}
+
+// ThemeEditorSavedMsg fires after the editor saves a theme to disk so the
+// model can refresh any caches that depend on theme colors.
+type ThemeEditorSavedMsg struct{}
 
 // ThemeColorPickerOpenMsg opens the color picker for editing a single key.
 type ThemeColorPickerOpenMsg struct {
@@ -43,8 +56,23 @@ type ThemeColorPickedMsg struct {
 	Color string
 }
 
+// ThemeColorPreviewMsg fires as the picker cursor moves so the editor (and
+// the rest of the app) can show a live preview of the would-be selection.
+type ThemeColorPreviewMsg struct {
+	Key   string
+	Color string
+}
+
 // ThemeColorPickerCloseMsg dismisses the color picker without selection.
 type ThemeColorPickerCloseMsg struct{}
+
+// ThemeImportBrowseMsg asks the model to open the file browser for an
+// import-theme operation.
+type ThemeImportBrowseMsg struct{}
+
+// ThemeImportFileMsg carries the filesystem path the user picked from the
+// file browser. The picker handles validation, conflicts, and saving.
+type ThemeImportFileMsg struct{ Path string }
 
 // =====================================================================
 // Theme List (picker)
@@ -52,7 +80,7 @@ type ThemeColorPickerCloseMsg struct{}
 
 // ThemePickerModel lists all available themes. Live-applies the
 // highlighted theme as the user navigates so the change is previewed
-// immediately.
+// immediately. selected == -1 represents the virtual "Import..." row.
 type ThemePickerModel struct {
 	themes        []theme.Theme
 	selected      int
@@ -60,11 +88,18 @@ type ThemePickerModel struct {
 	original      theme.Theme // for cancel-revert
 	confirmDelete bool        // showing the delete confirmation prompt
 	message       string
+	forAlt        bool // true when picking the alternate theme
+
+	// Import conflict prompt state.
+	importPending      *theme.Theme // parsed but not yet saved
+	importPendingPath  string       // source path of the pending import
+	importHasConflict  bool         // true while waiting for o/a/n response
 }
 
 // NewThemePicker constructs a fresh picker, restoring the position of
-// the active theme so reopens are stable.
-func NewThemePicker() ThemePickerModel {
+// the active theme so reopens are stable. forAlt=true makes the picker
+// stamp its result with ForAlt so the model writes it to the alt slot.
+func NewThemePicker(forAlt bool) ThemePickerModel {
 	all := theme.LoadAll()
 	active := ActiveTheme()
 	idx := 0
@@ -78,6 +113,7 @@ func NewThemePicker() ThemePickerModel {
 		themes:   all,
 		selected: idx,
 		original: active,
+		forAlt:   forAlt,
 	}
 }
 
@@ -110,6 +146,68 @@ func (m *ThemePickerModel) applyAtCursor() {
 func (m ThemePickerModel) Update(msg tea.Msg) (ThemePickerModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Import-conflict prompt eats the next key.
+		if m.importHasConflict {
+			switch strings.ToLower(msg.String()) {
+			case "o":
+				// Overwrite the existing theme.
+				if m.importPending != nil {
+					if _, err := theme.Save(*m.importPending); err != nil {
+						m.message = "Import failed: " + err.Error()
+					} else {
+						m.message = "Imported (overwrote): " + m.importPending.Name
+						m.reload()
+						// Move selection onto the imported theme.
+						for i, t := range m.themes {
+							if strings.EqualFold(t.Name, m.importPending.Name) {
+								m.selected = i
+								break
+							}
+						}
+						m.applyAtCursor()
+					}
+				}
+			case "a":
+				// Add alongside — append a numeric suffix until unique.
+				if m.importPending != nil {
+					base := m.importPending.Name
+					counter := 2
+					for {
+						candidate := fmt.Sprintf("%s %d", base, counter)
+						if _, exists := theme.FindByName(candidate); !exists {
+							m.importPending.Name = candidate
+							break
+						}
+						counter++
+						if counter > 1000 {
+							m.message = "Could not find a unique name"
+							m.importPending = nil
+							m.importHasConflict = false
+							return m, nil
+						}
+					}
+					if _, err := theme.Save(*m.importPending); err != nil {
+						m.message = "Import failed: " + err.Error()
+					} else {
+						m.message = "Imported as: " + m.importPending.Name
+						m.reload()
+						for i, t := range m.themes {
+							if strings.EqualFold(t.Name, m.importPending.Name) {
+								m.selected = i
+								break
+							}
+						}
+						m.applyAtCursor()
+					}
+				}
+			default:
+				m.message = "Import cancelled"
+			}
+			m.importHasConflict = false
+			m.importPending = nil
+			m.importPendingPath = ""
+			return m, nil
+		}
 		// Confirm-delete prompt eats the next key.
 		if m.confirmDelete {
 			switch strings.ToLower(msg.String()) {
@@ -136,7 +234,7 @@ func (m ThemePickerModel) Update(msg tea.Msg) (ThemePickerModel, tea.Cmd) {
 			ApplyTheme(m.original)
 			return m, func() tea.Msg { return ThemePickerCloseMsg{} }
 		case "up", "k":
-			if m.selected > 0 {
+			if m.selected > -1 {
 				m.selected--
 				m.applyAtCursor()
 			}
@@ -145,12 +243,20 @@ func (m ThemePickerModel) Update(msg tea.Msg) (ThemePickerModel, tea.Cmd) {
 				m.selected++
 				m.applyAtCursor()
 			}
+		case "i":
+			// 'i' shortcut to import a theme file.
+			return m, func() tea.Msg { return ThemeImportBrowseMsg{} }
 		case "enter":
+			// Import row?
+			if m.selected == -1 {
+				return m, func() tea.Msg { return ThemeImportBrowseMsg{} }
+			}
 			// Confirm selection (already applied) and persist.
 			if m.selected >= 0 && m.selected < len(m.themes) {
 				name := m.themes[m.selected].Name
-				return m, tea.Batch(
-					func() tea.Msg { return ThemeAppliedMsg{Name: name} },
+				forAlt := m.forAlt
+				return m, tea.Sequence(
+					func() tea.Msg { return ThemeAppliedMsg{Name: name, ForAlt: forAlt} },
 					func() tea.Msg { return ThemePickerCloseMsg{} },
 				)
 			}
@@ -196,8 +302,52 @@ func (m ThemePickerModel) Update(msg tea.Msg) (ThemePickerModel, tea.Cmd) {
 }
 
 // Refresh reloads the theme list (used after the editor saves changes).
+// Also re-captures the active theme as the new "original" so a subsequent
+// Esc-cancel doesn't revert edits the editor just persisted.
 func (m *ThemePickerModel) Refresh() {
 	m.reload()
+	m.original = ActiveTheme()
+}
+
+// BeginImport tries to import the theme file at path. If the file is
+// invalid an error message is set. If the theme conflicts with an
+// existing theme by name, the picker enters its conflict-prompt state
+// (the user is asked whether to overwrite or add alongside). If there
+// is no conflict the file is saved immediately and the list refreshed.
+func (m *ThemePickerModel) BeginImport(path string) {
+	t, err := theme.Load(path)
+	if err != nil {
+		m.message = "Invalid theme: " + err.Error()
+		return
+	}
+	if t.Name == "" {
+		m.message = "Theme file has no name"
+		return
+	}
+	if t.Colors == nil {
+		m.message = "Theme file has no colors"
+		return
+	}
+	if _, exists := theme.FindByName(t.Name); exists {
+		m.importPending = &t
+		m.importPendingPath = path
+		m.importHasConflict = true
+		m.message = fmt.Sprintf("Theme %q already exists — [o]verwrite, [a]dd alongside, Esc cancel", t.Name)
+		return
+	}
+	if _, err := theme.Save(t); err != nil {
+		m.message = "Save failed: " + err.Error()
+		return
+	}
+	m.message = "Imported: " + t.Name
+	m.reload()
+	for i, th := range m.themes {
+		if strings.EqualFold(th.Name, t.Name) {
+			m.selected = i
+			break
+		}
+	}
+	m.applyAtCursor()
 }
 
 // View renders the picker as a centered modal.
@@ -206,10 +356,26 @@ func (m ThemePickerModel) View() string {
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 	selStyle := lipgloss.NewStyle().Foreground(ColorSelection).Bold(true)
 	muteStyle := lipgloss.NewStyle().Foreground(ColorMuted)
+	textStyle := lipgloss.NewStyle().Foreground(ColorMenuItem)
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Themes"))
 	b.WriteString("\n\n")
+	// Import row at the top.
+	{
+		marker := "  "
+		if m.selected == -1 {
+			marker = "> "
+		}
+		label := marker + "Import…"
+		if m.selected == -1 {
+			label = selStyle.Render(label)
+		} else {
+			label = textStyle.Render(label)
+		}
+		b.WriteString(label + muteStyle.Render("  Browse for a theme JSON to add"))
+		b.WriteString("\n\n")
+	}
 	if len(m.themes) == 0 {
 		b.WriteString(dimStyle.Render("  (no themes found)"))
 		b.WriteString("\n")
@@ -223,9 +389,11 @@ func (m ThemePickerModel) View() string {
 		if t.Builtin {
 			tag = muteStyle.Render(" [built-in]")
 		}
-		line := marker + t.Name + tag
+		var line string
 		if i == m.selected {
-			line = selStyle.Render(line)
+			line = selStyle.Render(marker+t.Name) + tag
+		} else {
+			line = textStyle.Render(marker+t.Name) + tag
 		}
 		b.WriteString(line)
 		b.WriteString("\n")
@@ -235,7 +403,7 @@ func (m ThemePickerModel) View() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.message))
 		b.WriteString("\n\n")
 	}
-	b.WriteString(dimStyle.Render("  ↑/↓ preview · Enter apply · e edit · c clone · d delete · Esc cancel"))
+	b.WriteString(dimStyle.Render("  ↑/↓ preview · Enter apply · e edit · c clone · d delete · i import · Esc cancel"))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -260,6 +428,12 @@ type ThemeEditorModel struct {
 	confirmCancel bool
 	dirty         bool
 	message       string
+
+	// Active picker preview state. While the color picker is open, the
+	// editor records the key being edited and its original value so that
+	// EndPreview(false) can revert if the user cancels.
+	previewKey      string
+	previewOriginal string
 }
 
 // NewThemeEditor constructs an editor for a copy of the given theme.
@@ -296,6 +470,51 @@ func (m *ThemeEditorModel) SetColor(key, value string) {
 	m.current.Colors[key] = value
 	m.dirty = true
 	ApplyTheme(m.current)
+}
+
+// BeginPreview records the current value of `key` so EndPreview(false) can
+// revert. Called when the color picker opens.
+func (m *ThemeEditorModel) BeginPreview(key string) {
+	m.previewKey = key
+	m.previewOriginal = m.current.Get(key)
+}
+
+// PreviewColor temporarily applies a color value to the working theme without
+// committing it. Call repeatedly as the picker cursor moves.
+func (m *ThemeEditorModel) PreviewColor(value string) {
+	if m.previewKey == "" {
+		return
+	}
+	if m.current.Colors == nil {
+		m.current.Colors = map[string]string{}
+	}
+	m.current.Colors[m.previewKey] = value
+	ApplyTheme(m.current)
+}
+
+// EndPreview finalizes the preview. If commit is true the current value
+// stays and the editor is marked dirty. If false the original value is
+// restored.
+func (m *ThemeEditorModel) EndPreview(commit bool) {
+	if m.previewKey == "" {
+		return
+	}
+	if commit {
+		m.dirty = true
+	} else {
+		if m.current.Colors == nil {
+			m.current.Colors = map[string]string{}
+		}
+		m.current.Colors[m.previewKey] = m.previewOriginal
+		ApplyTheme(m.current)
+	}
+	m.previewKey = ""
+	m.previewOriginal = ""
+}
+
+// PreviewOriginal returns the value the picker should restore on a reset.
+func (m *ThemeEditorModel) PreviewOriginal() string {
+	return m.previewOriginal
 }
 
 // Update handles editor input.
@@ -354,7 +573,8 @@ func (m ThemeEditorModel) Update(msg tea.Msg) (ThemeEditorModel, tea.Cmd) {
 				m.selected--
 			}
 		case "down", "j":
-			if m.selected < len(theme.AllKeys) { // 0..len = name + keys
+			// 0 = name, 1..len = color keys, len+1 = Export action row.
+			if m.selected < len(theme.AllKeys)+1 {
 				m.selected++
 			}
 		case "enter", " ":
@@ -372,6 +592,16 @@ func (m ThemeEditorModel) Update(msg tea.Msg) (ThemeEditorModel, tea.Cmd) {
 					return ThemeColorPickerOpenMsg{Key: key, Initial: m.current.Get(key)}
 				}
 			}
+			// Export action row.
+			if m.selected == len(theme.AllKeys)+1 {
+				path, err := exportThemeToDownloads(m.current)
+				if err != nil {
+					m.message = "Export failed: " + err.Error()
+				} else {
+					m.message = "Exported to " + path
+				}
+				return m, nil
+			}
 		case "s":
 			// Save: persist the working theme.
 			if strings.TrimSpace(m.current.Name) == "" {
@@ -385,14 +615,59 @@ func (m ThemeEditorModel) Update(msg tea.Msg) (ThemeEditorModel, tea.Cmd) {
 				m.message = "Save failed: " + err.Error()
 				return m, nil
 			}
+			// Preserve the working color map on the saved struct, then re-apply
+			// it so the rest of the app instantly reflects the persisted theme.
+			saved.Colors = m.current.Colors
 			m.current = saved
 			m.original = saved
 			m.dirty = false
 			m.message = "Saved"
-			return m, nil
+			ApplyTheme(m.current)
+			return m, func() tea.Msg { return ThemeEditorSavedMsg{} }
 		}
 	}
 	return m, nil
+}
+
+// exportThemeToDownloads writes a theme to ~/Downloads/<name>.json so the
+// user can share it with others. Returns the absolute path on success.
+func exportThemeToDownloads(t theme.Theme) (string, error) {
+	dir := backupDownloadsDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	name := theme.SanitizeFilename(t.Name)
+	if name == "" {
+		name = "theme"
+	}
+	path := filepath.Join(dir, name+".json")
+	exported := theme.Theme{
+		Name:   t.Name,
+		Mode:   t.Mode,
+		Colors: t.Colors,
+	}
+	data, err := json.MarshalIndent(exported, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", err
+	}
+	abs, _ := filepath.Abs(path)
+	return abs, nil
+}
+
+// backupDownloadsDir returns ~/Downloads (or the user's home as a fallback).
+func backupDownloadsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return os.TempDir()
+	}
+	dl := filepath.Join(home, "Downloads")
+	if info, err := os.Stat(dl); err == nil && info.IsDir() {
+		return dl
+	}
+	return home
 }
 
 // saveTheme persists the working theme. If the name changed, the old
@@ -417,6 +692,7 @@ func (m ThemeEditorModel) View() string {
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 	muteStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 	selStyle := lipgloss.NewStyle().Foreground(ColorSelection).Bold(true)
+	textStyle := lipgloss.NewStyle().Foreground(ColorMenuItem)
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Theme Editor"))
@@ -435,14 +711,20 @@ func (m ThemeEditorModel) View() string {
 		} else {
 			value = m.current.Name
 		}
-		line := marker + label + value
-		if m.selected == 0 && !m.editingName {
-			line = selStyle.Render(line)
+		var line string
+		switch {
+		case m.selected == 0 && !m.editingName:
+			line = selStyle.Render(marker + label + value)
+		case m.editingName:
+			line = textStyle.Render(marker+label) + value
+		default:
+			line = textStyle.Render(marker + label + value)
 		}
 		b.WriteString(line)
 		b.WriteString("\n\n")
 	}
 
+	const valueCellW = 14
 	for i, key := range theme.AllKeys {
 		marker := "  "
 		isSel := m.selected == i+1
@@ -454,25 +736,68 @@ func (m ThemeEditorModel) View() string {
 		if val == "" {
 			valLabel = "(default)"
 		}
-		// Render the value in its actual color so the user gets a live preview.
-		valStyle := lipgloss.NewStyle()
-		if val != "" {
-			valStyle = valStyle.Foreground(lipgloss.Color(val)).Bold(true)
-		} else {
-			valStyle = valStyle.Foreground(ColorMuted)
+		// Render the value in a fixed-width centered cell using the actual
+		// fg + bg colors of the value, so the editor shows a real preview.
+		// If the value has no explicit background, fall back to the theme's
+		// general background so the cell looks the way it will in context.
+		fg, bg, bold, italic := theme.ParseColorFull(val)
+		cellStyle := lipgloss.NewStyle().
+			Width(valueCellW).
+			Align(lipgloss.Center)
+		if fg != "" {
+			cellStyle = cellStyle.Foreground(lipgloss.Color(fg))
+		}
+		bgColor := bg
+		if bgColor == "" {
+			bgColor = m.current.GetBg(theme.KeyBackground)
+		}
+		if bgColor != "" {
+			cellStyle = cellStyle.Background(lipgloss.Color(bgColor))
+		}
+		if bold {
+			cellStyle = cellStyle.Bold(true)
+		}
+		if italic {
+			cellStyle = cellStyle.Italic(true)
+		}
+		if fg == "" && bg == "" {
+			cellStyle = cellStyle.Foreground(ColorMuted)
 		}
 		// Pad the key label to a fixed width for alignment.
 		label := padRight(key, 16)
-		line := marker + label + " " + valStyle.Render(valLabel)
+		labelStr := marker + label
 		if isSel {
-			line = selStyle.Render(marker+label) + " " + valStyle.Render(valLabel)
+			labelStr = selStyle.Render(labelStr)
+		} else {
+			labelStr = textStyle.Render(labelStr)
 		}
+		line := labelStr + " " + cellStyle.Render(valLabel)
 		// Description in muted text after the value.
 		desc := theme.KeyDescription(key)
 		if desc != "" {
 			line += "  " + muteStyle.Render(desc)
 		}
 		b.WriteString(line)
+		b.WriteString("\n")
+	}
+
+	// Export action row at the bottom.
+	{
+		exportIdx := len(theme.AllKeys) + 1
+		marker := "  "
+		isSel := m.selected == exportIdx
+		if isSel {
+			marker = "> "
+		}
+		label := padRight("Export", 16)
+		labelStr := marker + label
+		if isSel {
+			labelStr = selStyle.Render(labelStr)
+		} else {
+			labelStr = textStyle.Render(labelStr)
+		}
+		hint := muteStyle.Render("  Save this theme to ~/Downloads as a shareable JSON")
+		b.WriteString("\n" + labelStr + hint)
 		b.WriteString("\n")
 	}
 
@@ -508,8 +833,9 @@ const (
 )
 
 // ThemeColorPickerModel renders a 16x16 grid of the 256 standard terminal
-// colors. The user can pick BOTH a foreground and a background, then accept
-// to commit the combined "fg/bg" value back to the theme editor.
+// colors. The user can pick BOTH a foreground and a background plus toggle
+// bold and italic attributes, then accept to commit the combined value
+// back to the theme editor.
 type ThemeColorPickerModel struct {
 	key           string
 	width, height int
@@ -524,15 +850,23 @@ type ThemeColorPickerModel struct {
 
 	// Active slot the next pick / clear targets.
 	slot pickerSlot
-	// Working fg/bg values (raw color strings, "" = default).
-	fg string
-	bg string
+	// Working fg/bg values (raw color strings, "" = default) and attributes.
+	fg     string
+	bg     string
+	bold   bool
+	italic bool
+	// Initial values captured at construction time, for the reset key
+	// and so the parent can revert if the user cancels.
+	initialFg     string
+	initialBg     string
+	initialBold   bool
+	initialItalic bool
 }
 
 // NewThemeColorPicker constructs a new color picker for the given key
-// and the initial combined value (e.g. "12" or "12/240").
+// and the initial combined value (e.g. "12" or "12/240+bi").
 func NewThemeColorPicker(key, initial string) ThemeColorPickerModel {
-	fg, bg := theme.ParseColor(initial)
+	fg, bg, bold, italic := theme.ParseColorFull(initial)
 	cursorR, cursorC := 0, 0
 	if n, err := strconv.Atoi(fg); err == nil && n >= 0 && n < 256 {
 		cursorR = n / 16
@@ -542,15 +876,21 @@ func NewThemeColorPicker(key, initial string) ThemeColorPickerModel {
 	ti.CharLimit = 32
 	ti.SetValue(initial)
 	return ThemeColorPickerModel{
-		key:         key,
-		cursorR:     cursorR,
-		cursorC:     cursorC,
-		cellW:       4,
-		cellH:       2,
-		manualInput: ti,
-		slot:        pickerSlotFg,
-		fg:          fg,
-		bg:          bg,
+		key:           key,
+		cursorR:       cursorR,
+		cursorC:       cursorC,
+		cellW:         4,
+		cellH:         2,
+		manualInput:   ti,
+		slot:          pickerSlotFg,
+		fg:            fg,
+		bg:            bg,
+		bold:          bold,
+		italic:        italic,
+		initialFg:     fg,
+		initialBg:     bg,
+		initialBold:   bold,
+		initialItalic: italic,
 	}
 }
 
@@ -565,15 +905,38 @@ func (m *ThemeColorPickerModel) currentIndex() int {
 	return m.cursorR*16 + m.cursorC
 }
 
-// commit emits the combined fg/bg value back to the editor.
+// commit emits the combined fg/bg+attrs value back to the editor.
 func (m *ThemeColorPickerModel) commit() tea.Cmd {
 	k := m.key
-	value := theme.JoinColor(m.fg, m.bg)
+	value := theme.JoinColorFull(m.fg, m.bg, m.bold, m.italic)
 	return func() tea.Msg { return ThemeColorPickedMsg{Key: k, Color: value} }
 }
 
+// previewValue returns the (fg, bg) pair the picker would emit right now —
+// the currently-committed values with the cursor cell substituted into the
+// active slot. This is what the bottom preview shows and what we send via
+// ThemeColorPreviewMsg as the cursor moves.
+func (m *ThemeColorPickerModel) previewValue() (string, string) {
+	fg, bg := m.fg, m.bg
+	cursorVal := strconv.Itoa(m.currentIndex())
+	if m.slot == pickerSlotFg {
+		fg = cursorVal
+	} else {
+		bg = cursorVal
+	}
+	return fg, bg
+}
+
+// emitPreview returns a command that sends the current preview value back
+// to the editor, so the rest of the app updates live as the cursor moves.
+func (m *ThemeColorPickerModel) emitPreview() tea.Cmd {
+	fg, bg := m.previewValue()
+	value := theme.JoinColorFull(fg, bg, m.bold, m.italic)
+	k := m.key
+	return func() tea.Msg { return ThemeColorPreviewMsg{Key: k, Color: value} }
+}
+
 // applyCursor stores the cursor cell's color into the active slot.
-// Returns true if the active slot changed (so the editor preview can blink).
 func (m *ThemeColorPickerModel) applyCursor() {
 	val := strconv.Itoa(m.currentIndex())
 	if m.slot == pickerSlotFg {
@@ -592,7 +955,7 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 				val := strings.TrimSpace(m.manualInput.Value())
 				m.fg, m.bg = theme.ParseColor(val)
 				m.manualEntry = false
-				return m, nil
+				return m, m.emitPreview()
 			case "esc":
 				m.manualEntry = false
 				return m, nil
@@ -605,6 +968,7 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 		return m, nil
 	}
 
+	changed := false
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -613,18 +977,22 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 		case "left", "h":
 			if m.cursorC > 0 {
 				m.cursorC--
+				changed = true
 			}
 		case "right", "l":
 			if m.cursorC < 15 {
 				m.cursorC++
+				changed = true
 			}
 		case "up", "k":
 			if m.cursorR > 0 {
 				m.cursorR--
+				changed = true
 			}
 		case "down", "j":
 			if m.cursorR < 15 {
 				m.cursorR++
+				changed = true
 			}
 		case " ":
 			// Space: assign the cursor cell to the active slot, then auto-flip
@@ -635,6 +1003,7 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 			} else {
 				m.slot = pickerSlotFg
 			}
+			changed = true
 		case "enter":
 			// Enter: assign the cursor cell to the active slot AND accept.
 			m.applyCursor()
@@ -644,14 +1013,25 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 			return m, m.commit()
 		case "f":
 			m.slot = pickerSlotFg
+			changed = true
 		case "b":
 			m.slot = pickerSlotBg
-		case "t":
+			changed = true
+		case "tab", "t":
 			if m.slot == pickerSlotFg {
 				m.slot = pickerSlotBg
 			} else {
 				m.slot = pickerSlotFg
 			}
+			changed = true
+		case "ctrl+b", "alt+b":
+			m.bold = !m.bold
+			changed = true
+		case "alt+i":
+			// Note: ctrl+i is identical to Tab in terminals (ASCII 9), so
+			// we use alt+i for italic instead.
+			m.italic = !m.italic
+			changed = true
 		case "x":
 			// Clear the active slot.
 			if m.slot == pickerSlotFg {
@@ -659,6 +1039,14 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 			} else {
 				m.bg = ""
 			}
+			changed = true
+		case "r":
+			// Reset everything to the values the picker opened with.
+			m.fg = m.initialFg
+			m.bg = m.initialBg
+			m.bold = m.initialBold
+			m.italic = m.initialItalic
+			changed = true
 		case "m":
 			m.manualEntry = true
 			m.manualInput.Focus()
@@ -675,11 +1063,13 @@ func (m ThemeColorPickerModel) Update(msg tea.Msg) (ThemeColorPickerModel, tea.C
 					m.cursorC = col
 					m.cursorR = row
 					m.applyCursor()
-					// Click does NOT auto-commit so the user can pick fg, click 'b'
-					// or 't', click again for bg, then Enter / 'a' to accept.
+					changed = true
 				}
 			}
 		}
+	}
+	if changed {
+		return m, m.emitPreview()
 	}
 	return m, nil
 }
@@ -692,23 +1082,44 @@ func (m *ThemeColorPickerModel) View() string {
 	activeSlotStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Pick a color: " + m.key))
+	mode := "FG"
+	if m.slot == pickerSlotBg {
+		mode = "BG"
+	}
+	b.WriteString(titleStyle.Render("Pick a color: " + m.key + "  [" + mode + "]"))
 	b.WriteString("\n\n")
 
-	// Build a 16x16 grid. Each cell shows " NNN " on a background of color N
-	// so the user sees the actual color sample.
+	// Build a 16x16 grid. Cell rendering depends on which slot is active:
+	//   FG mode: each cell shows its number IN that color, on the currently
+	//            selected background (or default if none) — so you preview
+	//            how the candidate fg looks against your chosen bg.
+	//   BG mode: each cell shows its number ON that color as the background,
+	//            with text in the currently selected fg (or auto-contrast).
+	// The cursor cell uses Reverse + Bold (no border, no extra row).
 	for r := 0; r < 16; r++ {
 		for c := 0; c < 16; c++ {
 			idx := r*16 + c
 			cellStyle := lipgloss.NewStyle().
-				Background(lipgloss.Color(strconv.Itoa(idx))).
-				Foreground(lipgloss.Color(contrastFor(idx))).
 				Width(m.cellW).
 				Align(lipgloss.Center)
+			if m.slot == pickerSlotFg {
+				// Render number in this color, on the chosen bg if any.
+				cellStyle = cellStyle.Foreground(lipgloss.Color(strconv.Itoa(idx)))
+				if m.bg != "" {
+					cellStyle = cellStyle.Background(lipgloss.Color(m.bg))
+				}
+			} else {
+				// Render number on this color, with text in the chosen fg.
+				cellStyle = cellStyle.Background(lipgloss.Color(strconv.Itoa(idx)))
+				if m.fg != "" {
+					cellStyle = cellStyle.Foreground(lipgloss.Color(m.fg))
+				} else {
+					cellStyle = cellStyle.Foreground(lipgloss.Color(contrastFor(idx)))
+				}
+			}
 			if r == m.cursorR && c == m.cursorC {
-				cellStyle = cellStyle.Bold(true).
-					Border(lipgloss.NormalBorder(), false, false, true, false).
-					BorderForeground(ColorPrimary)
+				// Single-row highlight that doesn't change cell dimensions.
+				cellStyle = cellStyle.Bold(true).Reverse(true)
 			}
 			b.WriteString(cellStyle.Render(strconv.Itoa(idx)))
 		}
@@ -721,43 +1132,55 @@ func (m *ThemeColorPickerModel) View() string {
 		b.WriteString(m.manualInput.View())
 		b.WriteString("\n")
 	} else {
-		// Two slots side by side, with the active one bolded.
-		fgLabel := "FG"
-		bgLabel := "BG"
+		// Live preview: substitute the cursor cell into the active slot so
+		// the sample updates as the user moves around the grid.
+		previewFg, previewBg := m.previewValue()
+
+		fgLabel := mutedStyle.Render("  FG")
+		bgLabel := mutedStyle.Render("  BG")
 		if m.slot == pickerSlotFg {
 			fgLabel = activeSlotStyle.Render("▶ FG")
 		} else {
-			fgLabel = mutedStyle.Render("  FG")
-		}
-		if m.slot == pickerSlotBg {
 			bgLabel = activeSlotStyle.Render("▶ BG")
-		} else {
-			bgLabel = mutedStyle.Render("  BG")
 		}
-		fgVal := m.fg
+		fgVal := previewFg
 		if fgVal == "" {
 			fgVal = "(default)"
 		}
-		bgVal := m.bg
+		bgVal := previewBg
 		if bgVal == "" {
 			bgVal = "(default)"
 		}
-		// Live preview rendered with the actual fg+bg pair.
 		previewStyle := lipgloss.NewStyle().Padding(0, 2)
-		if m.fg != "" {
-			previewStyle = previewStyle.Foreground(lipgloss.Color(m.fg))
+		if previewFg != "" {
+			previewStyle = previewStyle.Foreground(lipgloss.Color(previewFg))
 		}
-		if m.bg != "" {
-			previewStyle = previewStyle.Background(lipgloss.Color(m.bg))
+		if previewBg != "" {
+			previewStyle = previewStyle.Background(lipgloss.Color(previewBg))
 		} else {
 			previewStyle = previewStyle.Background(lipgloss.Color("236"))
 		}
+		if m.bold {
+			previewStyle = previewStyle.Bold(true)
+		}
+		if m.italic {
+			previewStyle = previewStyle.Italic(true)
+		}
 		preview := previewStyle.Render(" sample text ")
-		b.WriteString(fmt.Sprintf("  %s: %-12s   %s: %-12s   %s\n",
-			fgLabel, fgVal, bgLabel, bgVal, preview))
+		// Bold / Italic indicators.
+		boldOn := mutedStyle.Render("[B]")
+		italicOn := mutedStyle.Render("[I]")
+		if m.bold {
+			boldOn = activeSlotStyle.Render("[B]")
+		}
+		if m.italic {
+			italicOn = activeSlotStyle.Render("[I]")
+		}
+		b.WriteString(fmt.Sprintf("  %s: %-12s   %s: %-12s   %s %s   %s\n",
+			fgLabel, fgVal, bgLabel, bgVal, boldOn, italicOn, preview))
 	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  Arrows/mouse move · Space assign+toggle · Enter accept · f/b/t slot · x clear · m manual · Esc cancel"))
+	b.WriteString(dimStyle.Render("  Arrows/mouse · Space assign+toggle · Enter accept · Tab/f/b slot · Alt-B bold · Alt-I italic · x clear · r reset · m manual · Esc cancel"))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

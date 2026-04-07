@@ -43,6 +43,19 @@ type ChannelListModel struct {
 	focused     bool
 	width       int
 	height      int
+	itemSpacing int // empty lines after each item / header (0..3)
+}
+
+// SetItemSpacing sets the number of blank lines rendered after every
+// channel row and header (0..2, clamped).
+func (m *ChannelListModel) SetItemSpacing(n int) {
+	if n < 0 {
+		n = 0
+	}
+	if n > 2 {
+		n = 2
+	}
+	m.itemSpacing = n
 }
 
 // NewChannelList creates a new channel list model.
@@ -264,10 +277,13 @@ func (m *ChannelListModel) displayLineMap() []int {
 	var lines []int
 	for i, row := range m.rows {
 		if row.isHeader && i > 0 {
-			lines = append(lines, -1) // blank spacer
+			lines = append(lines, -1) // blank spacer before non-first headers
 		}
-		_ = row
 		lines = append(lines, i)
+		// User-configured trailing blank lines after every row.
+		for k := 0; k < m.itemSpacing; k++ {
+			lines = append(lines, -1)
+		}
 	}
 	return lines
 }
@@ -421,6 +437,16 @@ type ToggleCollapseMsg struct{}
 // Update handles key events when focused.
 func (m ChannelListModel) Update(msg tea.Msg) (ChannelListModel, tea.Cmd) {
 	if !m.focused {
+		// Mouse wheel still scrolls the sidebar even when not focused, so the
+		// user can scroll over it without first clicking to focus.
+		if mouse, ok := msg.(tea.MouseMsg); ok {
+			switch mouse.Button {
+			case tea.MouseButtonWheelUp:
+				m.scrollBy(-3)
+			case tea.MouseButtonWheelDown:
+				m.scrollBy(+3)
+			}
+		}
 		return m, nil
 	}
 
@@ -462,22 +488,82 @@ func (m ChannelListModel) Update(msg tea.Msg) (ChannelListModel, tea.Cmd) {
 				return m, func() tea.Msg { return ToggleCollapseMsg{} }
 			}
 		}
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.scrollBy(-3)
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			m.scrollBy(+3)
+			return m, nil
+		}
 	}
 
 	m.ensureVisible()
 	return m, nil
 }
 
+// displayLineOfRow returns the display-line index where the given row begins,
+// or -1 if the row is not present.
+func (m *ChannelListModel) displayLineOfRow(rowIdx int) int {
+	for i, r := range m.displayLineMap() {
+		if r == rowIdx {
+			return i
+		}
+	}
+	return -1
+}
+
+// viewHeight returns the inner content height of the sidebar pane.
+func (m *ChannelListModel) viewHeight() int {
+	h := m.height - 2
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+// totalDisplayLines returns the total number of rendered display lines.
+func (m *ChannelListModel) totalDisplayLines() int {
+	return len(m.displayLineMap())
+}
+
+// scrollBy adjusts the scroll offset by delta lines and clamps it.
+func (m *ChannelListModel) scrollBy(delta int) {
+	maxOff := m.totalDisplayLines() - m.viewHeight()
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	m.scrollOff += delta
+	if m.scrollOff < 0 {
+		m.scrollOff = 0
+	}
+	if m.scrollOff > maxOff {
+		m.scrollOff = maxOff
+	}
+}
+
+// ensureVisible scrolls so the selected row is inside the visible window.
+// Both scrollOff and the display layout are computed in display-line space
+// so item spacing > 0 doesn't break the math.
 func (m *ChannelListModel) ensureVisible() {
-	viewHeight := m.height - 2
-	if viewHeight < 1 {
-		viewHeight = 1
+	vh := m.viewHeight()
+	selLine := m.displayLineOfRow(m.selected)
+	if selLine < 0 {
+		return
 	}
-	if m.selected < m.scrollOff {
-		m.scrollOff = m.selected
+	if selLine < m.scrollOff {
+		m.scrollOff = selLine
 	}
-	if m.selected >= m.scrollOff+viewHeight {
-		m.scrollOff = m.selected - viewHeight + 1
+	if selLine >= m.scrollOff+vh {
+		m.scrollOff = selLine - vh + 1
+	}
+	maxOff := m.totalDisplayLines() - vh
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	if m.scrollOff > maxOff {
+		m.scrollOff = maxOff
 	}
 	if m.scrollOff < 0 {
 		m.scrollOff = 0

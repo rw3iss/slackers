@@ -34,5 +34,6 @@
   "toggle_input_mode": ["ctrl+\\"],
   "befriend": ["ctrl+b"],
   "emoji_picker": ["ctrl+e"],
-  "select_message": ["ctrl+j"]
+  "select_message": ["ctrl+j"],
+  "toggle_theme": ["ctrl+y"]
 }

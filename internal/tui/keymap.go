@@ -43,6 +43,7 @@ type KeyMap struct {
 	Befriend         key.Binding
 	EmojiPicker      key.Binding
 	SelectMessage    key.Binding
+	ToggleTheme      key.Binding
 }
 
 // binding creates a key.Binding from a ShortcutMap action name.
@@ -96,6 +97,7 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		Befriend:        binding(sm, "befriend", "ctrl+b", "befriend user"),
 		EmojiPicker:     binding(sm, "emoji_picker", "ctrl+e", "emoji picker"),
 		SelectMessage:   binding(sm, "select_message", "ctrl+j", "select message"),
+		ToggleTheme:     binding(sm, "toggle_theme", "ctrl+y", "toggle theme"),
 	}
 }
 

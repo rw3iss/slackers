@@ -1,6 +1,10 @@
 package tui
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/theme"
 )
@@ -52,6 +56,8 @@ var (
 	ColorReplyLabelBg    lipgloss.Color
 	ColorSelection       lipgloss.Color
 	ColorSelectionBg     lipgloss.Color
+	ColorMenuItem        lipgloss.Color
+	ColorMenuItemBg      lipgloss.Color
 	ColorBorderDefault   lipgloss.Color
 	ColorBorderDefaultBg lipgloss.Color
 	ColorBorderActive    lipgloss.Color
@@ -86,6 +92,43 @@ var (
 // display the current selection.
 var activeTheme theme.Theme
 
+// keyAttrs caches the bold/italic flags for each theme key, refreshed by
+// ApplyTheme. Lookup with KeyBold(theme.KeyMessageText) etc.
+var keyAttrs = map[string][2]bool{}
+
+// KeyBold returns whether the given theme key has its bold attribute set.
+func KeyBold(key string) bool {
+	a := keyAttrs[key]
+	return a[0]
+}
+
+// KeyItalic returns whether the given theme key has its italic attribute set.
+func KeyItalic(key string) bool {
+	a := keyAttrs[key]
+	return a[1]
+}
+
+// styleFromKey returns a lipgloss.Style with foreground, background, bold,
+// and italic populated from the named theme key.
+func styleFromKey(key string) lipgloss.Style {
+	t := activeTheme
+	fgStr, bgStr, bold, italic := theme.ParseColorFull(t.Get(key))
+	s := lipgloss.NewStyle()
+	if fgStr != "" {
+		s = s.Foreground(lipgloss.Color(fgStr))
+	}
+	if bgStr != "" {
+		s = s.Background(lipgloss.Color(bgStr))
+	}
+	if bold {
+		s = s.Bold(true)
+	}
+	if italic {
+		s = s.Italic(true)
+	}
+	return s
+}
+
 func init() {
 	ApplyTheme(theme.Default())
 }
@@ -95,9 +138,11 @@ func ActiveTheme() theme.Theme {
 	return activeTheme
 }
 
-// applyKey reads a theme key and returns its (fg, bg) lipgloss colors.
+// applyKey reads a theme key, caches its bold/italic flags, and returns
+// its (fg, bg) lipgloss colors.
 func applyKey(t theme.Theme, key string) (lipgloss.Color, lipgloss.Color) {
-	fg, bg := theme.ParseColor(t.Get(key))
+	fg, bg, bold, italic := theme.ParseColorFull(t.Get(key))
+	keyAttrs[key] = [2]bool{bold, italic}
 	return lipgloss.Color(fg), lipgloss.Color(bg)
 }
 
@@ -125,6 +170,7 @@ func ApplyTheme(t theme.Theme) {
 	ColorFileButton, ColorFileButtonBg = applyKey(t, theme.KeyFileButton)
 	ColorReplyLabel, ColorReplyLabelBg = applyKey(t, theme.KeyReplyLabel)
 	ColorSelection, ColorSelectionBg = applyKey(t, theme.KeySelection)
+	ColorMenuItem, ColorMenuItemBg = applyKey(t, theme.KeyMenuItem)
 	ColorBorderDefault, ColorBorderDefaultBg = applyKey(t, theme.KeyBorderDefault)
 	ColorBorderActive, ColorBorderActiveBg = applyKey(t, theme.KeyBorderActive)
 
@@ -148,16 +194,10 @@ func rebuildDerivedStyles() {
 		Background(ColorBackgroundBg).
 		Padding(0, 1)
 
-	ChannelItemStyle = lipgloss.NewStyle().Foreground(ColorMessageText)
-	ChannelSelectedStyle = lipgloss.NewStyle().
-		Foreground(ColorSelection).
-		Background(ColorSelectionBg).
-		Bold(true)
+	ChannelItemStyle = styleFromKey(theme.KeyMessageText)
+	ChannelSelectedStyle = styleFromKey(theme.KeySelection).Bold(true)
 	ChannelUnreadStyle = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	SectionHeaderStyle = lipgloss.NewStyle().
-		Foreground(ColorGroupHeader).
-		Background(ColorGroupHeaderBg).
-		Bold(true)
+	SectionHeaderStyle = styleFromKey(theme.KeyGroupHeader).Bold(true)
 
 	MessagePaneStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -171,10 +211,8 @@ func rebuildDerivedStyles() {
 		Padding(0, 1)
 
 	UserNameStyle = lipgloss.NewStyle().Bold(true)
-	TimestampStyle = lipgloss.NewStyle().
-		Foreground(ColorTimestamp).
-		Background(ColorTimestampBg)
-	MessageTextStyle = lipgloss.NewStyle().Foreground(ColorMessageText)
+	TimestampStyle = styleFromKey(theme.KeyTimestamp)
+	MessageTextStyle = styleFromKey(theme.KeyMessageText)
 
 	InputStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -187,13 +225,11 @@ func rebuildDerivedStyles() {
 		Background(ColorBackgroundBg).
 		Padding(0, 1)
 
-	StatusBarStyle = lipgloss.NewStyle().
-		Foreground(ColorStatusMessage).
-		Background(ColorStatusMessageBg)
+	StatusBarStyle = styleFromKey(theme.KeyStatusMessage)
 	StatusConnected = lipgloss.NewStyle().Foreground(ColorAccent)
 	StatusDisconnected = lipgloss.NewStyle().Foreground(ColorError)
 
-	HelpStyle = lipgloss.NewStyle().Foreground(ColorInfoText)
+	HelpStyle = styleFromKey(theme.KeyInfoText)
 }
 
 // UserColors assigns a consistent color to a username by hashing.
@@ -213,4 +249,37 @@ func UserColor(name string) lipgloss.Color {
 		h = -h
 	}
 	return userColors[h%len(userColors)]
+}
+
+// bgSGR returns the ANSI SGR sequence that sets the given background color.
+// Supports 256-color indices ("12") and truecolor hex strings ("#ff8800").
+// Returns "" if the color is empty (no override).
+func bgSGR(c lipgloss.Color) string {
+	s := string(c)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "#") && len(s) == 7 {
+		r, _ := strconv.ParseInt(s[1:3], 16, 32)
+		g, _ := strconv.ParseInt(s[3:5], 16, 32)
+		b, _ := strconv.ParseInt(s[5:7], 16, 32)
+		return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
+	}
+	// Anything else: assume a 256-color palette index.
+	return fmt.Sprintf("\x1b[48;5;%sm", s)
+}
+
+// ApplyBackgroundReset post-processes a fully rendered TUI string so that
+// every ANSI reset is followed by an SGR that re-asserts the theme's
+// configured background color. This makes the background "stick" through
+// the gaps between styled runs (e.g. between a styled timestamp and the
+// next plain message text), instead of clearing back to the terminal's
+// default. Returns s unchanged when no background is configured.
+func ApplyBackgroundReset(s string) string {
+	bg := bgSGR(ColorBackgroundBg)
+	if bg == "" {
+		return s
+	}
+	const reset = "\x1b[0m"
+	return bg + strings.ReplaceAll(s, reset, reset+bg)
 }

@@ -3,12 +3,14 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rw3iss/slackers/internal/backup"
 	"github.com/rw3iss/slackers/internal/config"
 )
 
@@ -106,10 +108,23 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				description: "Choose a color theme (live preview)",
 			},
 			{
+				label:       "Alt Theme",
+				key:         "alt_theme",
+				value:       themeValueLabel(cfg.AltTheme),
+				description: "Secondary theme — toggle with Ctrl-Y at any time",
+			},
+			{
 				label:       "Sidebar Width",
 				key:         "sidebar_width",
 				value:       strconv.Itoa(cfg.SidebarWidth),
 				description: "Width of the channel sidebar in characters (10-80)",
+			},
+			{
+				label:       "Sidebar Item Spacing",
+				key:         "sidebar_item_spacing",
+				value:       strconv.Itoa(cfg.SidebarItemSpacing),
+				description: "Empty lines between sidebar items (0-2)",
+				options:     []string{"0", "1", "2"},
 			},
 			{
 				label:       "Timestamp Format",
@@ -261,6 +276,21 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				key:         "user_token",
 				value:       maskToken(cfg.UserToken),
 				description: "Slack user token (xoxp-...) for sending as yourself",
+			},
+
+			// ───── Backup ─────
+			header("Backup"),
+			{
+				label:       "Export Settings",
+				key:         "export_settings",
+				value:       "Export...",
+				description: "Save all settings, themes, friends and history to a zip in ~/Downloads",
+			},
+			{
+				label:       "Import Settings",
+				key:         "import_settings",
+				value:       "Import...",
+				description: "Restore from a slackers export archive",
 			},
 
 			// ───── Info ─────
@@ -466,6 +496,30 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 			}
 		}
 
+		// Alt Theme opens the same picker but in "alt" mode.
+		if f.key == "alt_theme" {
+			return m, func() tea.Msg {
+				return ThemePickerOpenMsg{ForAlt: true}
+			}
+		}
+
+		// Export settings to a zip in ~/Downloads.
+		if f.key == "export_settings" {
+			path, err := backup.Export(filepath.Join(backup.DefaultExportDir(), backup.DefaultExportName()))
+			if err != nil {
+				m.message = "Export failed: " + err.Error()
+			} else {
+				m.message = "Exported to " + path
+			}
+			return m, nil
+		}
+
+		// Import settings — handled through a confirmation prompt overlay.
+		if f.key == "import_settings" {
+			m.message = "Run 'slackers import <archive.zip>' from the command line"
+			return m, nil
+		}
+
 		// Download path opens a folder browser.
 		if f.key == "download_path" {
 			return m, func() tea.Msg {
@@ -537,6 +591,16 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 		}
 		m.cfg.SidebarWidth = n
 		m.message = "Sidebar width updated"
+
+	case "sidebar_item_spacing":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 2 {
+			m.message = "Sidebar item spacing must be 0-2"
+			m.fields[m.selected].value = strconv.Itoa(m.cfg.SidebarItemSpacing)
+			return nil
+		}
+		m.cfg.SidebarItemSpacing = n
+		m.message = "Sidebar item spacing updated"
 
 	case "timestamp_format":
 		m.cfg.TimestampFormat = value
@@ -685,14 +749,14 @@ func (m SettingsModel) View() string {
 		MarginBottom(1)
 
 	labelStyle := lipgloss.NewStyle().
-		Width(20).
-		Foreground(lipgloss.Color("252"))
+		Width(24).
+		Foreground(ColorMenuItem)
 
 	valueStyle := lipgloss.NewStyle().
 		Foreground(ColorAccent)
 
 	selectedLabelStyle := lipgloss.NewStyle().
-		Width(20).
+		Width(24).
 		Bold(true).
 		Foreground(ColorPrimary)
 

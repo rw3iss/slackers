@@ -56,6 +56,7 @@ const (
 	KeyFileButton    = "fileButton"
 	KeyReplyLabel    = "replyLabel"
 	KeySelection     = "selection"
+	KeyMenuItem      = "menuItem"
 	KeyBorderDefault = "borderDefault"
 	KeyBorderActive  = "borderActive"
 )
@@ -65,7 +66,7 @@ var AllKeys = []string{
 	KeyPrimary, KeySecondary, KeyAccent, KeyError, KeyMuted, KeyHighlight,
 	KeyMessageText, KeyInfoText, KeyDayLabel, KeyTimestamp,
 	KeyBackground, KeyPageHeader, KeyGroupHeader, KeyStatusMessage,
-	KeyFileButton, KeyReplyLabel, KeySelection,
+	KeyFileButton, KeyReplyLabel, KeySelection, KeyMenuItem,
 	KeyBorderDefault, KeyBorderActive,
 }
 
@@ -106,6 +107,8 @@ func KeyDescription(key string) string {
 		return "'X replies' labels"
 	case KeySelection:
 		return "Selected item highlight"
+	case KeyMenuItem:
+		return "Unselected menu / list item text"
 	case KeyBorderDefault:
 		return "Default pane border"
 	case KeyBorderActive:
@@ -140,6 +143,7 @@ func Default() Theme {
 				KeyFileButton:    "11",
 				KeyReplyLabel:    "10",
 				KeySelection:     "12",
+				KeyMenuItem:      "252",
 				KeyBorderDefault: "243",
 				KeyBorderActive:  "12",
 			},
@@ -389,30 +393,66 @@ func (t Theme) GetBg(key string) string {
 }
 
 // ParseColor splits a theme value into foreground and background parts.
-// Theme values support an optional "fg/bg" syntax:
+// Theme values support an optional "fg/bg" syntax with optional attribute
+// suffixes:
 //
-//	""        -> fg="",   bg=""    (default)
-//	"12"      -> fg="12", bg=""
-//	"12/240"  -> fg="12", bg="240"
-//	"/240"    -> fg="",   bg="240" (background only)
-//	"#ff0/#003" works the same with hex strings.
+//	""           -> fg="",   bg=""    (default)
+//	"12"         -> fg="12", bg=""
+//	"12/240"     -> fg="12", bg="240"
+//	"/240"       -> fg="",   bg="240" (background only)
+//	"#ff0/#003"  works the same with hex strings.
+//	"12+b"       -> fg="12", bold
+//	"12/240+bi"  -> fg="12", bg="240", bold + italic
+//
+// Attribute flags appear after a "+" and may include 'b' (bold) and 'i'
+// (italic). Use ParseColorFull to access them.
 func ParseColor(value string) (fg, bg string) {
-	if value == "" {
-		return "", ""
-	}
-	if i := strings.Index(value, "/"); i >= 0 {
-		return value[:i], value[i+1:]
-	}
-	return value, ""
+	fg, bg, _, _ = ParseColorFull(value)
+	return fg, bg
 }
 
-// JoinColor produces a fg/bg value string. Empty strings are preserved so
-// "/240" (bg only) and "12" (fg only) round-trip correctly.
+// ParseColorFull is the same as ParseColor but also returns the bold and
+// italic flags.
+func ParseColorFull(value string) (fg, bg string, bold, italic bool) {
+	if value == "" {
+		return "", "", false, false
+	}
+	colors := value
+	if plus := strings.Index(value, "+"); plus >= 0 {
+		colors = value[:plus]
+		attrs := value[plus+1:]
+		bold = strings.ContainsRune(attrs, 'b')
+		italic = strings.ContainsRune(attrs, 'i')
+	}
+	if i := strings.Index(colors, "/"); i >= 0 {
+		return colors[:i], colors[i+1:], bold, italic
+	}
+	return colors, "", bold, italic
+}
+
+// JoinColor produces a value string from fg and bg. Empty strings are
+// preserved so "/240" (bg only) and "12" (fg only) round-trip correctly.
 func JoinColor(fg, bg string) string {
 	if bg == "" {
 		return fg
 	}
 	return fg + "/" + bg
+}
+
+// JoinColorFull is the same as JoinColor but also encodes bold/italic flags.
+func JoinColorFull(fg, bg string, bold, italic bool) string {
+	base := JoinColor(fg, bg)
+	if !bold && !italic {
+		return base
+	}
+	attrs := ""
+	if bold {
+		attrs += "b"
+	}
+	if italic {
+		attrs += "i"
+	}
+	return base + "+" + attrs
 }
 
 // IsDark returns true if the theme self-identifies as dark mode.

@@ -15,7 +15,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rw3iss/slackers/internal/auth"
+	"github.com/rw3iss/slackers/internal/backup"
 	"github.com/rw3iss/slackers/internal/config"
+	themepkg "github.com/rw3iss/slackers/internal/theme"
 	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/slack"
@@ -49,7 +51,7 @@ func resetTerminal() {
 	}
 }
 
-var version = "0.18.0"
+var version = "0.19.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "slackers",
@@ -680,6 +682,10 @@ func init() {
 	rootCmd.Flags().Int("sidebar-width", 0, "Override sidebar width")
 	rootCmd.Flags().Bool("debug", false, "Enable debug logging to ~/.config/slackers/debug.log")
 
+	exportCmd.Flags().Bool("yes", false, "Skip the confirmation prompt")
+	importCmd.Flags().String("mode", "", "Import mode: replace or merge")
+	importCmd.Flags().Bool("yes", false, "Skip the confirmation prompt")
+
 	loginCmd.Flags().String("client-id", "", "Slack app Client ID")
 	loginCmd.Flags().String("client-secret", "", "Slack app Client Secret")
 	loginCmd.Flags().String("app-token", "", "Slack app-level token (xapp-...)")
@@ -696,6 +702,148 @@ func init() {
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(scriptsCmd)
 	rootCmd.AddCommand(friendsHelpCmd)
+	rootCmd.AddCommand(exportCmd)
+	rootCmd.AddCommand(importCmd)
+	rootCmd.AddCommand(importThemeCmd)
+}
+
+var importThemeCmd = &cobra.Command{
+	Use:   "import-theme <file>",
+	Short: "Install a single theme JSON file into your slackers themes directory",
+	Long: `Validates the given theme file and copies it into your local
+slackers themes directory so it shows up in Settings → Theme.
+
+If a theme with the same (sanitized) filename already exists, it is
+overwritten.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		src := args[0]
+		t, err := themepkg.Load(src)
+		if err != nil {
+			return fmt.Errorf("invalid theme file: %w", err)
+		}
+		if t.Name == "" {
+			return fmt.Errorf("theme file is missing a name")
+		}
+		// Validate the colors map exists.
+		if t.Colors == nil {
+			return fmt.Errorf("theme file has no colors map")
+		}
+		path, err := themepkg.Save(t)
+		if err != nil {
+			return fmt.Errorf("saving theme: %w", err)
+		}
+		fmt.Printf("✓ Imported theme %q to %s\n", t.Name, path)
+		return nil
+	},
+}
+
+var exportCmd = &cobra.Command{
+	Use:   "export [path]",
+	Short: "Export your entire slackers config (settings, themes, friends, history) to a zip archive",
+	Long: `Exports the entire $XDG_CONFIG_HOME/slackers directory to a single zip
+archive. By default the file is written to ~/Downloads with a timestamped
+filename. Pass an explicit path to override the destination.
+
+The archive contains your tokens and chat history — treat it like a
+sensitive credential file.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		yes, _ := cmd.Flags().GetBool("yes")
+		var dest string
+		if len(args) > 0 {
+			dest = args[0]
+			if info, err := os.Stat(dest); err == nil && info.IsDir() {
+				dest = filepath.Join(dest, backup.DefaultExportName())
+			}
+		} else {
+			dest = filepath.Join(backup.DefaultExportDir(), backup.DefaultExportName())
+		}
+		if !yes {
+			fmt.Printf("This will export your entire slackers config to:\n  %s\n", dest)
+			fmt.Print("Continue? [y/N]: ")
+			var resp string
+			fmt.Scanln(&resp)
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp)), "y") {
+				fmt.Println("Cancelled.")
+				return nil
+			}
+		}
+		path, err := backup.Export(dest)
+		if err != nil {
+			return fmt.Errorf("export failed: %w", err)
+		}
+		fmt.Printf("✓ Exported to %s\n", path)
+		return nil
+	},
+}
+
+var importCmd = &cobra.Command{
+	Use:   "import <path>",
+	Short: "Import a slackers config archive (replace or merge)",
+	Long: `Imports a slackers config archive previously created by 'slackers export'.
+
+By default this prompts to choose between replacing your existing
+config wholesale or merging the imported data on top (friends are
+unioned, chat histories merged by message ID, emoji favorites
+unioned, themes added, and the main config overlaid).
+
+Use --mode to skip the prompt:
+  --mode replace   wipe the existing config and write the archive
+  --mode merge     keep existing data, add/update from the archive`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		src := args[0]
+		modeFlag, _ := cmd.Flags().GetString("mode")
+		yes, _ := cmd.Flags().GetBool("yes")
+
+		var mode backup.MergeMode
+		switch strings.ToLower(modeFlag) {
+		case "replace":
+			mode = backup.MergeReplace
+		case "merge":
+			mode = backup.MergeUnion
+		case "":
+			fmt.Printf("Importing %s\n", src)
+			fmt.Println("Choose mode:")
+			fmt.Println("  [1] Replace — wipe existing config and unpack archive")
+			fmt.Println("  [2] Merge   — keep existing data, add/update from archive")
+			fmt.Print("Select [1/2]: ")
+			var resp string
+			fmt.Scanln(&resp)
+			switch strings.TrimSpace(resp) {
+			case "1":
+				mode = backup.MergeReplace
+			case "2":
+				mode = backup.MergeUnion
+			default:
+				fmt.Println("Cancelled.")
+				return nil
+			}
+		default:
+			return fmt.Errorf("unknown --mode %q (expected replace or merge)", modeFlag)
+		}
+
+		if !yes {
+			label := "merge"
+			if mode == backup.MergeReplace {
+				label = "REPLACE"
+			}
+			fmt.Printf("About to %s your slackers config from:\n  %s\n", label, src)
+			fmt.Print("Continue? [y/N]: ")
+			var resp string
+			fmt.Scanln(&resp)
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp)), "y") {
+				fmt.Println("Cancelled.")
+				return nil
+			}
+		}
+
+		if err := backup.Import(src, mode); err != nil {
+			return fmt.Errorf("import failed: %w", err)
+		}
+		fmt.Println("✓ Import complete.")
+		return nil
+	},
 }
 
 func main() {

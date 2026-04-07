@@ -90,6 +90,7 @@ var helpLayout = []helpSection{
 			{"befriend", "Send friend request to current DM user", ""},
 			{"emoji_picker", "Open emoji picker (insert emoji)", ""},
 			{"select_message", "Message select mode (also: s in chat, ↑/↓ in chat)", ""},
+			{"toggle_theme", "Swap primary ↔ alternate theme", ""},
 			{"quit", "Quit", ""},
 		},
 	},
