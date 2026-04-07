@@ -740,11 +740,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.overlay == overlayEmojiPicker {
 			if msg.String() == "esc" {
+				// Persist favorite changes before closing.
+				if m.emojiPicker.FavDirty() {
+					m.cfg.EmojiFavorites = m.emojiPicker.Favorites()
+					go config.Save(m.cfg)
+				}
 				m.overlay = overlayNone
 				return m, nil
 			}
 			var cmd tea.Cmd
 			m.emojiPicker, cmd = m.emojiPicker.Update(msg)
+			// Persist favorites immediately after every modification so they
+			// survive even if the app exits abruptly.
+			if m.emojiPicker.FavDirty() {
+				m.cfg.EmojiFavorites = m.emojiPicker.Favorites()
+				go config.Save(m.cfg)
+				m.emojiPicker.ClearFavDirty()
+			}
 			return m, cmd
 		}
 		if m.overlay == overlayMsgOptions {

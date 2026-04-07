@@ -273,6 +273,12 @@ func (m *EmojiPickerModel) FavDirty() bool {
 	return m.favDirty
 }
 
+// ClearFavDirty resets the dirty flag (called after the model has been
+// persisted by the caller).
+func (m *EmojiPickerModel) ClearFavDirty() {
+	m.favDirty = false
+}
+
 func (m *EmojiPickerModel) toggleFavorite() {
 	e := m.selectedEmoji()
 	if e == nil {
