@@ -27,6 +27,7 @@ const (
 	MsgTypeFriendRequest = "friend_request"
 	MsgTypeFriendAccept  = "friend_accept"
 	MsgTypeFriendReject  = "friend_reject"
+	MsgTypeDisconnect    = "disconnect"
 )
 
 // P2PMessage is the wire format for messages sent over P2P.
@@ -246,8 +247,33 @@ func (n *P2PNode) PingPeer(slackUserID string) bool {
 	return err == nil
 }
 
-// Close shuts down the P2P node.
+// BroadcastDisconnect sends a disconnect message to all connected peers.
+func (n *P2PNode) BroadcastDisconnect() {
+	n.mu.RLock()
+	peers := make(map[string]peer.ID)
+	for uid, pid := range n.peerMap {
+		peers[uid] = pid
+	}
+	n.mu.RUnlock()
+
+	msg := P2PMessage{Type: MsgTypeDisconnect, Timestamp: time.Now().Unix()}
+	for _, pid := range peers {
+		if n.host.Network().Connectedness(pid) == network.Connected {
+			stream, err := n.host.NewStream(n.ctx, pid, P2PProtocol)
+			if err != nil {
+				continue
+			}
+			data, _ := json.Marshal(msg)
+			data = append(data, '\n')
+			stream.Write(data)
+			stream.Close()
+		}
+	}
+}
+
+// Close broadcasts disconnect to peers and shuts down the P2P node.
 func (n *P2PNode) Close() error {
+	n.BroadcastDisconnect()
 	n.cancel()
 	return n.host.Close()
 }

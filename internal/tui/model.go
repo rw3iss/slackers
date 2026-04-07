@@ -303,6 +303,11 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 					PubKey:    pubKey,
 					Multiaddr: maddr,
 				}
+			case secure.MsgTypeDisconnect:
+				p2pChan <- P2PReceivedMsg{
+					SenderID: peerSlackID,
+					Text:     "__disconnect__",
+				}
 			default:
 				p2pChan <- P2PReceivedMsg{SenderID: peerSlackID, Text: msg.Text}
 			}
@@ -1393,6 +1398,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case P2PReceivedMsg:
+		// Handle disconnect notifications.
+		if msg.Text == "__disconnect__" {
+			if m.friendStore != nil {
+				m.friendStore.SetOnline(msg.SenderID, false)
+				m.friendStore.UpdateLastOnline(msg.SenderID)
+				m.channels.ClearUnread("friend:" + msg.SenderID)
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
 		// Handle friend request messages.
 		if msg.Text == "__friend_request__" {
 			senderName := msg.SenderID
@@ -2487,6 +2505,9 @@ func friendPingCmd(store *friends.FriendStore, p2p *secure.P2PNode) tea.Cmd {
 				on := p2p.IsConnected(f.UserID)
 				online[f.UserID] = on
 				store.SetOnline(f.UserID, on)
+				if on {
+					store.UpdateLastOnline(f.UserID)
+				}
 			}
 		}
 		return FriendPingMsg{Online: online}
