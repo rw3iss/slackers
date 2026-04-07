@@ -2389,11 +2389,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.updateFocus()
 
 				// SelectByRow expects a viewport-relative row. The sidebar
-				// has a top border (1 row) before its content. Empirically a
-				// further -1 is needed to compensate for terminal cell-edge
-				// reporting (clicks on the lower half of a row otherwise
-				// register as the row below).
-				viewportY := y - 2
+				// has a top border (1 row) before its content, so subtract.
+				viewportY := y - 1
 				if viewportY < 0 {
 					return m, nil
 				}
