@@ -89,6 +89,10 @@ type MessageViewModel struct {
 	// Inline collapse — track which message replies are collapsed
 	collapsedReplies map[string]bool
 
+	// Line-to-message map for click resolution (rebuilt in renderMessages).
+	lineToMsgID    map[int]string // line index → message ID for the message at that line
+	replyLineMsgID map[int]string // line index → parent message ID for "X replies" lines
+
 	// Context mode (search result viewing)
 	contextMode     bool
 	contextMessages []types.Message
@@ -225,71 +229,35 @@ func (m *MessageViewModel) SetFocused(focused bool) {
 	m.focused = focused
 }
 
-// FileAtClick returns the file at the given Y coordinate in the viewport, or nil.
 // ReplyLineMessageID returns the parent message ID if the line clicked is a "X replies" line.
 func (m *MessageViewModel) ReplyLineMessageID(y int) string {
-	content := m.viewport.View()
-	lines := strings.Split(content, "\n")
-	idx := y - 1
-	if idx < 0 || idx >= len(lines) {
-		return ""
-	}
-	clicked := lines[idx]
-	if !strings.Contains(clicked, "replies") && !strings.Contains(clicked, "reply") {
-		return ""
-	}
-	// Walk up from the clicked line to find the most recent message header.
-	// Match on UserName tokens.
-	for i := idx; i >= 0 && i > idx-30; i-- {
-		line := lines[i]
-		for _, msg := range m.messages {
-			if msg.MessageID == "" {
-				continue
-			}
-			if msg.UserName != "" && strings.Contains(line, msg.UserName) && len(msg.Replies) > 0 {
-				return msg.MessageID
-			}
-		}
+	// Convert viewport y to absolute content line number.
+	absLine := y - 1 + m.viewport.YOffset
+	if id, ok := m.replyLineMsgID[absLine]; ok {
+		return id
 	}
 	return ""
 }
 
-// MessageAtClick returns the message ID and preview at the given Y coordinate, or empty.
+// FileAtClick returns the file at the given Y coordinate in the viewport, or nil.
+
+// MessageAtClick returns the message ID and preview at the given Y coordinate.
+// Uses the rendered line→message map for accurate resolution.
 func (m *MessageViewModel) MessageAtClick(y int) (string, string) {
-	// Find which message corresponds to the clicked line.
-	// Walk through messages and count rendered lines.
-	content := m.viewport.View()
-	lines := strings.Split(content, "\n")
-	clickedLine := y - 1
-	if clickedLine < 0 || clickedLine >= len(lines) {
-		return "", ""
-	}
-	target := strings.TrimSpace(lines[clickedLine])
-	if target == "" {
-		return "", ""
-	}
-	// Walk messages and find the one whose user/text appears on this line.
-	// Match by checking if any field of the message appears in the clicked line.
-	for _, msg := range m.messages {
-		if msg.MessageID == "" {
-			continue
-		}
-		if msg.UserName != "" && strings.Contains(target, msg.UserName) {
-			preview := msg.Text
-			if len(preview) > 40 {
-				preview = preview[:40] + "..."
+	absLine := y - 1 + m.viewport.YOffset
+	// Walk back from the clicked line to find the closest preceding header.
+	for i := absLine; i >= 0; i-- {
+		if id, ok := m.lineToMsgID[i]; ok {
+			// Find this message to get the preview.
+			for _, msg := range m.messages {
+				if msg.MessageID == id {
+					preview := msg.Text
+					if len(preview) > 40 {
+						preview = preview[:40] + "..."
+					}
+					return id, preview
+				}
 			}
-			return msg.MessageID, preview
-		}
-	}
-	// Fallback: return the last message before this line.
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		if m.messages[i].MessageID != "" {
-			preview := m.messages[i].Text
-			if len(preview) > 40 {
-				preview = preview[:40] + "..."
-			}
-			return m.messages[i].MessageID, preview
 		}
 	}
 	return "", ""
@@ -748,6 +716,10 @@ func (m *MessageViewModel) renderContextMessages() string {
 }
 
 func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx int) string {
+	// Reset line maps for click resolution.
+	m.lineToMsgID = make(map[int]string)
+	m.replyLineMsgID = make(map[int]string)
+
 	var lines []string
 	maxWidth := m.width - 4
 	if maxWidth < 20 {
@@ -794,12 +766,17 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		// Highlight selected message in react mode.
 		if m.reactMode && i == m.reactIdx {
 			reactHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
-			headerLine = reactHighlight.Render(headerLine + " [react: Enter to pick emoji]")
+			headerLine = reactHighlight.Render(headerLine + " [Enter to reply, r to react]")
 		}
 
 		text := format.FormatMessage(msg.Text, m.users)
 		wrapped := wordWrap(text, maxWidth)
 		textLines := strings.Split(wrapped, "\n")
+
+		// Track which line this message starts at.
+		if msg.MessageID != "" {
+			m.lineToMsgID[len(lines)] = msg.MessageID
+		}
 
 		if i == highlightIdx {
 			headerLine = highlightBg.Render("► " + headerLine)
@@ -854,8 +831,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			reactionsStr := strings.Join(reactionParts, " ")
 			// Reply count on left, reactions on right (or stacked).
 			if replyLabel != "" && reactionsStr != "" {
+				m.replyLineMsgID[len(lines)] = msg.MessageID
 				lines = append(lines, "    "+replyLabel+"  "+reactionsStr)
 			} else if replyLabel != "" {
+				m.replyLineMsgID[len(lines)] = msg.MessageID
 				lines = append(lines, "    "+replyLabel)
 			} else {
 				lines = append(lines, "    "+reactionsStr)
