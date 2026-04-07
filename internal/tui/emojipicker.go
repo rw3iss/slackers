@@ -39,6 +39,21 @@ type EmojiPickerModel struct {
 	padding    int // grid cell padding (0 = no gap)
 	width      int
 	height     int
+
+	// Render layout (computed in View, used by mouse hit-testing).
+	boxX, boxY  int // top-left of the rendered box
+	boxW, boxH  int
+	tabRowY     int // screen Y of the tab row
+	tabsPerRow  int // wrapping limit for tabs
+	gridStartY  int // screen Y of the first grid row
+	gridStartX  int // screen X of the first grid cell
+	tabsPositions []tabPos // (cat index, x, y) for click hit-testing
+}
+
+type tabPos struct {
+	idx  int
+	x, y int
+	w    int
 }
 
 type emojiTab struct {
@@ -359,6 +374,43 @@ func (m EmojiPickerModel) Update(msg tea.Msg) (EmojiPickerModel, tea.Cmd) {
 		case tea.MouseButtonWheelDown:
 			m.scrollOff++
 			m.clampCursor()
+		case tea.MouseButtonLeft:
+			if msg.Action != tea.MouseActionPress {
+				return m, nil
+			}
+			// Tab click hit-test.
+			for _, tp := range m.tabsPositions {
+				screenX := m.boxX + 1 + 2 + tp.x // box border + padding-left
+				screenY := m.tabRowY + tp.y
+				if msg.X >= screenX && msg.X < screenX+tp.w && msg.Y == screenY {
+					m.activeTab = tp.idx
+					m.scrollOff = 0
+					m.cursorR = 0
+					m.cursorC = 0
+					return m, nil
+				}
+			}
+			// Grid cell click hit-test.
+			if msg.Y >= m.gridStartY && msg.X >= m.gridStartX {
+				cellW := 2 + m.padding
+				rowH := 1 + m.padding
+				dx := msg.X - m.gridStartX
+				dy := msg.Y - m.gridStartY
+				col := dx / cellW
+				row := dy / rowH
+				if col >= 0 && col < m.gridCols && row >= 0 && row < m.gridRows {
+					items := m.currentItems()
+					idx := (m.scrollOff+row)*m.gridCols + col
+					if idx >= 0 && idx < len(items) {
+						m.cursorR = row
+						m.cursorC = col
+						e := items[idx]
+						return m, func() tea.Msg {
+							return EmojiSelectedMsg{Code: e.Code, Emoji: e.Emoji, Purpose: m.purpose}
+						}
+					}
+				}
+			}
 		}
 	}
 	return m, nil
@@ -388,23 +440,38 @@ func (m *EmojiPickerModel) View() string {
 	boxInner := m.gridCols*cellWidth + m.padding/2
 
 	// Each tab icon takes ~4 display chars (emoji 2 + padding 2 from style).
-	tabItemWidth := 5 // approximate rendered width per tab item
+	tabItemWidth := 5
 	tabsPerRow := boxInner / tabItemWidth
 	if tabsPerRow < 3 {
 		tabsPerRow = 3
 	}
+	m.tabsPerRow = tabsPerRow
 
+	// Track tab positions relative to the box content area for click hit-testing.
+	// Content area starts after: top border (1) + padding(1) + title(1) + blank(1) = 4 from box top.
+	m.tabsPositions = nil
+	tabRowOffset := 0 // rows below content start
+	tabColOffset := 0 // cols within current row
 	for ti, tab := range m.categories {
 		label := tab.icon
+		m.tabsPositions = append(m.tabsPositions, tabPos{
+			idx: ti,
+			x:   tabColOffset,
+			y:   tabRowOffset,
+			w:   tabItemWidth,
+		})
 		if ti == m.activeTab {
 			b.WriteString(tabActiveStyle.Render(label))
 		} else {
 			b.WriteString(tabInactiveStyle.Render(label))
 		}
 		b.WriteString(" ")
+		tabColOffset += tabItemWidth
 		// End of row — add vertical spacing.
 		if (ti+1)%tabsPerRow == 0 && ti < len(m.categories)-1 {
 			b.WriteString("\n\n")
+			tabRowOffset += 2
+			tabColOffset = 0
 		}
 	}
 	b.WriteString("\n\n")
@@ -543,6 +610,39 @@ func (m *EmojiPickerModel) View() string {
 		Height(boxHeight)
 
 	box := boxStyle.Render(content)
+
+	// Compute the box's top-left when centered.
+	m.boxW = lipgloss.Width(box)
+	m.boxH = strings.Count(box, "\n") + 1
+	m.boxX = (m.width - m.boxW) / 2
+	m.boxY = (m.height - m.boxH) / 2
+	if m.boxX < 0 {
+		m.boxX = 0
+	}
+	if m.boxY < 0 {
+		m.boxY = 0
+	}
+	// Content area starts at boxY + border(1) + padding(1) = boxY + 2.
+	// Then title(1) + blank(1) = +2 more → tabs start at boxY+4.
+	contentTopY := m.boxY + 2
+	contentLeftX := m.boxX + 1 + 2 // border + padding-left
+	m.tabRowY = contentTopY + 2    // after "Emoji Picker\n\n"
+
+	// Grid starts after: tabs (variable rows) + "\n\n" + separator + "\n"
+	// We computed tabRowOffset which is the row index of the LAST tab row.
+	// Plus the separator and blank line: +3 more rows after the tab rows.
+	// Actually: after last tab line we wrote "\n\n" then "─" then "\n", so:
+	//   tab last row + 2 (the \n\n) = sep row, + 1 = grid first row
+	tabRowsUsed := (len(m.categories) + m.tabsPerRow - 1) / m.tabsPerRow
+	if tabRowsUsed < 1 {
+		tabRowsUsed = 1
+	}
+	// tabRowsUsed rows of tabs, each followed by "\n\n" except the last has "\n\n" separator after.
+	// Last tab row at: tabRowY + (tabRowsUsed-1)*2
+	// Then sep at: tabRowY + (tabRowsUsed-1)*2 + 2
+	// Then grid first row at: tabRowY + (tabRowsUsed-1)*2 + 3
+	m.gridStartY = m.tabRowY + (tabRowsUsed-1)*2 + 3
+	m.gridStartX = contentLeftX
 
 	return lipgloss.Place(m.width, m.height,
 		lipgloss.Center, lipgloss.Center,

@@ -344,9 +344,15 @@ configs/            Default config, Slack app manifest
 
 </details>
 
-## Support
+## About
 
-If you find Slackers useful, consider buying me a coffee:
+Designed by Ryan Weiss (www.ryanweiss.net)
+
+Developed by Wet Dream (my Claude friend) (www.claude.ai)
+
+Project was started 4/5/2026, and mostly built in one weekend.
+
+If you find Slackers useful, star the repo, or throw some coin:
 
 [buymeacoffee.com/ttv1xp6yAj](https://buymeacoffee.com/ttv1xp6yAj)
 
