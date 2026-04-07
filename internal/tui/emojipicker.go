@@ -452,7 +452,7 @@ func (m EmojiPickerModel) Update(msg tea.Msg) (EmojiPickerModel, tea.Cmd) {
 			}
 			// Tab click hit-test.
 			for _, tp := range m.tabsPositions {
-				screenX := m.boxX + 2 + tp.x // box border + padding (observed)
+				screenX := m.boxX + 2 + tp.x + 5 // box border + padding + 1 tab width offset (observed)
 				screenY := m.tabRowY + tp.y
 				if msg.X >= screenX && msg.X < screenX+tp.w && msg.Y == screenY {
 					m.activeTab = tp.idx
@@ -550,7 +550,7 @@ func (m *EmojiPickerModel) View() string {
 	b.WriteString(strings.Repeat("─", boxInner))
 	b.WriteString("\n")
 
-	// Grid — horizontal padding from m.padding, always 1 blank line above each emoji.
+	// Grid — horizontal padding from m.padding, always 1 blank line BELOW each emoji.
 	items := m.currentItems()
 	if len(items) == 0 {
 		b.WriteString(dimStyle.Render("  (empty)"))
@@ -558,8 +558,6 @@ func (m *EmojiPickerModel) View() string {
 	} else {
 		hBefore := strings.Repeat(" ", m.padding)
 		hAfter := strings.Repeat(" ", m.padding)
-		vBefore := 1
-		vAfter := 0
 
 		// Full cell width for background fill on vertical padding lines.
 		fullCellW := 2 + 2*m.padding
@@ -568,25 +566,6 @@ func (m *EmojiPickerModel) View() string {
 			rowStart := (m.scrollOff + r) * m.gridCols
 			if rowStart >= len(items) {
 				break
-			}
-
-			// Vertical gap before row — extend selected/fav background.
-			for v := 0; v < vBefore; v++ {
-				var vRow strings.Builder
-				for c := 0; c < m.gridCols; c++ {
-					idx := rowStart + c
-					style := cellStyle
-					if idx < len(items) {
-						if r == m.cursorR && c == m.cursorC {
-							style = selectedCellStyle
-						} else if m.isFavorite(items[idx].Code) {
-							style = favCellStyle
-						}
-					}
-					vRow.WriteString(style.Render(strings.Repeat(" ", fullCellW)))
-				}
-				b.WriteString(vRow.String())
-				b.WriteString("\n")
 			}
 
 			// Emoji row — render padding inside the style.
@@ -610,24 +589,22 @@ func (m *EmojiPickerModel) View() string {
 			b.WriteString(row.String())
 			b.WriteString("\n")
 
-			// Vertical gap after row — extend selected/fav background.
-			for v := 0; v < vAfter; v++ {
-				var vRow strings.Builder
-				for c := 0; c < m.gridCols; c++ {
-					idx := rowStart + c
-					style := cellStyle
-					if idx < len(items) {
-						if r == m.cursorR && c == m.cursorC {
-							style = selectedCellStyle
-						} else if m.isFavorite(items[idx].Code) {
-							style = favCellStyle
-						}
+			// Always 1 blank line BELOW the row — consistent padding regardless of position.
+			var vRow strings.Builder
+			for c := 0; c < m.gridCols; c++ {
+				idx := rowStart + c
+				style := cellStyle
+				if idx < len(items) {
+					if r == m.cursorR && c == m.cursorC {
+						style = selectedCellStyle
+					} else if m.isFavorite(items[idx].Code) {
+						style = favCellStyle
 					}
-					vRow.WriteString(style.Render(strings.Repeat(" ", fullCellW)))
 				}
-				b.WriteString(vRow.String())
-				b.WriteString("\n")
+				vRow.WriteString(style.Render(strings.Repeat(" ", fullCellW)))
 			}
+			b.WriteString(vRow.String())
+			b.WriteString("\n")
 		}
 	}
 
