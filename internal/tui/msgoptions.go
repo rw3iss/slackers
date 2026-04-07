@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rw3iss/slackers/internal/debug"
 )
 
 // MsgOptionsAction represents a chosen action from the options menu.
@@ -28,7 +29,8 @@ type MsgOptionsModel struct {
 	messageID  string
 	preview    string
 	selected   int
-	x, y       int // anchor position
+	x, y       int // anchor position (click coords)
+	minX       int // minimum X (e.g. chat history left edge)
 	finalX     int // computed render position after clamping
 	finalY     int
 	boxW, boxH int
@@ -37,12 +39,14 @@ type MsgOptionsModel struct {
 }
 
 // NewMsgOptions creates an options popup at the given position.
-func NewMsgOptions(messageID, preview string, x, y int) MsgOptionsModel {
+// minX is the minimum left X (e.g. chat history left edge) — popup never starts left of this.
+func NewMsgOptions(messageID, preview string, x, y, minX int) MsgOptionsModel {
 	return MsgOptionsModel{
 		messageID: messageID,
 		preview:   preview,
 		x:         x,
 		y:         y,
+		minX:      minX,
 	}
 }
 
@@ -53,20 +57,30 @@ func (m *MsgOptionsModel) SetSize(w, h int) {
 	sample := m.renderBox()
 	m.boxH = strings.Count(sample, "\n") + 1
 	m.boxW = lipgloss.Width(sample)
+
+	// X: start at minX (chat history left edge), or further right if click was further right.
 	m.finalX = m.x
-	m.finalY = m.y
+	if m.finalX < m.minX {
+		m.finalX = m.minX
+	}
+	// Clamp right edge if it would overflow.
 	if m.finalX+m.boxW > m.width {
 		m.finalX = m.width - m.boxW - 1
 	}
-	if m.finalX < 0 {
-		m.finalX = 0
+	if m.finalX < m.minX {
+		m.finalX = m.minX
 	}
+
+	// Y: clamp to fit on screen.
+	m.finalY = m.y
 	if m.finalY+m.boxH > m.height {
 		m.finalY = m.height - m.boxH - 1
 	}
 	if m.finalY < 0 {
 		m.finalY = 0
 	}
+	debug.Log("[msgoptions] anchor=(%d,%d) minX=%d final=(%d,%d) box=(%d,%d) screen=(%d,%d)",
+		m.x, m.y, m.minX, m.finalX, m.finalY, m.boxW, m.boxH, m.width, m.height)
 }
 
 // ClickInside returns true if the click is within the popup box (with a 1-cell buffer).
@@ -140,8 +154,9 @@ func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
 			// Box layout from top: border(1) + title(1) + items + blank(1) + hint(1) + border(1)
-			// So items start at finalY + 2 (top border + title row).
+			// Items start at finalY + 2.
 			row := msg.Y - m.finalY - 2
+			debug.Log("[msgoptions] click at (%d,%d) finalY=%d row=%d items=%d", msg.X, msg.Y, m.finalY, row, len(msgOptionsItems))
 			if row >= 0 && row < len(msgOptionsItems) {
 				m.selected = row
 				item := msgOptionsItems[row]
