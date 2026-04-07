@@ -210,6 +210,7 @@ Slackers includes a complete peer-to-peer friends system for private, encrypted 
 
 **Key features:**
 - **Direct P2P messaging** -- messages sent over libp2p, never through Slack servers
+- **P2P file transfer** -- send and receive files directly between friends, no cloud storage
 - **X25519 + ChaCha20-Poly1305 encryption** -- per-friend-pair encryption keys
 - **Contact card sharing** -- JSON format for easy friend exchange via any channel
 - **Friends-only mode** -- works without a Slack workspace configured

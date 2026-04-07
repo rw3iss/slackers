@@ -299,6 +299,27 @@ When the current channel is a friend channel, message handling diverges from the
 
 **History:** Friend message history is stored in-memory only (`friendMessages` map). It survives for the duration of the session but is not persisted to disk. When you select a friend channel, `SetMessages()` loads the stored history into the viewport. Future versions may add persistent local message storage.
 
+### P2P file transfer
+
+Files can be sent and received directly between friends using the same `[FILE:path]` syntax as Slack file attachments.
+
+**Sending:** When a message in a friend channel contains `[FILE:/path/to/file]` patterns, the sender's client:
+1. Registers each file locally via `ShareFile()`, generating a unique 16-char hex file ID
+2. Stores the `fileID -> localPath` mapping in the P2P node's `sharedFiles` map
+3. Sends a `file_offer` message to the friend with the file name, size, and ID
+4. Displays the file as a `[FILE:name]` entry in the local chat
+
+**Receiving:** When a `file_offer` arrives, it creates a `FileInfo` entry with a `p2p://` URL scheme (`p2p://<peerUID>/<fileID>`) and appends it to the chat as a regular file attachment. The receiver can browse files with `f` (file select mode) or click them.
+
+**Downloading:** When the receiver selects a file for download, the `FileDownloadMsg` handler detects the `p2p://` URL prefix and calls `startP2PDownload` instead of the Slack API downloader:
+1. Opens a new stream on the `/slackers/file/1.0.0` protocol to the sender
+2. Sends a `file_request` message with the file ID
+3. The sender's `handleFileRequest` looks up the file ID, opens the local file, and streams it raw over the connection
+4. The receiver writes the stream to the configured Downloads folder
+5. Cancel with `Ctrl+D` works the same as Slack downloads
+
+The file transfer protocol is separate from the messaging protocol, allowing file data to flow without interfering with chat messages. The `FileDownloadCompleteMsg` and `FileDownloadCancelledMsg` handlers are shared between Slack and P2P downloads.
+
 ### Online detection
 
 A background goroutine pings all friends every 30 seconds:
