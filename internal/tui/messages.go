@@ -338,6 +338,38 @@ func (m *MessageViewModel) SelectedMessageID() string {
 	return m.messages[m.reactIdx].MessageID
 }
 
+// scrollToReactCursor scrolls the viewport so the currently selected message
+// in react/select mode is visible.
+func (m *MessageViewModel) scrollToReactCursor() {
+	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(m.messages) {
+		return
+	}
+	targetID := m.messages[m.reactIdx].MessageID
+	if targetID == "" {
+		return
+	}
+	// Find which line the selected message starts at.
+	targetLine := -1
+	for line, id := range m.lineToMsgID {
+		if id == targetID {
+			targetLine = line
+			break
+		}
+	}
+	if targetLine < 0 {
+		return
+	}
+	top := m.viewport.YOffset
+	bottom := top + m.viewport.Height - 1
+	if targetLine < top {
+		// Scroll up so the line is at the top of the viewport.
+		m.viewport.SetYOffset(targetLine)
+	} else if targetLine > bottom-2 {
+		// Scroll down so the line is near the bottom (leave 2-line margin).
+		m.viewport.SetYOffset(targetLine - m.viewport.Height + 3)
+	}
+}
+
 // SelectedMessage returns the currently selected message in react mode.
 func (m *MessageViewModel) SelectedMessage() *types.Message {
 	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(m.messages) {
@@ -447,10 +479,8 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 			s := keyMsg.String()
 			if s == "up" || s == "down" {
 				if m.EnterReactMode() {
-					if s == "up" && m.reactIdx > 0 {
-						m.reactIdx--
-					}
-					m.rebuildContent()
+					// Don't move on first entry — user sees the last message highlighted.
+					m.scrollToReactCursor()
 					return m, nil
 				}
 			}
@@ -494,12 +524,14 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				if m.reactIdx > 0 {
 					m.reactIdx--
 					m.rebuildContent()
+					m.scrollToReactCursor()
 				}
 				return m, nil
 			case "down":
 				if m.reactIdx < len(m.messages)-1 {
 					m.reactIdx++
 					m.rebuildContent()
+					m.scrollToReactCursor()
 				}
 				return m, nil
 			case "enter":
