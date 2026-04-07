@@ -42,6 +42,7 @@ const (
 	overlayWhitelist
 	overlayFriendRequest
 	overlayFriendsConfig
+	overlayEmojiPicker
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -185,6 +186,7 @@ type Model struct {
 	help            HelpModel
 	friendRequest   FriendRequestModel
 	friendsConfig   FriendsConfigModel
+	emojiPicker     EmojiPickerModel
 
 	// Friends
 	friendStore    *friends.FriendStore
@@ -528,6 +530,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case key.Matches(msg, m.keymap.EmojiPicker):
+			m.emojiPicker = NewEmojiPicker(m.cfg.EmojiFavorites, EmojiPurposeInsert)
+			m.emojiPicker.SetSize(m.width, m.height)
+			m.overlay = overlayEmojiPicker
+			return m, nil
+
 		case key.Matches(msg, m.keymap.Befriend):
 			if m.currentCh != nil && m.currentCh.IsDM && m.currentCh.UserID != "" {
 				if m.friendStore != nil && m.friendStore.Get(m.currentCh.UserID) != nil {
@@ -651,6 +659,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayFriendsConfig {
 			var cmd tea.Cmd
 			m.friendsConfig, cmd = m.friendsConfig.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayEmojiPicker {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.emojiPicker, cmd = m.emojiPicker.Update(msg)
 			return m, cmd
 		}
 
@@ -1248,6 +1265,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.channels.SetFriendChannels(m.buildFriendChannels())
 		return m, nil
 
+	case EmojiSelectedMsg:
+		m.overlay = overlayNone
+		// Save favorites if changed.
+		if m.emojiPicker.FavDirty() {
+			m.cfg.EmojiFavorites = m.emojiPicker.Favorites()
+			go config.Save(m.cfg)
+		}
+		switch msg.Purpose {
+		case EmojiPurposeInsert:
+			// Insert emoji into the text input at cursor.
+			m.input.InsertAtCursor(msg.Emoji)
+			m.focus = types.FocusInput
+			m.updateFocus()
+		case EmojiPurposeReaction:
+			// TODO: wire to reaction system in Phase 3
+		}
+		return m, nil
+
 	case ShortcutsSavedMsg:
 		// Immediately rebuild keymap from the editor's current state.
 		m.shortcutMap = m.shortcutsEditor.Merged()
@@ -1746,6 +1781,8 @@ func (m Model) View() string {
 		return m.friendRequest.View()
 	case overlayFriendsConfig:
 		return m.friendsConfig.View()
+	case overlayEmojiPicker:
+		return m.emojiPicker.View()
 	}
 
 	msgView := m.messages.View()
@@ -1853,6 +1890,10 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case overlayFriendsConfig:
 		var cmd tea.Cmd
 		m.friendsConfig, cmd = m.friendsConfig.Update(msg)
+		return m, cmd
+	case overlayEmojiPicker:
+		var cmd tea.Cmd
+		m.emojiPicker, cmd = m.emojiPicker.Update(msg)
 		return m, cmd
 	}
 	return m, nil

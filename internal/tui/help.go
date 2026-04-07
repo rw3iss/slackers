@@ -88,6 +88,7 @@ var helpLayout = []helpSection{
 			{"help", "Toggle this help page", ""},
 			{"settings", "Open settings", ""},
 			{"befriend", "Send friend request to current DM user", ""},
+			{"emoji_picker", "Open emoji picker", ""},
 			{"quit", "Quit", ""},
 		},
 	},

@@ -41,6 +41,7 @@ type KeyMap struct {
 	SidebarCollapse  key.Binding
 	ToggleInputMode  key.Binding
 	Befriend         key.Binding
+	EmojiPicker      key.Binding
 }
 
 // binding creates a key.Binding from a ShortcutMap action name.
@@ -92,6 +93,7 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		SidebarCollapse:  binding(sm, "sidebar_collapse", "space", "collapse group"),
 		ToggleInputMode: binding(sm, "toggle_input_mode", "ctrl+\\", "input mode"),
 		Befriend:        binding(sm, "befriend", "ctrl+b", "befriend user"),
+		EmojiPicker:     binding(sm, "emoji_picker", "ctrl+e", "emoji picker"),
 	}
 }
 

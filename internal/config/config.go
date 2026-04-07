@@ -41,6 +41,7 @@ type Config struct {
 	PollIntervalBg  int               `json:"poll_interval_bg,omitempty"`
 	PollPriority    int               `json:"poll_priority,omitempty"`
 	Notifications   bool              `json:"notifications,omitempty"`
+	EmojiFavorites  []string          `json:"emoji_favorites,omitempty"`
 	SlackerID       string            `json:"slacker_id,omitempty"`
 	MyName          string            `json:"my_name,omitempty"`
 	MyEmail         string            `json:"my_email,omitempty"`
