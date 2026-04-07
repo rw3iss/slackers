@@ -286,10 +286,14 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		case tea.MouseButtonWheelUp:
 			if m.selected > 0 {
 				m.selected--
+			} else {
+				m.selected = len(m.fields) - 1
 			}
 		case tea.MouseButtonWheelDown:
 			if m.selected < len(m.fields)-1 {
 				m.selected++
+			} else {
+				m.selected = 0
 			}
 		}
 	}
@@ -301,10 +305,14 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 	case "up", "k":
 		if m.selected > 0 {
 			m.selected--
+		} else {
+			m.selected = len(m.fields) - 1
 		}
 	case "down", "j":
 		if m.selected < len(m.fields)-1 {
 			m.selected++
+		} else {
+			m.selected = 0
 		}
 	case "pgup":
 		m.selected -= 5
