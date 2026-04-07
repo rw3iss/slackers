@@ -73,6 +73,7 @@ func NewEmojiPicker(favorites []string, purpose EmojiPickerPurpose) EmojiPickerM
 		categories: tabs,
 		favorites:  append([]string{}, favorites...),
 		purpose:    purpose,
+		padding:    1,
 		gridCols:   8,
 		gridRows:   6,
 	}
@@ -81,9 +82,12 @@ func NewEmojiPicker(favorites []string, purpose EmojiPickerPurpose) EmojiPickerM
 func (m *EmojiPickerModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	// Adjust grid columns to fit.
-	cellWidth := 2 + m.padding // emoji + padding
-	maxCols := (min(50, w-8) - 4) / cellWidth
+
+	// Cell dimensions: emoji (2 chars wide) + padding gap after.
+	cellW := 2 + m.padding
+	// Box inner width: larger base (60 or screen - 8).
+	innerW := min(60, w-8) - 6 // border + padding
+	maxCols := innerW / cellW
 	if maxCols < 4 {
 		maxCols = 4
 	}
@@ -91,8 +95,12 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 		maxCols = 12
 	}
 	m.gridCols = maxCols
-	// Adjust visible rows to fit.
-	maxRows := (h - 12) / (1 + m.padding)
+
+	// Row height: 1 line per emoji + padding gap below.
+	rowH := 1 + m.padding
+	// Available height for grid: box height - tabs(3) - info(2) - help(2) - header(2).
+	availH := min(h-4, 40) - 9 // larger base height (40 or screen)
+	maxRows := availH / rowH
 	if maxRows < 3 {
 		maxRows = 3
 	}
@@ -377,7 +385,7 @@ func (m *EmojiPickerModel) View() string {
 
 	// Tabs.
 	cellWidth := 2 + m.padding
-	boxInner := m.gridCols * cellWidth
+	boxInner := m.gridCols*cellWidth + m.padding/2 // account for leading pad on even
 	var tabs []string
 	for i, tab := range m.categories {
 		label := tab.icon
@@ -394,18 +402,33 @@ func (m *EmojiPickerModel) View() string {
 	b.WriteString(strings.Repeat("─", boxInner))
 	b.WriteString("\n")
 
-	// Grid.
+	// Grid — padding: odd = gap after emoji, even = split before/after.
 	items := m.currentItems()
 	if len(items) == 0 {
 		b.WriteString(dimStyle.Render("  (empty)"))
 		b.WriteString("\n")
 	} else {
-		pad := strings.Repeat(" ", m.padding)
+		// Horizontal padding.
+		padBefore := m.padding / 2
+		padAfter := m.padding - padBefore // odd: extra goes after
+		hBefore := strings.Repeat(" ", padBefore)
+		hAfter := strings.Repeat(" ", padAfter)
+
+		// Vertical padding.
+		vBefore := m.padding / 2
+		vAfter := m.padding - vBefore
+
 		for r := 0; r < m.gridRows; r++ {
 			rowStart := (m.scrollOff + r) * m.gridCols
 			if rowStart >= len(items) {
 				break
 			}
+
+			// Vertical gap before row (even padding only).
+			for v := 0; v < vBefore; v++ {
+				b.WriteString("\n")
+			}
+
 			var row strings.Builder
 			for c := 0; c < m.gridCols; c++ {
 				idx := rowStart + c
@@ -419,15 +442,17 @@ func (m *EmojiPickerModel) View() string {
 				} else if m.isFavorite(e.Code) {
 					style = favCellStyle
 				}
+				row.WriteString(hBefore)
 				row.WriteString(style.Render(e.Emoji))
 				if c < m.gridCols-1 {
-					row.WriteString(pad)
+					row.WriteString(hAfter)
 				}
 			}
 			b.WriteString(row.String())
-			// Vertical padding between rows.
 			b.WriteString("\n")
-			for p := 0; p < m.padding; p++ {
+
+			// Vertical gap after row.
+			for v := 0; v < vAfter; v++ {
 				b.WriteString("\n")
 			}
 		}
