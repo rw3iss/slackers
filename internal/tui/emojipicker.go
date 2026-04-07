@@ -395,10 +395,9 @@ func (m *EmojiPickerModel) View() string {
 			tabs = append(tabs, tabInactiveStyle.Render(label))
 		}
 	}
-	tabLine := strings.Join(tabs, "")
-	// Truncate if tabs wider than box.
+	tabLine := strings.Join(tabs, " ")
 	b.WriteString(tabLine)
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 	b.WriteString(strings.Repeat("─", boxInner))
 	b.WriteString("\n")
 
