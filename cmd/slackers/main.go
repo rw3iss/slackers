@@ -549,6 +549,118 @@ var scriptsCleanupCmd = &cobra.Command{
 	},
 }
 
+var friendsHelpCmd = &cobra.Command{
+	Use:   "friends",
+	Short: "How to set up private P2P friend connections",
+	Run: func(cmd *cobra.Command, args []string) {
+		goos := runtime.GOOS
+
+		fmt.Println(`
+SLACKERS FRIENDS — Private P2P Chat Guide
+==========================================
+
+The Friends feature lets you chat directly with other Slackers users
+over encrypted peer-to-peer connections. Messages never pass through
+Slack's servers.
+
+QUICK START
+-----------
+1. Both users install Slackers and enable Secure Mode in Settings
+2. User A opens a DM with User B and presses Ctrl+B to send a friend request
+3. User B sees a popup and accepts
+4. Both users now have each other in the "Friends" sidebar section
+5. Click a friend's name to open a private P2P chat
+
+MANUAL SETUP (without Slack)
+----------------------------
+If you and your friend aren't in the same Slack workspace:
+
+1. Go to Settings > Friends Config > Edit My Info
+   - Set your Name and optionally Email
+   - Note your P2P Port (default 9900)
+
+2. Go to Settings > Friends Config > Share My Info
+   - Copy the JSON contact card shown
+
+3. Send the JSON to your friend (email, signal, etc.)
+
+4. Your friend goes to Settings > Friends Config > Add a Friend
+   - Press Ctrl+J to paste your JSON contact card
+   - Press Ctrl+S to save
+
+5. Repeat in the other direction so both have each other's info`)
+
+		fmt.Println(`
+NETWORK SETUP
+-------------
+For P2P connections to work, each user needs port 9900/tcp (or their
+configured P2P port) reachable from the internet.`)
+
+		switch goos {
+		case "linux":
+			fmt.Println(`
+  Linux (ufw):
+    sudo ufw allow 9900/tcp
+
+  Linux (iptables):
+    sudo iptables -A INPUT -p tcp --dport 9900 -j ACCEPT
+
+  Linux (firewalld):
+    sudo firewall-cmd --add-port=9900/tcp --permanent
+    sudo firewall-cmd --reload`)
+		case "darwin":
+			fmt.Println(`
+  macOS:
+    System Settings > Network > Firewall > Options
+    Add Slackers to allowed incoming connections
+
+  Or via command line:
+    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add $(which slackers)`)
+		case "windows":
+			fmt.Println(`
+  Windows (PowerShell as Administrator):
+    New-NetFirewallRule -DisplayName "Slackers P2P" -Direction Inbound -Protocol TCP -LocalPort 9900 -Action Allow
+
+  Or via command line:
+    netsh advfirewall firewall add rule name="Slackers P2P" dir=in action=allow protocol=TCP localport=9900`)
+		}
+
+		fmt.Println(`
+ROUTER / PORT FORWARDING
+-------------------------
+If behind a NAT router, forward port 9900 TCP to your local IP:
+  1. Find your local IP (ip addr / ifconfig / ipconfig)
+  2. Log into your router admin panel
+  3. Add a port forwarding rule: external 9900 → internal IP:9900
+
+Slackers uses libp2p with UPnP and hole punching, so port forwarding
+may not always be required — but it increases reliability.
+
+CONFIGURATION
+-------------
+  P2P Port:       Settings > P2P Port (or Friends Config > Edit My Info)
+  P2P Endpoint:   Settings > P2P Address (your public IP/hostname)
+  Secure Mode:    Must be "on" for P2P features
+  Befriend key:   Ctrl+B (customizable in Settings > Keyboard Shortcuts)
+
+IMPORT / EXPORT
+---------------
+  Export: Settings > Friends Config > Export Friends List
+         Saves all friends as JSON to your Downloads folder
+
+  Import: Settings > Friends Config > Import Friends List
+         Load a JSON file, with optional conflict overwrite
+
+SECURITY
+--------
+  - Connections use X25519 key exchange + ChaCha20-Poly1305 encryption
+  - Each friend pair derives a unique encryption key
+  - Keys are stored locally in ~/.config/slackers/friends.json
+  - Messages are never sent through Slack or any third party
+  - A unique SlackerID is generated on first run for identification`)
+	},
+}
+
 func init() {
 	rootCmd.SilenceUsage = true
 
@@ -573,6 +685,7 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(scriptsCmd)
+	rootCmd.AddCommand(friendsHelpCmd)
 }
 
 func main() {

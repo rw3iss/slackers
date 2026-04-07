@@ -160,6 +160,7 @@ slackers login        OAuth browser login
 slackers join <url>   One-command team onboarding
 slackers update       Check for and install latest version
 slackers config       Show current config
+slackers friends      P2P friends setup guide (platform-specific)
 slackers version      Print version
 ```
 
@@ -199,6 +200,36 @@ Friend data is stored in `~/.config/slackers/friends.json`. See [How_It_Works.md
 rm ~/.local/bin/slackers
 rm -rf ~/.config/slackers
 ```
+
+---
+
+<details>
+<summary>Friends — Private P2P Communication</summary>
+
+Slackers includes a complete peer-to-peer friends system for private, encrypted chat that operates independently of Slack.
+
+**Key features:**
+- **Direct P2P messaging** -- messages sent over libp2p, never through Slack servers
+- **X25519 + ChaCha20-Poly1305 encryption** -- per-friend-pair encryption keys
+- **Contact card sharing** -- JSON format for easy friend exchange via any channel
+- **Friends-only mode** -- works without a Slack workspace configured
+- **Online/offline detection** -- periodic pings with green/grey sidebar indicators
+- **Import/export** -- bulk friend list management with conflict resolution
+- **Profile management** -- edit your own and friends' connection info in-app
+
+**Quick start:**
+1. Enable Secure Mode in Settings
+2. Open a DM and press `Ctrl+B` to befriend
+3. Or exchange contact cards: Settings > Friends Config > Share My Info
+
+**Configuration:**
+- Friends stored in `~/.config/slackers/friends.json`
+- P2P port default: 9900 (configurable in Settings or Friends Config > Edit My Info)
+- Run `slackers friends` for a complete setup guide including firewall/port forwarding instructions
+
+See [How_It_Works.md](How_It_Works.md#friends--private-chat) for the technical deep dive.
+
+</details>
 
 ---
 

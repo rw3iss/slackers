@@ -195,17 +195,53 @@ Config changes from the settings overlay take effect immediately for display set
 
 The friends system enables direct peer-to-peer messaging between Slackers users without involving Slack's servers. It is built on top of the existing P2P infrastructure (libp2p, X25519 key exchange) and operates as a fully independent communication layer.
 
-### Architecture
+### Identity
 
-Friends are stored in a separate file (`~/.config/slackers/friends.json`) as a `FriendStore` -- a thread-safe, JSON-persisted list of `Friend` records. Each friend entry contains:
+Every Slackers installation generates a unique **SlackerID** on first launch -- a 32-character hex string stored in `config.json`. This ID persists across sessions and serves as a stable identifier for the friends system, independent of any Slack user ID. When users don't share a Slack workspace, the SlackerID is the primary way to identify and deduplicate friend records.
 
-- **UserID**: Slack user ID (used as a stable identifier even if the friend was originally discovered via Slack)
+Users can also set a **display name** and **email** in their profile (Settings > Friends Config > Edit My Info). The email provides an additional uniqueness check during friend import/merge operations.
+
+### Data model
+
+Friends are stored in `~/.config/slackers/friends.json` as a `FriendStore` -- a thread-safe, JSON-persisted list of `Friend` records. Each friend entry contains:
+
+- **UserID**: Slack user ID or `slacker:<SlackerID>` for non-Slack friends
+- **SlackerID**: The friend's unique Slackers installation ID
 - **Name**: Display name
+- **Email**: Optional email for identity verification
 - **PublicKey**: Base64-encoded X25519 public key for encryption
+- **PairKey**: Per-pair derived encryption key (base64), generated from ECDH shared secret
 - **Multiaddr**: libp2p multiaddress for direct connection (e.g. `/ip4/1.2.3.4/tcp/9900/p2p/<peerID>`)
+- **Endpoint**: IP/hostname (human-readable alternative to multiaddr)
+- **Port**: P2P port number
 - **AddedAt**: Unix timestamp of when the friendship was established
+- **LastOnline**: Unix timestamp of last confirmed online status
+- **ConnectionType**: `"p2p"` (direct libp2p) or `"e2e"` (encrypted relay via Slack)
 
 The `Online` field is runtime-only (not persisted) and tracks whether the friend's P2P node is currently reachable.
+
+### Contact cards
+
+Friends are exchanged via **contact cards** -- a versioned JSON format containing everything needed to establish a connection:
+
+```json
+{
+  "version": 1,
+  "slacker_id": "a1b2c3...",
+  "name": "Alice",
+  "email": "alice@example.com",
+  "public_key": "base64...",
+  "multiaddr": "/ip4/...",
+  "endpoint": "1.2.3.4",
+  "port": 9900
+}
+```
+
+Users can generate their contact card from Settings > Friends Config > Share My Info, then send it to a friend via any channel (email, Signal, etc.). The recipient pastes it in Settings > Friends Config > Add a Friend > Ctrl+J.
+
+### Conflict resolution
+
+When importing friends (individually or via bulk import), the system checks for conflicts across multiple fields: UserID, SlackerID, Email, and Endpoint+Port combination. If any match, the entry is flagged as conflicting. During import, users choose to either overwrite matching entries or skip them.
 
 ### Startup sequence
 
@@ -275,8 +311,31 @@ A background goroutine pings all friends every 30 seconds:
 
 The friend-specific styling in `renderItem()` checks `IsFriend` before the generic unread check, so the green/grey coloring is specific to friends and doesn't conflict with normal unread indicators for Slack channels.
 
+Connections are **not kept open permanently**. The ping cycle connects, checks, and lets the connection idle. A persistent connection is only established when the user actively opens a friend's chat channel. This avoids holding open sockets for all friends simultaneously.
+
+### Disconnect notifications
+
+When a user shuts down Slackers (or the P2P node closes), `BroadcastDisconnect()` sends a `disconnect` message to all currently connected peers. Recipients update the friend's online status to offline and record the `LastOnline` timestamp. This provides faster offline detection than waiting for the next ping cycle to timeout.
+
+### Friends Config panel
+
+The Friends Config panel (Settings > Friends Config) provides a complete management interface with six sub-pages, all managed by `FriendsConfigModel` with an internal page state machine:
+
+1. **Friends List**: Scrollable list showing each friend with name, online/offline indicator, and last-seen time. Enter to edit, `d` to delete.
+2. **Edit My Info**: Edit your display name, email, P2P endpoint/port, and Secure Mode. Changes sync with the main Settings automatically.
+3. **Share My Info**: Generates and displays your JSON contact card for copy/paste sharing.
+4. **Add a Friend**: Manual form for entering connection details, or `Ctrl+J` to paste a JSON contact card which auto-fills the form. `Ctrl+S` to save.
+5. **Export Friends List**: Saves all friends as formatted JSON to the configured Downloads folder.
+6. **Import Friends List**: Load a JSON file with conflict resolution -- toggle "Overwrite conflicts" to replace matching entries or skip them.
+
+Each friend's profile is also editable (Friend List > Enter on a friend) showing connection details, added date, last online time, and all editable fields.
+
 ### Friends-only mode
 
 If `config.Validate()` fails (no bot token / app token) but the friend store has entries, the app skips the setup wizard and launches with nil Slack services. The `Init()` function guards all workspace-dependent commands (`loadUsersCmd`, `connectSocketCmd`, `pollTickCmd`, etc.) behind nil checks on `m.slackSvc` and `m.socketSvc`. The friend loading, P2P node, and ping cycle all start normally.
 
 This allows Slackers to function as a standalone P2P chat client for users who only want private friend-to-friend communication.
+
+### Network requirements
+
+P2P connections require port 9900/tcp (or the configured P2P port) to be reachable. Slackers uses libp2p with UPnP and NAT hole punching, which often works without manual configuration. For reliable connections behind NAT routers, users may need to set up port forwarding. Run `slackers friends` for platform-specific firewall instructions.
