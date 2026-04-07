@@ -186,6 +186,12 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				value:       maskToken(cfg.UserToken),
 				description: "Slack user token (xoxp-...) for sending as yourself",
 			},
+			{
+				label:       "About",
+				key:         "about",
+				value:       "View...",
+				description: "Show version, credits, and project links",
+			},
 		},
 		cfg:     cfg,
 		input:   ti,
@@ -369,6 +375,13 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		if f.key == "friends_config" {
 			return m, func() tea.Msg {
 				return FriendsConfigOpenMsg{}
+			}
+		}
+
+		// About opens the about overlay.
+		if f.key == "about" {
+			return m, func() tea.Msg {
+				return AboutOpenMsg{}
 			}
 		}
 

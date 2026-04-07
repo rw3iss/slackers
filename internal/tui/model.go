@@ -44,6 +44,7 @@ const (
 	overlayFriendsConfig
 	overlayEmojiPicker
 	overlayMsgOptions
+	overlayAbout
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -193,6 +194,7 @@ type Model struct {
 	help            HelpModel
 	friendRequest   FriendRequestModel
 	friendsConfig   FriendsConfigModel
+	about           AboutModel
 	emojiPicker     EmojiPickerModel
 	msgOptions      MsgOptionsModel
 
@@ -736,6 +738,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayFriendsConfig {
 			var cmd tea.Cmd
 			m.friendsConfig, cmd = m.friendsConfig.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayAbout {
+			var cmd tea.Cmd
+			m.about, cmd = m.about.Update(msg)
 			return m, cmd
 		}
 		if m.overlay == overlayEmojiPicker {
@@ -1405,6 +1412,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayNone
 		// Refresh friend channels in sidebar after config changes.
 		m.channels.SetFriendChannels(m.buildFriendChannels())
+		return m, nil
+
+	case AboutOpenMsg:
+		m.about = NewAboutModel(m.version)
+		m.about.SetSize(m.width, m.height)
+		m.overlay = overlayAbout
+		return m, nil
+
+	case AboutCloseMsg:
+		m.overlay = overlayNone
 		return m, nil
 
 	case MsgOptionsSelectMsg:
@@ -2168,6 +2185,8 @@ func (m Model) View() string {
 		return m.friendRequest.View()
 	case overlayFriendsConfig:
 		return m.friendsConfig.View()
+	case overlayAbout:
+		return m.about.View()
 	case overlayEmojiPicker:
 		return m.emojiPicker.View()
 	case overlayMsgOptions:
