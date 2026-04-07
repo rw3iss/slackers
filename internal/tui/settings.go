@@ -38,6 +38,56 @@ type settingsField struct {
 	value       string
 	description string
 	options     []string // if non-empty, Enter cycles through these instead of opening text input
+	isHeader    bool     // if true, this row is a non-selectable group separator
+}
+
+// header returns a non-selectable group separator field with the given label.
+func header(label string) settingsField {
+	return settingsField{label: label, isHeader: true}
+}
+
+// nextSelectable returns the next selectable (non-header) field index from
+// `from`, walking in direction `dir` (+1 or -1). Returns `from` if there
+// are no other selectable rows. Wraps around at the ends.
+func (m SettingsModel) nextSelectable(from, dir int) int {
+	n := len(m.fields)
+	if n == 0 {
+		return 0
+	}
+	idx := from
+	for i := 0; i < n; i++ {
+		idx += dir
+		if idx < 0 {
+			idx = n - 1
+		}
+		if idx >= n {
+			idx = 0
+		}
+		if !m.fields[idx].isHeader {
+			return idx
+		}
+	}
+	return from
+}
+
+// firstSelectable returns the first non-header field index, or 0.
+func (m SettingsModel) firstSelectable() int {
+	for i, f := range m.fields {
+		if !f.isHeader {
+			return i
+		}
+	}
+	return 0
+}
+
+// lastSelectable returns the last non-header field index, or len-1.
+func (m SettingsModel) lastSelectable() int {
+	for i := len(m.fields) - 1; i >= 0; i-- {
+		if !m.fields[i].isHeader {
+			return i
+		}
+	}
+	return len(m.fields) - 1
 }
 
 // NewSettingsModel creates a settings editor from the current config.
@@ -47,6 +97,14 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 
 	return SettingsModel{
 		fields: []settingsField{
+			// ───── Appearance ─────
+			header("Appearance"),
+			{
+				label:       "Theme",
+				key:         "theme",
+				value:       themeValueLabel(cfg.Theme),
+				description: "Choose a color theme (live preview)",
+			},
 			{
 				label:       "Sidebar Width",
 				key:         "sidebar_width",
@@ -58,6 +116,30 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				key:         "timestamp_format",
 				value:       cfg.TimestampFormat,
 				description: "Go time format for message timestamps (e.g. 15:04, 3:04 PM)",
+			},
+			{
+				label:       "Reply Format",
+				key:         "reply_format",
+				value:       replyFormatVal(cfg.ReplyFormat),
+				description: "How replies appear in chat (inline = nested below, inside = enter to view)",
+				options:     []string{"inline", "inside"},
+			},
+
+			// ───── Behavior ─────
+			header("Behavior"),
+			{
+				label:       "Mouse",
+				key:         "mouse_enabled",
+				value:       boolToOnOff(cfg.MouseEnabled),
+				description: "Enable mouse click/scroll (restart required, Shift+click to select text)",
+				options:     []string{"on", "off"},
+			},
+			{
+				label:       "Notifications",
+				key:         "notifications",
+				value:       boolToOnOff(cfg.Notifications),
+				description: "Terminal bell and desktop notifications",
+				options:     []string{"on", "off"},
 			},
 			{
 				label:       "Auto Update",
@@ -73,18 +155,27 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				description: "Seconds of inactivity before 'away' status (0 = disabled)",
 			},
 			{
-				label:       "Mouse",
-				key:         "mouse_enabled",
-				value:       boolToOnOff(cfg.MouseEnabled),
-				description: "Enable mouse click/scroll (restart required, Shift+click to select text)",
-				options:     []string{"on", "off"},
+				label:       "Input History",
+				key:         "input_history_max",
+				value:       strconv.Itoa(inputHistMax(cfg.InputHistoryMax)),
+				description: "Max sent messages to remember (1-200)",
+			},
+
+			// ───── Channels ─────
+			header("Channels"),
+			{
+				label:       "Sort By",
+				key:         "channel_sort_by",
+				value:       channelSortValue(cfg.ChannelSortBy),
+				description: "Channel list sorting mode",
+				options:     []string{"type", "name", "recent"},
 			},
 			{
-				label:       "Notifications",
-				key:         "notifications",
-				value:       boolToOnOff(cfg.Notifications),
-				description: "Terminal bell and desktop notifications",
-				options:     []string{"on", "off"},
+				label:       "Sort Direction",
+				key:         "channel_sort_asc",
+				value:       boolToDir(cfg.ChannelSortAsc),
+				description: "Channel list sorting direction",
+				options:     []string{"asc", "desc"},
 			},
 			{
 				label:       "Poll Interval",
@@ -104,31 +195,23 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				value:       strconv.Itoa(pollPriorityVal(cfg.PollPriority)),
 				description: "Extra channels polled when socket is disconnected (0-10)",
 			},
-			{
-				label:       "Input History",
-				key:         "input_history_max",
-				value:       strconv.Itoa(inputHistMax(cfg.InputHistoryMax)),
-				description: "Max sent messages to remember (1-200)",
-			},
+
+			// ───── Files ─────
+			header("Files"),
 			{
 				label:       "Download Path",
 				key:         "download_path",
 				value:       downloadPathValue(cfg.DownloadPath),
 				description: "File download location (Enter to browse)",
 			},
+
+			// ───── Friends & Secure Messaging ─────
+			header("Friends & Secure Messaging"),
 			{
-				label:       "Sort By",
-				key:         "channel_sort_by",
-				value:       channelSortValue(cfg.ChannelSortBy),
-				description: "Channel list sorting mode",
-				options:     []string{"type", "name", "recent"},
-			},
-			{
-				label:       "Sort Direction",
-				key:         "channel_sort_asc",
-				value:       boolToDir(cfg.ChannelSortAsc),
-				description: "Channel list sorting direction",
-				options:     []string{"asc", "desc"},
+				label:       "Friends Config",
+				key:         "friends_config",
+				value:       "Manage...",
+				description: "Manage friends, profile, and P2P connections",
 			},
 			{
 				label:       "Secure Mode",
@@ -149,31 +232,18 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				value:       "Manage...",
 				description: "Manage users allowed for E2E encrypted messaging",
 			},
-			{
-				label:       "Theme",
-				key:         "theme",
-				value:       themeValueLabel(cfg.Theme),
-				description: "Choose a color theme (live preview)",
-			},
-			{
-				label:       "Reply Format",
-				key:         "reply_format",
-				value:       replyFormatVal(cfg.ReplyFormat),
-				description: "How replies appear in chat (inline = nested below, inside = enter to view)",
-				options:     []string{"inline", "inside"},
-			},
-			{
-				label:       "Friends Config",
-				key:         "friends_config",
-				value:       "Manage...",
-				description: "Manage friends, profile, and P2P connections",
-			},
+
+			// ───── Customization ─────
+			header("Customization"),
 			{
 				label:       "Keyboard Shortcuts",
 				key:         "shortcuts",
 				value:       "Customize...",
 				description: "View and edit all keyboard shortcuts",
 			},
+
+			// ───── Account ─────
+			header("Account"),
 			{
 				label:       "Bot Token",
 				key:         "bot_token",
@@ -192,6 +262,9 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				value:       maskToken(cfg.UserToken),
 				description: "Slack user token (xoxp-...) for sending as yourself",
 			},
+
+			// ───── Info ─────
+			header("Info"),
 			{
 				label:       "About",
 				key:         "about",
@@ -202,7 +275,13 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 		cfg:     cfg,
 		input:   ti,
 		version: version,
-	}
+	}.withInitialSelection()
+}
+
+// withInitialSelection moves the cursor to the first non-header field.
+func (m SettingsModel) withInitialSelection() SettingsModel {
+	m.selected = m.firstSelectable()
+	return m
 }
 
 func channelSortValue(s string) string {
@@ -317,17 +396,9 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 	case tea.MouseMsg:
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
-			if m.selected > 0 {
-				m.selected--
-			} else {
-				m.selected = len(m.fields) - 1
-			}
+			m.selected = m.nextSelectable(m.selected, -1)
 		case tea.MouseButtonWheelDown:
-			if m.selected < len(m.fields)-1 {
-				m.selected++
-			} else {
-				m.selected = 0
-			}
+			m.selected = m.nextSelectable(m.selected, +1)
 		}
 	}
 	return m, nil
@@ -336,31 +407,21 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
-		if m.selected > 0 {
-			m.selected--
-		} else {
-			m.selected = len(m.fields) - 1
-		}
+		m.selected = m.nextSelectable(m.selected, -1)
 	case "down", "j":
-		if m.selected < len(m.fields)-1 {
-			m.selected++
-		} else {
-			m.selected = 0
-		}
+		m.selected = m.nextSelectable(m.selected, +1)
 	case "pgup":
-		m.selected -= 5
-		if m.selected < 0 {
-			m.selected = 0
+		for i := 0; i < 5; i++ {
+			m.selected = m.nextSelectable(m.selected, -1)
 		}
 	case "pgdown":
-		m.selected += 5
-		if m.selected >= len(m.fields) {
-			m.selected = len(m.fields) - 1
+		for i := 0; i < 5; i++ {
+			m.selected = m.nextSelectable(m.selected, +1)
 		}
 	case "home":
-		m.selected = 0
+		m.selected = m.firstSelectable()
 	case "end":
-		m.selected = len(m.fields) - 1
+		m.selected = m.lastSelectable()
 	case "enter", "tab":
 		f := m.fields[m.selected]
 
@@ -693,8 +754,26 @@ func (m SettingsModel) View() string {
 		end = len(m.fields)
 	}
 
+	groupHeaderStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorPageHeader).
+		Underline(true)
+
 	for i := m.scrollOffset; i < end; i++ {
 		f := m.fields[i]
+
+		// Group separator: blank line above (skip for the first visible row),
+		// then a bold underlined label, no value, no description.
+		if f.isHeader {
+			if i > m.scrollOffset {
+				b.WriteString("\n")
+			}
+			b.WriteString("  ")
+			b.WriteString(groupHeaderStyle.Render(f.label))
+			b.WriteString("\n")
+			continue
+		}
+
 		cursor := "  "
 		ls := labelStyle
 		if i == m.selected {
