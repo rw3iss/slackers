@@ -371,7 +371,7 @@ func (m *EmojiPickerModel) View() string {
 	tabActiveStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Background(lipgloss.Color("236")).Padding(0, 1)
 	tabInactiveStyle := lipgloss.NewStyle().Foreground(ColorMuted).Padding(0, 1)
 	cellStyle := lipgloss.NewStyle()
-	selectedCellStyle := lipgloss.NewStyle().Background(lipgloss.Color("236"))
+	selectedCellStyle := lipgloss.NewStyle().Background(lipgloss.Color("240"))
 	favCellStyle := lipgloss.NewStyle().Background(lipgloss.Color("235"))
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
@@ -408,15 +408,16 @@ func (m *EmojiPickerModel) View() string {
 		b.WriteString(dimStyle.Render("  (empty)"))
 		b.WriteString("\n")
 	} else {
-		// Horizontal padding.
+		// Padding distribution: odd = extra after, even = split.
 		padBefore := m.padding / 2
-		padAfter := m.padding - padBefore // odd: extra goes after
+		padAfter := m.padding - padBefore
 		hBefore := strings.Repeat(" ", padBefore)
 		hAfter := strings.Repeat(" ", padAfter)
-
-		// Vertical padding.
 		vBefore := m.padding / 2
 		vAfter := m.padding - vBefore
+
+		// Full cell width for background fill on vertical padding lines.
+		fullCellW := 2 + m.padding // emoji width + total h-padding
 
 		for r := 0; r < m.gridRows; r++ {
 			rowStart := (m.scrollOff + r) * m.gridCols
@@ -424,11 +425,26 @@ func (m *EmojiPickerModel) View() string {
 				break
 			}
 
-			// Vertical gap before row (even padding only).
+			// Vertical gap before row — extend selected/fav background.
 			for v := 0; v < vBefore; v++ {
+				var vRow strings.Builder
+				for c := 0; c < m.gridCols; c++ {
+					idx := rowStart + c
+					style := cellStyle
+					if idx < len(items) {
+						if r == m.cursorR && c == m.cursorC {
+							style = selectedCellStyle
+						} else if m.isFavorite(items[idx].Code) {
+							style = favCellStyle
+						}
+					}
+					vRow.WriteString(style.Render(strings.Repeat(" ", fullCellW)))
+				}
+				b.WriteString(vRow.String())
 				b.WriteString("\n")
 			}
 
+			// Emoji row — render padding inside the style.
 			var row strings.Builder
 			for c := 0; c < m.gridCols; c++ {
 				idx := rowStart + c
@@ -442,17 +458,29 @@ func (m *EmojiPickerModel) View() string {
 				} else if m.isFavorite(e.Code) {
 					style = favCellStyle
 				}
-				row.WriteString(hBefore)
-				row.WriteString(style.Render(e.Emoji))
-				if c < m.gridCols-1 {
-					row.WriteString(hAfter)
-				}
+				// Render the full cell (padding + emoji + padding) with background.
+				cell := hBefore + e.Emoji + hAfter
+				row.WriteString(style.Render(cell))
 			}
 			b.WriteString(row.String())
 			b.WriteString("\n")
 
-			// Vertical gap after row.
+			// Vertical gap after row — extend selected/fav background.
 			for v := 0; v < vAfter; v++ {
+				var vRow strings.Builder
+				for c := 0; c < m.gridCols; c++ {
+					idx := rowStart + c
+					style := cellStyle
+					if idx < len(items) {
+						if r == m.cursorR && c == m.cursorC {
+							style = selectedCellStyle
+						} else if m.isFavorite(items[idx].Code) {
+							style = favCellStyle
+						}
+					}
+					vRow.WriteString(style.Render(strings.Repeat(" ", fullCellW)))
+				}
+				b.WriteString(vRow.String())
 				b.WriteString("\n")
 			}
 		}
