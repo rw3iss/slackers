@@ -198,11 +198,11 @@ func (m *EmojiPickerModel) computeLayout() {
 	if tabRowsUsed < 1 {
 		tabRowsUsed = 1
 	}
-	// Grid first row = end of last tab block (tab line 2) + "\n\n" (1 blank) +
-	// separator + "\n" → 3 lines after the last tab row's icon line.
-	// Tab block height per row = 2; last row at index (rowsUsed-1) starts at
-	// tabRowOffset = (rowsUsed-1)*3, icon line at +1, then sep at +1, blank +1, grid +1.
-	m.gridStartY = m.tabRowY + (tabRowsUsed-1)*3 + 1 + 3
+	// Each tab row is a 3-line block (above/icons/below), no blank between rows.
+	// After the last row: "\n" + separator + "\n" → grid starts 2 lines after
+	// the last "below" line.
+	// Last row's "below" line is at offset (rowsUsed-1)*3 + 2.
+	m.gridStartY = m.tabRowY + (tabRowsUsed-1)*3 + 2 + 2
 	m.gridStartX = contentLeftX
 }
 
@@ -465,13 +465,14 @@ func (m EmojiPickerModel) Update(msg tea.Msg) (EmojiPickerModel, tea.Cmd) {
 			if msg.Action != tea.MouseActionPress {
 				return m, nil
 			}
-			// Tab click hit-test. Each tab is a 2-line block; accept clicks on
-			// either the highlight row (tp.y - 1) or the icon row (tp.y).
+			// Tab click hit-test. Each tab is a 3-line block; accept clicks on
+			// the highlight row above (iconY-1), the icon row (iconY), or
+			// the highlight row below (iconY+1).
 			for _, tp := range m.tabsPositions {
 				screenX := m.boxX + 1 + 2 + tp.x // box border + padding-left
 				iconY := m.tabRowY + tp.y
-				bgY := iconY - 1
-				if msg.X >= screenX && msg.X < screenX+tp.w && (msg.Y == iconY || msg.Y == bgY) {
+				if msg.X >= screenX && msg.X < screenX+tp.w &&
+					msg.Y >= iconY-1 && msg.Y <= iconY+1 {
 					m.activeTab = tp.idx
 					m.scrollOff = 0
 					m.cursorR = 0
@@ -534,9 +535,11 @@ func (m *EmojiPickerModel) View() string {
 	b.WriteString(titleStyle.Render("Emoji Picker"))
 	b.WriteString("\n\n")
 
-	// Tabs — manually wrap into rows. Each row is a 2-line block:
+	// Tabs — manually wrap into rows. Each row is a 3-line block:
 	//   line 0: background-only highlight bar above active tabs
 	//   line 1: emoji icons (with active tabs highlighted)
+	//   line 2: background-only highlight bar below active tabs
+	// No blank line between rows — the upper/lower highlights provide spacing.
 	cellWidth := 2 + m.padding + m.extraRightPad
 	boxInner := m.gridCols*cellWidth + m.padding/2
 
@@ -552,6 +555,7 @@ func (m *EmojiPickerModel) View() string {
 	m.tabsPositions = nil
 	rowAbove := strings.Builder{}
 	rowIcons := strings.Builder{}
+	rowBelow := strings.Builder{}
 	tabRowOffset := 0 // line offset from start of tab block
 	tabColOffset := 0 // column offset from start of row
 	emptyCell := strings.Repeat(" ", tabCellInnerW)
@@ -559,39 +563,46 @@ func (m *EmojiPickerModel) View() string {
 		b.WriteString(rowAbove.String())
 		b.WriteString("\n")
 		b.WriteString(rowIcons.String())
+		b.WriteString("\n")
+		b.WriteString(rowBelow.String())
 		rowAbove.Reset()
 		rowIcons.Reset()
+		rowBelow.Reset()
 		if !last {
-			// Single blank line between tab rows.
-			b.WriteString("\n\n")
-			tabRowOffset += 3 // 2 lines of tab + 1 blank
+			// Tabs in the next row sit directly under this row's lower
+			// highlight — no blank line between rows.
+			b.WriteString("\n")
+			tabRowOffset += 3 // above + icons + below
 			tabColOffset = 0
 		}
 	}
 	for ti, tab := range m.categories {
 		isActive := ti == m.activeTab
-		// Record the tab's screen position. y points to the icon row (line 1),
-		// not the highlight row above it; the click test allows both.
+		// Record the tab's screen position. y points to the icon row (line 1
+		// of the 3-line block); the click test allows the rows above/below too.
 		m.tabsPositions = append(m.tabsPositions, tabPos{
 			idx: ti,
 			x:   tabColOffset,
 			y:   tabRowOffset + 1,
 			w:   tabCellInnerW,
 		})
-		// Build the cell (top + bottom).
+		// Build the cell (above + icons + below).
 		iconCell := strings.Repeat(" ", tabCellLeftPad) + tab.icon + strings.Repeat(" ", tabCellRightPad)
 		if isActive {
 			rowAbove.WriteString(activeBgStyle.Render(emptyCell))
 			rowIcons.WriteString(activeIconStyle.Render(iconCell))
+			rowBelow.WriteString(activeBgStyle.Render(emptyCell))
 		} else {
 			rowAbove.WriteString(emptyCell)
 			rowIcons.WriteString(inactiveIconStyle.Render(iconCell))
+			rowBelow.WriteString(emptyCell)
 		}
 		tabColOffset += tabCellInnerW
 		// Separator space between tabs (no background).
 		if (ti+1)%tabsPerRow != 0 && ti < len(m.categories)-1 {
 			rowAbove.WriteString(" ")
 			rowIcons.WriteString(" ")
+			rowBelow.WriteString(" ")
 			tabColOffset++
 		}
 		// End of row?
@@ -600,11 +611,13 @@ func (m *EmojiPickerModel) View() string {
 			flushRow(false)
 		}
 	}
-	// Flush the final row (no trailing blank-row separator).
+	// Flush the final row.
 	if rowIcons.Len() > 0 {
 		flushRow(true)
 	}
-	b.WriteString("\n\n")
+	// Single newline before separator (no extra blank — the lower highlight
+	// already provides bottom spacing for the active tab).
+	b.WriteString("\n")
 	b.WriteString(strings.Repeat("─", boxInner))
 	b.WriteString("\n")
 
