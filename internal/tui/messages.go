@@ -1205,11 +1205,20 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		// Highlight selected message in select mode.
 		if m.reactMode && i == m.reactIdx {
 			selectHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
-			label := " [Enter: reply  r: react  ←/→: select reaction]"
-			if len(msg.Reactions) == 0 {
-				label = " [Enter: reply  r: react]"
+			hasReactions := len(msg.Reactions) > 0
+			hasInlineReplies := !m.threadMode && m.replyFormat == "inline" && len(msg.Replies) > 0 && !m.collapsedReplies[msg.MessageID]
+			var hint string
+			switch {
+			case hasReactions && hasInlineReplies:
+				hint = " [Enter: reply  r: react  ←/→: reactions/replies  ↓: into replies]"
+			case hasReactions:
+				hint = " [Enter: reply  r: react  ←/→: select reaction]"
+			case hasInlineReplies:
+				hint = " [Enter: reply  r: react  →: select reply list  ↓: into replies]"
+			default:
+				hint = " [Enter: reply  r: react]"
 			}
-			headerLine = selectHighlight.Render(headerLine + label)
+			headerLine = selectHighlight.Render(headerLine + hint)
 		}
 
 		text := format.FormatMessage(msg.Text, m.users)
