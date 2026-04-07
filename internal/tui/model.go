@@ -360,9 +360,16 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	merged := shortcuts.Merge(defaults, overrides)
 	km := BuildKeyMap(merged)
 
+	mv := NewMessageView()
+	rf := cfg.ReplyFormat
+	if rf == "" {
+		rf = "inline"
+	}
+	mv.SetReplyFormat(rf)
+
 	return Model{
 		channels:          ch,
-		messages:          NewMessageView(),
+		messages:          mv,
 		input:             inp,
 		keymap:            km,
 		secureMgr:         secureMgr,
