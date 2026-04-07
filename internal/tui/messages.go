@@ -1409,7 +1409,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				header := replyHeaderStyle.Render(fmt.Sprintf("↳ %s %s", rName, rTime))
 				if replyListActive && ri == m.replyIdx {
 					selectHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
-					header = selectHighlight.Render(header + " [r: react  Esc: back]")
+					header = selectHighlight.Render(header + " [r: react  d: delete  Esc: back]")
 				}
 				lines = append(lines, replyIndent+header)
 				rText := format.FormatMessage(reply.Text, m.users)
