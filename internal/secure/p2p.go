@@ -3,9 +3,13 @@ package secure
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -28,27 +32,39 @@ const (
 	MsgTypeFriendAccept  = "friend_accept"
 	MsgTypeFriendReject  = "friend_reject"
 	MsgTypeDisconnect    = "disconnect"
+	MsgTypeFileOffer     = "file_offer"    // sender offers a file
+	MsgTypeFileRequest   = "file_request"  // receiver requests the file data
+	MsgTypeFileData      = "file_data"     // sender sends file chunk (base64)
+
+	// Protocol for file transfers (separate from messaging).
+	P2PFileProtocol = protocol.ID("/slackers/file/1.0.0")
 )
 
 // P2PMessage is the wire format for messages sent over P2P.
 type P2PMessage struct {
-	Type      string `json:"type"`       // "message", "ping", "pong"
+	Type      string `json:"type"`
 	Text      string `json:"text"`
 	Timestamp int64  `json:"ts"`
-	SenderID  string `json:"sender_id"`  // Slack user ID
+	SenderID  string `json:"sender_id"`
+
+	// File transfer fields (only used for file_offer/file_request/file_data).
+	FileName string `json:"file_name,omitempty"`
+	FileSize int64  `json:"file_size,omitempty"`
+	FileID   string `json:"file_id,omitempty"` // unique ID for this transfer
 }
 
 // P2PNode manages the libp2p host and peer connections.
 type P2PNode struct {
-	host       host.Host
-	port       int
-	address    string
-	ctx        context.Context
-	cancel     context.CancelFunc
-	onMessage  func(peerSlackID string, msg P2PMessage) // callback for received messages
-	peerMap    map[string]peer.ID                        // slackUserID -> libp2p peerID
-	slackMap   map[peer.ID]string                        // libp2p peerID -> slackUserID
-	mu         sync.RWMutex
+	host        host.Host
+	port        int
+	address     string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	onMessage   func(peerSlackID string, msg P2PMessage)
+	peerMap     map[string]peer.ID
+	slackMap    map[peer.ID]string
+	sharedFiles map[string]string // fileID -> local file path (files we've offered)
+	mu          sync.RWMutex
 }
 
 // NewP2PNode creates and starts a libp2p host.
@@ -68,18 +84,22 @@ func NewP2PNode(port int, address string, onMessage func(string, P2PMessage)) (*
 	}
 
 	node := &P2PNode{
-		host:      h,
-		port:      port,
-		address:   address,
-		ctx:       ctx,
-		cancel:    cancel,
-		onMessage: onMessage,
-		peerMap:   make(map[string]peer.ID),
-		slackMap:  make(map[peer.ID]string),
+		host:        h,
+		port:        port,
+		address:     address,
+		ctx:         ctx,
+		cancel:      cancel,
+		onMessage:   onMessage,
+		peerMap:     make(map[string]peer.ID),
+		slackMap:    make(map[peer.ID]string),
+		sharedFiles: make(map[string]string),
 	}
 
 	// Set stream handler for incoming messages.
 	h.SetStreamHandler(P2PProtocol, node.handleStream)
+
+	// Set stream handler for file transfers.
+	h.SetStreamHandler(P2PFileProtocol, node.handleFileRequest)
 
 	return node, nil
 }
@@ -245,6 +265,122 @@ func (n *P2PNode) PingPeer(slackUserID string) bool {
 	data = append(data, '\n')
 	_, err = stream.Write(data)
 	return err == nil
+}
+
+// ShareFile registers a local file for P2P sharing and returns a unique file ID.
+func (n *P2PNode) ShareFile(localPath string) (string, error) {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return "", fmt.Errorf("stat %s: %w", localPath, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%s is a directory", localPath)
+	}
+
+	b := make([]byte, 8)
+	rand.Read(b)
+	fileID := hex.EncodeToString(b)
+
+	n.mu.Lock()
+	n.sharedFiles[fileID] = localPath
+	n.mu.Unlock()
+
+	return fileID, nil
+}
+
+// SendFileOffer sends a file offer message to a peer.
+func (n *P2PNode) SendFileOffer(slackUserID, fileID, fileName string, fileSize int64) error {
+	msg := P2PMessage{
+		Type:      MsgTypeFileOffer,
+		FileName:  fileName,
+		FileSize:  fileSize,
+		FileID:    fileID,
+		SenderID:  slackUserID,
+		Timestamp: time.Now().Unix(),
+	}
+	return n.SendMessage(slackUserID, msg)
+}
+
+// DownloadFileFromPeer requests and downloads a file from a connected peer.
+func (n *P2PNode) DownloadFileFromPeer(ctx context.Context, slackUserID, fileID, destPath string) error {
+	n.mu.RLock()
+	peerID, ok := n.peerMap[slackUserID]
+	n.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("peer %s not connected", slackUserID)
+	}
+
+	stream, err := n.host.NewStream(ctx, peerID, P2PFileProtocol)
+	if err != nil {
+		return fmt.Errorf("opening file stream: %w", err)
+	}
+	defer stream.Close()
+
+	// Send file request.
+	req := P2PMessage{Type: MsgTypeFileRequest, FileID: fileID}
+	data, _ := json.Marshal(req)
+	data = append(data, '\n')
+	if _, err := stream.Write(data); err != nil {
+		return fmt.Errorf("sending file request: %w", err)
+	}
+
+	// Create destination file.
+	dir := filepath.Dir(destPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", destPath, err)
+	}
+	defer out.Close()
+
+	// Read file data from stream.
+	if _, err := io.Copy(out, stream); err != nil {
+		os.Remove(destPath)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("receiving file: %w", err)
+	}
+
+	return nil
+}
+
+// handleFileRequest processes incoming file download requests on the file protocol.
+func (n *P2PNode) handleFileRequest(s network.Stream) {
+	defer s.Close()
+
+	reader := bufio.NewReader(s)
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		return
+	}
+
+	var req P2PMessage
+	if err := json.Unmarshal(line, &req); err != nil {
+		return
+	}
+
+	if req.Type != MsgTypeFileRequest || req.FileID == "" {
+		return
+	}
+
+	n.mu.RLock()
+	localPath, ok := n.sharedFiles[req.FileID]
+	n.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	f, err := os.Open(localPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	// Stream file data directly.
+	io.Copy(s, f)
 }
 
 // BroadcastDisconnect sends a disconnect message to all connected peers.

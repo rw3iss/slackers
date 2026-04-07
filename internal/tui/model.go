@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -309,6 +310,13 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 				p2pChan <- P2PReceivedMsg{
 					SenderID: peerSlackID,
 					Text:     "__disconnect__",
+				}
+			case secure.MsgTypeFileOffer:
+				p2pChan <- P2PReceivedMsg{
+					SenderID: peerSlackID,
+					Text:     "__file_offer__",
+					PubKey:   msg.FileID,                              // reuse field for fileID
+					Multiaddr: fmt.Sprintf("%s|%d", msg.FileName, msg.FileSize), // reuse for name|size
 				}
 			default:
 				p2pChan <- P2PReceivedMsg{SenderID: peerSlackID, Text: msg.Text}
@@ -1290,6 +1298,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		destPath := filepath.Join(downloadPath, msg.File.Name)
 		m.warning = fmt.Sprintf("Downloading %s...", msg.File.Name)
+
+		// P2P file download — URL starts with p2p://
+		if strings.HasPrefix(msg.File.URL, "p2p://") && m.p2pNode != nil {
+			parts := strings.SplitN(strings.TrimPrefix(msg.File.URL, "p2p://"), "/", 2)
+			if len(parts) == 2 {
+				peerUID, fileID := parts[0], parts[1]
+				return m, m.startP2PDownload(peerUID, fileID, destPath)
+			}
+		}
+
 		return m, m.startDownload(msg.File, destPath)
 
 	case FileDownloadCancelledMsg:
@@ -1336,21 +1354,64 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Friend channel — send via P2P, not Slack.
 			if m.currentCh.IsFriend && m.p2pNode != nil {
-				friendMsg := secure.P2PMessage{
-					Type:      secure.MsgTypeMessage,
-					Text:      text,
-					SenderID:  m.currentCh.UserID,
-					Timestamp: time.Now().Unix(),
+				peerUID := m.currentCh.UserID
+
+				// Extract and share any [FILE:path] attachments.
+				matches := filePattern.FindAllStringSubmatch(text, -1)
+				cleanText := strings.TrimSpace(filePattern.ReplaceAllString(text, ""))
+				var fileInfos []types.FileInfo
+				for _, match := range matches {
+					if len(match) < 2 {
+						continue
+					}
+					path := match[1]
+					fileID, err := m.p2pNode.ShareFile(path)
+					if err != nil {
+						debug.Log("[p2p] share file error: %v", err)
+						continue
+					}
+					info, _ := os.Stat(path)
+					fileName := filepath.Base(path)
+					var size int64
+					if info != nil {
+						size = info.Size()
+					}
+					go m.p2pNode.SendFileOffer(peerUID, fileID, fileName, size)
+					fileInfos = append(fileInfos, types.FileInfo{
+						ID:   fileID,
+						Name: fileName,
+						Size: size,
+						URL:  "p2p://" + peerUID + "/" + fileID,
+					})
 				}
-				go m.p2pNode.SendMessage(m.currentCh.UserID, friendMsg)
+
+				// Send text portion if any.
+				if cleanText != "" {
+					friendMsg := secure.P2PMessage{
+						Type:      secure.MsgTypeMessage,
+						Text:      cleanText,
+						SenderID:  peerUID,
+						Timestamp: time.Now().Unix(),
+					}
+					go m.p2pNode.SendMessage(peerUID, friendMsg)
+				}
+
+				// Show locally.
+				displayText := text
+				if cleanText == "" && len(fileInfos) > 0 {
+					displayText = ""
+				} else {
+					displayText = cleanText
+				}
 				localMsg := types.Message{
 					UserID:    "me",
 					UserName:  "You",
-					Text:      text,
+					Text:      displayText,
 					Timestamp: time.Now(),
+					Files:     fileInfos,
 				}
 				m.messages.AppendMessage(localMsg)
-				m.friendMessages[m.currentCh.UserID] = append(m.friendMessages[m.currentCh.UserID], localMsg)
+				m.friendMessages[peerUID] = append(m.friendMessages[peerUID], localMsg)
 				return m, nil
 			}
 
@@ -1424,6 +1485,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.friendStore.UpdateLastOnline(msg.SenderID)
 				m.channels.ClearUnread("friend:" + msg.SenderID)
 			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
+		// Handle incoming file offers.
+		if msg.Text == "__file_offer__" {
+			fileID := msg.PubKey
+			parts := strings.SplitN(msg.Multiaddr, "|", 2)
+			fileName := fileID
+			var fileSize int64
+			if len(parts) == 2 {
+				fileName = parts[0]
+				fileSize, _ = strconv.ParseInt(parts[1], 10, 64)
+			}
+
+			userName := msg.SenderID
+			if u, ok := m.users[msg.SenderID]; ok {
+				userName = u.DisplayName
+			}
+
+			fileMsg := types.Message{
+				UserID:    msg.SenderID,
+				UserName:  userName,
+				Text:      "",
+				Timestamp: time.Now(),
+				Files: []types.FileInfo{{
+					ID:   fileID,
+					Name: fileName,
+					Size: fileSize,
+					URL:  "p2p://" + msg.SenderID + "/" + fileID,
+				}},
+			}
+
+			friendChID := "friend:" + msg.SenderID
+			if m.currentCh != nil && m.currentCh.ID == friendChID {
+				m.messages.AppendMessage(fileMsg)
+			} else {
+				m.channels.MarkUnread(friendChID)
+			}
+			m.friendMessages[msg.SenderID] = append(m.friendMessages[msg.SenderID], fileMsg)
+
 			if m.p2pChan != nil {
 				return m, waitForP2PMsg(m.p2pChan)
 			}
@@ -2303,6 +2407,30 @@ func (m *Model) startDownload(file types.FileInfo, destPath string) tea.Cmd {
 	svc := m.slackSvc
 	return func() tea.Msg {
 		err := svc.DownloadFile(ctx, file.URL, destPath)
+		if ctx.Err() != nil {
+			os.Remove(destPath)
+			return FileDownloadCancelledMsg{}
+		}
+		if err != nil {
+			return FileDownloadCompleteMsg{Err: err}
+		}
+		return FileDownloadCompleteMsg{DestPath: destPath}
+	}
+}
+
+// startP2PDownload downloads a file from a connected friend via P2P.
+func (m *Model) startP2PDownload(peerUID, fileID, destPath string) tea.Cmd {
+	if m.downloadCancel != nil {
+		m.downloadCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.downloadCancel = cancel
+	m.downloading = true
+	m.warning = fmt.Sprintf("Downloading from friend... (Ctrl-D to cancel)")
+
+	p2p := m.p2pNode
+	return func() tea.Msg {
+		err := p2p.DownloadFileFromPeer(ctx, peerUID, fileID, destPath)
 		if ctx.Err() != nil {
 			os.Remove(destPath)
 			return FileDownloadCancelledMsg{}
