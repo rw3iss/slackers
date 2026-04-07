@@ -81,9 +81,10 @@ type MessageViewModel struct {
 	reactIdx  int // index into messages
 
 	// Thread view — viewing a single message + its replies
-	threadMode    bool
-	threadParent  *types.Message
+	threadMode      bool
+	threadParent    *types.Message
 	threadParentIdx int // original index in main messages
+	savedScrollOff  int // viewport YOffset before entering thread, restored on exit
 
 	// Inline collapse — track which message replies are collapsed
 	collapsedReplies map[string]bool
@@ -376,11 +377,14 @@ func (m *MessageViewModel) EnterThreadMode(parentIdx int) bool {
 		return false
 	}
 	parent := m.messages[parentIdx]
+	// Save scroll position before switching views.
+	m.savedScrollOff = m.viewport.YOffset
 	m.threadMode = true
 	m.threadParent = &parent
 	m.threadParentIdx = parentIdx
 	m.reactMode = false
 	m.rebuildContent()
+	m.viewport.GotoBottom()
 	return true
 }
 
@@ -389,6 +393,8 @@ func (m *MessageViewModel) ExitThreadMode() {
 	m.threadMode = false
 	m.threadParent = nil
 	m.rebuildContent()
+	// Restore scroll position.
+	m.viewport.SetYOffset(m.savedScrollOff)
 }
 
 // InThreadMode returns whether thread view is active.

@@ -96,10 +96,10 @@ func (m *InputModel) CursorToStart() {
 	m.textarea.CursorStart()
 }
 
-// AtStart returns true if the cursor is at row 0 and the value is non-empty.
+// AtStart returns true if escape was already pressed once (ready to clear).
 // Used to detect double-escape behavior (first esc → cursor home, second → clear).
 func (m *InputModel) AtStart() bool {
-	return m.textarea.Line() == 0 && m.escapedOnce
+	return m.escapedOnce
 }
 
 // MarkEscapeOnce sets the flag that the user pressed escape once.

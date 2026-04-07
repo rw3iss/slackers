@@ -48,6 +48,14 @@ func (m *MsgOptionsModel) SetSize(w, h int) {
 	m.height = h
 }
 
+// ClickInside returns true if the click coordinates are within the popup box.
+func (m MsgOptionsModel) ClickInside(x, y int) bool {
+	// Box is approximately 22 wide x (3 + items + 2) tall.
+	boxW := 22
+	boxH := 3 + len(msgOptionsItems) + 2
+	return x >= m.x && x < m.x+boxW && y >= m.y && y < m.y+boxH
+}
+
 var msgOptionsItems = []struct {
 	label  string
 	action MsgOptionsAction

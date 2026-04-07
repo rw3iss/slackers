@@ -2123,6 +2123,13 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.emojiPicker, cmd = m.emojiPicker.Update(msg)
 		return m, cmd
 	case overlayMsgOptions:
+		// Click outside the popup box → close the overlay.
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if !m.msgOptions.ClickInside(msg.X, msg.Y) {
+				m.overlay = overlayNone
+				return m, nil
+			}
+		}
 		var cmd tea.Cmd
 		m.msgOptions, cmd = m.msgOptions.Update(msg)
 		return m, cmd
