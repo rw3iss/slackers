@@ -537,7 +537,7 @@ func (m ChannelListModel) View() string {
 
 	return style.
 		Width(m.width).
-		Height(m.height + 1).
+		Height(m.height).
 		Render(content)
 }
 

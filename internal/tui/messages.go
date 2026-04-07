@@ -220,8 +220,13 @@ func (m *MessageViewModel) SetReplyFormat(format string) {
 func (m *MessageViewModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	m.viewport.Width = w
-	m.viewport.Height = h
+	// Viewport height = pane height - 2 borders - 1 header line.
+	vpH := h - 3
+	if vpH < 1 {
+		vpH = 1
+	}
+	m.viewport.Width = w - 2 // account for borders
+	m.viewport.Height = vpH
 	m.rebuildContent()
 }
 
