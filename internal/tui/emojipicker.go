@@ -36,7 +36,10 @@ type EmojiPickerModel struct {
 	favorites  []string // shortcodes in order
 	favDirty   bool
 	purpose    EmojiPickerPurpose
-	padding    int // grid cell padding (0 = no gap)
+	padding    int // grid cell padding (0 = no gap), split symmetrically on both axes
+	// extraRightPad adds N additional columns of horizontal padding to the right
+	// of each emoji (without affecting vertical spacing).
+	extraRightPad int
 	width      int
 	height     int
 
@@ -85,12 +88,13 @@ func NewEmojiPicker(favorites []string, purpose EmojiPickerPurpose) EmojiPickerM
 	}
 
 	return EmojiPickerModel{
-		categories: tabs,
-		favorites:  append([]string{}, favorites...),
-		purpose:    purpose,
-		padding:    2,
-		gridCols:   8,
-		gridRows:   6,
+		categories:    tabs,
+		favorites:     append([]string{}, favorites...),
+		purpose:       purpose,
+		padding:       2,
+		extraRightPad: 1,
+		gridCols:      8,
+		gridRows:      6,
 	}
 }
 
@@ -98,15 +102,15 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 
-	// Cell dimensions: emoji (2 chars wide) + padding gap after.
-	cellW := 2 + m.padding
+	// Cell dimensions: emoji (2 chars wide) + symmetric padding + extra right pad.
+	cellW := 2 + m.padding + m.extraRightPad
 	innerW := min(60, w-8) - 6
 	maxCols := innerW / cellW
 	if maxCols < 4 {
 		maxCols = 4
 	}
-	if maxCols > 12 {
-		maxCols = 12
+	if maxCols > 8 {
+		maxCols = 8
 	}
 	m.gridCols = maxCols
 
@@ -128,7 +132,7 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 // computeLayout calculates the box position and grid/tab coordinates.
 // Mirrors the layout used by View so click hit-testing matches rendering.
 func (m *EmojiPickerModel) computeLayout() {
-	cellW := 2 + m.padding
+	cellW := 2 + m.padding + m.extraRightPad
 	boxInner := m.gridCols*cellW + m.padding/2
 
 	boxWidth := boxInner + 8
@@ -466,7 +470,7 @@ func (m EmojiPickerModel) Update(msg tea.Msg) (EmojiPickerModel, tea.Cmd) {
 			}
 			// Grid cell click hit-test.
 			if msg.Y >= m.gridStartY && msg.X >= m.gridStartX {
-				cellW := 2 + m.padding
+				cellW := 2 + m.padding + m.extraRightPad
 				rowH := 1 + m.padding
 				dx := msg.X - m.gridStartX
 				dy := msg.Y - m.gridStartY
@@ -510,7 +514,7 @@ func (m *EmojiPickerModel) View() string {
 	b.WriteString("\n\n")
 
 	// Tabs — manually wrap into rows with vertical spacing.
-	cellWidth := 2 + m.padding
+	cellWidth := 2 + m.padding + m.extraRightPad
 	boxInner := m.gridCols*cellWidth + m.padding/2
 
 	// Each tab icon takes ~4 display chars (emoji 2 + padding 2 from style).
@@ -558,9 +562,9 @@ func (m *EmojiPickerModel) View() string {
 		b.WriteString(dimStyle.Render("  (empty)"))
 		b.WriteString("\n")
 	} else {
-		// Horizontal: odd = extra gap after emoji. Vertical: odd = extra gap before emoji.
+		// Horizontal: split symmetric padding + extra columns to the right.
 		padBefore := m.padding / 2
-		padAfter := m.padding - padBefore
+		padAfter := m.padding - padBefore + m.extraRightPad
 		hBefore := strings.Repeat(" ", padBefore)
 		hAfter := strings.Repeat(" ", padAfter)
 		// Vertical: odd puts extra BEFORE the emoji so highlight extends above.
@@ -568,7 +572,7 @@ func (m *EmojiPickerModel) View() string {
 		vBefore := m.padding - vAfter
 
 		// Full cell width for background fill on vertical padding lines.
-		fullCellW := 2 + m.padding // emoji width + total h-padding
+		fullCellW := 2 + m.padding + m.extraRightPad // emoji width + total h-padding
 
 		for r := 0; r < m.gridRows; r++ {
 			rowStart := (m.scrollOff + r) * m.gridCols
