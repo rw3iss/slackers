@@ -349,11 +349,14 @@ func (m *MessageViewModel) findMessagePreview(messageID string) string {
 }
 
 // ReplyLineMessageID returns the parent message ID if the line clicked is a "X replies" line.
+// Accepts a 1-line buffer above and below the actual line for forgiving hit-testing.
 func (m *MessageViewModel) ReplyLineMessageID(y int) string {
 	// Convert viewport y to absolute content line number.
 	absLine := y - 1 + m.viewport.YOffset
-	if id, ok := m.replyLineMsgID[absLine]; ok {
-		return id
+	for _, off := range []int{0, -1, 1} {
+		if id, ok := m.replyLineMsgID[absLine+off]; ok {
+			return id
+		}
 	}
 	return ""
 }
