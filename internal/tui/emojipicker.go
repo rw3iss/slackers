@@ -98,9 +98,17 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 
-	// Cell dimensions: emoji (2 chars wide) + padding on each side.
-	cellW := 2 + 2*m.padding
-	innerW := min(60, w-8) - 6
+	// Cell dimensions:
+	// - horizontal: padding left + padding right + emoji width (2)
+	// - vertical: padding/2 (down) above + emoji line + padding/2 (up) below
+	hPad := m.padding
+	vTop := m.padding / 2
+	vBottom := m.padding - vTop
+	cellW := 2 + 2*hPad
+	rowH := 1 + vTop + vBottom
+
+	// Use a wider base box to accommodate spacing.
+	innerW := min(80, w-8) - 6
 	maxCols := innerW / cellW
 	if maxCols < 4 {
 		maxCols = 4
@@ -110,8 +118,6 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 	}
 	m.gridCols = maxCols
 
-	// Row height: 1 emoji line + padding above and below.
-	rowH := 1 + 2*m.padding
 	availH := min(h-4, 40) - 9
 	maxRows := availH / rowH
 	if maxRows < 3 {
@@ -122,14 +128,14 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 	}
 	m.gridRows = maxRows
 
-	// Compute layout positions for click hit-testing.
 	m.computeLayout()
 }
 
 // computeLayout calculates the box position and grid/tab coordinates.
 // Mirrors the layout used by View so click hit-testing matches rendering.
 func (m *EmojiPickerModel) computeLayout() {
-	cellW := 2 + 2*m.padding
+	hPad := m.padding
+	cellW := 2 + 2*hPad
 	boxInner := m.gridCols * cellW
 
 	boxWidth := boxInner + 8
@@ -462,7 +468,9 @@ func (m EmojiPickerModel) Update(msg tea.Msg) (EmojiPickerModel, tea.Cmd) {
 			// Grid cell click hit-test.
 			if msg.Y >= m.gridStartY && msg.X >= m.gridStartX {
 				cellW := 2 + 2*m.padding
-				rowH := 1 + 2*m.padding
+				vTop := m.padding / 2
+				vBottom := m.padding - vTop
+				rowH := 1 + vTop + vBottom
 				dx := msg.X - m.gridStartX
 				dy := msg.Y - m.gridStartY
 				col := dx / cellW
@@ -547,17 +555,16 @@ func (m *EmojiPickerModel) View() string {
 	b.WriteString(strings.Repeat("─", boxInner))
 	b.WriteString("\n")
 
-	// Grid — uniform padding on all sides of each emoji cell.
+	// Grid — horizontal padding full, vertical padding split (top floor, bottom ceil).
 	items := m.currentItems()
 	if len(items) == 0 {
 		b.WriteString(dimStyle.Render("  (empty)"))
 		b.WriteString("\n")
 	} else {
-		// Padding on all four sides.
 		hBefore := strings.Repeat(" ", m.padding)
 		hAfter := strings.Repeat(" ", m.padding)
-		vBefore := m.padding
-		vAfter := m.padding
+		vBefore := m.padding / 2          // floor
+		vAfter := m.padding - vBefore    // ceil
 
 		// Full cell width for background fill on vertical padding lines.
 		fullCellW := 2 + 2*m.padding
