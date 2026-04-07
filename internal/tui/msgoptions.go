@@ -181,7 +181,6 @@ func (m MsgOptionsModel) View(bgContent string) string {
 	posX := m.finalX
 	posY := m.finalY
 
-	// Overlay onto the background content.
 	bgLines := strings.Split(bgContent, "\n")
 	for len(bgLines) < m.height {
 		bgLines = append(bgLines, "")
@@ -192,27 +191,47 @@ func (m MsgOptionsModel) View(bgContent string) string {
 		if row >= len(bgLines) {
 			break
 		}
-		// Pad existing line to posX, then append box.
-		existing := bgLines[row]
-		existingWidth := lipgloss.Width(existing)
-		var prefix string
-		if existingWidth >= posX {
-			// Truncate existing line at posX.
-			prefix = truncateToWidth(existing, posX)
-		} else {
-			prefix = existing + strings.Repeat(" ", posX-existingWidth)
-		}
-		bgLines[row] = prefix + line
+		bgLines[row] = ansiTruncatePad(bgLines[row], posX) + line
 	}
 
 	return strings.Join(bgLines, "\n")
 }
 
-// truncateToWidth truncates a string to a visible width, preserving ANSI codes.
-func truncateToWidth(s string, w int) string {
-	if lipgloss.Width(s) <= w {
-		return s
+// ansiTruncatePad returns s truncated or padded to exactly visualW visible columns,
+// preserving ANSI escape sequences.
+func ansiTruncatePad(s string, visualW int) string {
+	if visualW <= 0 {
+		return ""
 	}
-	// Simple truncation — may break ANSI but functional for most cases.
-	return s[:min(len(s), w)]
+	var out strings.Builder
+	visiblePos := 0
+	inEsc := false
+
+	for _, r := range s {
+		if r == '\x1b' {
+			inEsc = true
+			out.WriteRune(r)
+			continue
+		}
+		if inEsc {
+			out.WriteRune(r)
+			// CSI sequences end with a letter (typically 'm' for SGR).
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		if visiblePos >= visualW {
+			break
+		}
+		out.WriteRune(r)
+		visiblePos++ // assume single-cell ASCII; close enough for chat content
+	}
+	// Reset ANSI before padding to prevent bg color bleed.
+	out.WriteString("\x1b[0m")
+	for visiblePos < visualW {
+		out.WriteRune(' ')
+		visiblePos++
+	}
+	return out.String()
 }
