@@ -19,6 +19,12 @@ type SocketEvent struct {
 	Message types.Message
 	Status  types.ConnectionStatus
 	SlackTS string // raw Slack timestamp for lastSeen tracking
+
+	// Reaction fields (for reaction_added/reaction_removed events).
+	ChannelID    string
+	ReactionUser string
+	TargetTS     string
+	EmojiName    string
 }
 
 // SocketService defines the interface for real-time Slack event listening.
@@ -168,6 +174,26 @@ func (s *socketClient) handleEventsAPI(event slackevents.EventsAPIEvent, eventCh
 			}
 
 			eventCh <- socketEvt
+
+		case *slackevents.ReactionAddedEvent:
+			debug.Log("[socket] reaction_added user=%s emoji=%s ts=%s", ev.User, ev.Reaction, ev.Item.Timestamp)
+			eventCh <- SocketEvent{
+				Type:         "reaction_added",
+				ChannelID:    ev.Item.Channel,
+				ReactionUser: ev.User,
+				TargetTS:     ev.Item.Timestamp,
+				EmojiName:    ev.Reaction,
+			}
+
+		case *slackevents.ReactionRemovedEvent:
+			debug.Log("[socket] reaction_removed user=%s emoji=%s ts=%s", ev.User, ev.Reaction, ev.Item.Timestamp)
+			eventCh <- SocketEvent{
+				Type:         "reaction_removed",
+				ChannelID:    ev.Item.Channel,
+				ReactionUser: ev.User,
+				TargetTS:     ev.Item.Timestamp,
+				EmojiName:    ev.Reaction,
+			}
 		}
 	}
 }

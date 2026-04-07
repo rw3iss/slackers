@@ -304,6 +304,67 @@ func (m *MessageViewModel) ExitSelectMode() {
 	}
 }
 
+// AddReactionLocal optimistically adds a reaction to a message in the current view.
+// Returns true if the message was found and updated.
+func (m *MessageViewModel) AddReactionLocal(messageID, emoji, userID string) bool {
+	for i := range m.messages {
+		if m.messages[i].MessageID != messageID {
+			continue
+		}
+		found := false
+		for j, r := range m.messages[i].Reactions {
+			if r.Emoji == emoji {
+				// Don't double-add the same user.
+				for _, uid := range r.UserIDs {
+					if uid == userID {
+						return true
+					}
+				}
+				m.messages[i].Reactions[j].UserIDs = append(m.messages[i].Reactions[j].UserIDs, userID)
+				m.messages[i].Reactions[j].Count++
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.messages[i].Reactions = append(m.messages[i].Reactions, types.Reaction{
+				Emoji:   emoji,
+				UserIDs: []string{userID},
+				Count:   1,
+			})
+		}
+		m.rebuildContent()
+		return true
+	}
+	return false
+}
+
+// RemoveReactionLocal removes a user's reaction from a message in the current view.
+func (m *MessageViewModel) RemoveReactionLocal(messageID, emoji, userID string) bool {
+	for i := range m.messages {
+		if m.messages[i].MessageID != messageID {
+			continue
+		}
+		for j, r := range m.messages[i].Reactions {
+			if r.Emoji != emoji {
+				continue
+			}
+			for k, uid := range r.UserIDs {
+				if uid == userID {
+					m.messages[i].Reactions[j].UserIDs = append(r.UserIDs[:k], r.UserIDs[k+1:]...)
+					m.messages[i].Reactions[j].Count--
+					if m.messages[i].Reactions[j].Count <= 0 {
+						m.messages[i].Reactions = append(m.messages[i].Reactions[:j], m.messages[i].Reactions[j+1:]...)
+					}
+					m.rebuildContent()
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // RemovePendingMatching removes any "pending-" messages that match the given text.
 // Used to dedupe optimistic local appends when the real message arrives via socket.
 func (m *MessageViewModel) RemovePendingMatching(text string) {

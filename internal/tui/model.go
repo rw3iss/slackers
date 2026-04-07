@@ -1158,6 +1158,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.channels.MarkUnread(evMsg.ChannelID)
 			}
+		case "reaction_added":
+			if m.currentCh != nil && msg.Event.ChannelID == m.currentCh.ID {
+				m.messages.AddReactionLocal(msg.Event.TargetTS, msg.Event.EmojiName, msg.Event.ReactionUser)
+			}
+		case "reaction_removed":
+			if m.currentCh != nil && msg.Event.ChannelID == m.currentCh.ID {
+				m.messages.RemoveReactionLocal(msg.Event.TargetTS, msg.Event.EmojiName, msg.Event.ReactionUser)
+			}
 		case "status":
 			m.connStatus = msg.Event.Status
 		}
@@ -1414,8 +1422,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Update in-memory.
 					m.addLocalReaction(m.currentCh.UserID, m.reactMsgID, msg.Code)
 				} else if m.slackSvc != nil {
-					// Slack reaction.
-					go m.slackSvc.AddReaction(m.currentCh.ID, m.reactMsgID, msg.Code)
+					// Slack reaction — optimistic local add, then API call.
+					m.messages.AddReactionLocal(m.reactMsgID, msg.Code, "me")
+					channelID := m.currentCh.ID
+					targetTS := m.reactMsgID
+					emoji := msg.Code
+					go m.slackSvc.AddReaction(channelID, targetTS, emoji)
 				}
 				m.reactMsgID = ""
 			}
