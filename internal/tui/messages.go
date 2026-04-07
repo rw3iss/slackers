@@ -389,24 +389,29 @@ func (m *MessageViewModel) FileAtClick(y int) *types.FileInfo {
 	content := m.viewport.View()
 	lines := strings.Split(content, "\n")
 
-	// y is relative to the message pane. Account for border (1) + header line (1) + 1.
-	lineIdx := y - 1
+	// y is relative to the message pane. Subtract border (1) + header line (1)
+	// to map from screen Y to viewport content row.
+	lineIdx := y - 2
 	if lineIdx < 0 || lineIdx >= len(lines) {
 		return nil
 	}
 
-	clickedLine := lines[lineIdx]
-
-	// Check if this line contains a [FILE:...] pattern.
-	if !strings.Contains(clickedLine, "[FILE:") {
-		return nil
-	}
-
-	// Match it to a selectable file by name.
-	for _, s := range m.selectables {
-		if strings.Contains(clickedLine, "[FILE:"+s.file.Name+"]") {
-			f := s.file
-			return &f
+	// Try the clicked line first, then the line below as a fall-back so the
+	// user can click slightly above a wide-emoji file row and still hit it.
+	for _, off := range []int{0, 1} {
+		idx := lineIdx + off
+		if idx < 0 || idx >= len(lines) {
+			continue
+		}
+		clickedLine := lines[idx]
+		if !strings.Contains(clickedLine, "[FILE:") {
+			continue
+		}
+		for _, s := range m.selectables {
+			if strings.Contains(clickedLine, "[FILE:"+s.file.Name+"]") {
+				f := s.file
+				return &f
+			}
 		}
 	}
 	return nil
