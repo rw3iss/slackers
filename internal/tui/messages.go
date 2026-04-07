@@ -252,14 +252,15 @@ func (m *MessageViewModel) SetFocused(focused bool) {
 }
 
 // ReactionAtClick returns the (messageID, emoji) of a reaction badge at the click position, or empty.
+// x and y are relative to the messages pane (0 = pane left edge / top).
 func (m *MessageViewModel) ReactionAtClick(x, y int) (string, string) {
-	// x is the click X relative to the messages pane (0 = pane left edge).
-	// y is the click Y relative to the messages pane (0 = pane top).
-	// Account for: pane border (1 col) and the header line (1 row).
-	contentX := x - 1 // strip border
-	absLine := y - 1 + m.viewport.YOffset
+	// Pane layout: top border (1) + header line (1) + viewport content.
+	// Left side: border (1) + padding (1) + content.
+	contentX := x - 2
+	absLine := y - 2 + m.viewport.YOffset
+	const xBuffer = 2 // extra forgiving cells on each side
 	for _, h := range m.reactionHits {
-		if h.line == absLine && contentX >= h.startCol && contentX < h.endCol {
+		if h.line == absLine && contentX >= h.startCol-xBuffer && contentX < h.endCol+xBuffer {
 			return h.messageID, h.emoji
 		}
 	}
