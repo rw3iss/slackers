@@ -397,7 +397,7 @@ func (m *EmojiPickerModel) View() string {
 	}
 	tabLine := strings.Join(tabs, " ")
 	b.WriteString(tabLine)
-	b.WriteString("\n\n")
+	b.WriteString("\n\n\n")
 	b.WriteString(strings.Repeat("─", boxInner))
 	b.WriteString("\n")
 
@@ -407,13 +407,14 @@ func (m *EmojiPickerModel) View() string {
 		b.WriteString(dimStyle.Render("  (empty)"))
 		b.WriteString("\n")
 	} else {
-		// Padding distribution: odd = extra after, even = split.
+		// Horizontal: odd = extra gap after emoji. Vertical: odd = extra gap before emoji.
 		padBefore := m.padding / 2
 		padAfter := m.padding - padBefore
 		hBefore := strings.Repeat(" ", padBefore)
 		hAfter := strings.Repeat(" ", padAfter)
-		vBefore := m.padding / 2
-		vAfter := m.padding - vBefore
+		// Vertical: odd puts extra BEFORE the emoji so highlight extends above.
+		vAfter := m.padding / 2
+		vBefore := m.padding - vAfter
 
 		// Full cell width for background fill on vertical padding lines.
 		fullCellW := 2 + m.padding // emoji width + total h-padding
