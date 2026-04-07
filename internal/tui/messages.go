@@ -350,6 +350,7 @@ func (m *MessageViewModel) ExitSelectMode() {
 // AddReactionLocal optimistically adds a reaction to a message in the current view.
 // Returns true if the message was found and updated.
 func (m *MessageViewModel) AddReactionLocal(messageID, emoji, userID string) bool {
+	wasAtBottom := m.viewport.AtBottom()
 	for i := range m.messages {
 		if m.messages[i].MessageID != messageID {
 			continue
@@ -377,6 +378,11 @@ func (m *MessageViewModel) AddReactionLocal(messageID, emoji, userID string) boo
 			})
 		}
 		m.rebuildContent()
+		// If we were at the bottom before, stay at the bottom after the
+		// new reaction line was added.
+		if wasAtBottom {
+			m.viewport.GotoBottom()
+		}
 		return true
 	}
 	return false
