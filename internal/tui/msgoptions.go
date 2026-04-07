@@ -78,6 +78,25 @@ func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
 				}
 			}
 		}
+	case tea.MouseMsg:
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			// The popup is positioned at (m.x, m.y) with a 1-row title and 1-row blank line,
+			// so option items start at row m.y + 2 (title + border).
+			// Box layout: border(1) + title(1) + items + ... + border(1)
+			// Title is at m.y+1, options at m.y+2 onward.
+			row := msg.Y - m.y - 2
+			if row >= 0 && row < len(msgOptionsItems) {
+				m.selected = row
+				item := msgOptionsItems[row]
+				return m, func() tea.Msg {
+					return MsgOptionsSelectMsg{
+						Action:    item.action,
+						MessageID: m.messageID,
+						Preview:   m.preview,
+					}
+				}
+			}
+		}
 	}
 	return m, nil
 }

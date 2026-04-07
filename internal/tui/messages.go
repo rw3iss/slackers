@@ -22,6 +22,11 @@ type ReplyToMessageMsg struct {
 	Preview   string
 }
 
+// ThreadOpenedMsg signals the user opened a thread view for a message.
+type ThreadOpenedMsg struct {
+	MessageID string
+}
+
 // emojiLookup maps shortcodes to unicode for reaction rendering.
 var emojiLookup map[string]string
 
@@ -75,6 +80,14 @@ type MessageViewModel struct {
 	reactMode bool
 	reactIdx  int // index into messages
 
+	// Thread view — viewing a single message + its replies
+	threadMode    bool
+	threadParent  *types.Message
+	threadParentIdx int // original index in main messages
+
+	// Inline collapse — track which message replies are collapsed
+	collapsedReplies map[string]bool
+
 	// Context mode (search result viewing)
 	contextMode     bool
 	contextMessages []types.Message
@@ -86,9 +99,10 @@ type MessageViewModel struct {
 func NewMessageView() MessageViewModel {
 	vp := viewport.New(0, 0)
 	return MessageViewModel{
-		viewport:   vp,
-		users:      make(map[string]string),
-		autoScroll: true,
+		viewport:         vp,
+		users:            make(map[string]string),
+		autoScroll:       true,
+		collapsedReplies: make(map[string]bool),
 	}
 }
 
@@ -211,6 +225,34 @@ func (m *MessageViewModel) SetFocused(focused bool) {
 }
 
 // FileAtClick returns the file at the given Y coordinate in the viewport, or nil.
+// ReplyLineMessageID returns the parent message ID if the line clicked is a "X replies" line.
+func (m *MessageViewModel) ReplyLineMessageID(y int) string {
+	content := m.viewport.View()
+	lines := strings.Split(content, "\n")
+	idx := y - 1
+	if idx < 0 || idx >= len(lines) {
+		return ""
+	}
+	clicked := lines[idx]
+	if !strings.Contains(clicked, "replies") && !strings.Contains(clicked, "reply") {
+		return ""
+	}
+	// Walk up from the clicked line to find the most recent message header.
+	// Match on UserName tokens.
+	for i := idx; i >= 0 && i > idx-30; i-- {
+		line := lines[i]
+		for _, msg := range m.messages {
+			if msg.MessageID == "" {
+				continue
+			}
+			if msg.UserName != "" && strings.Contains(line, msg.UserName) && len(msg.Replies) > 0 {
+				return msg.MessageID
+			}
+		}
+	}
+	return ""
+}
+
 // MessageAtClick returns the message ID and preview at the given Y coordinate, or empty.
 func (m *MessageViewModel) MessageAtClick(y int) (string, string) {
 	// Find which message corresponds to the clicked line.
@@ -320,6 +362,57 @@ func (m *MessageViewModel) SelectedMessageID() string {
 	return m.messages[m.reactIdx].MessageID
 }
 
+// SelectedMessage returns the currently selected message in react mode.
+func (m *MessageViewModel) SelectedMessage() *types.Message {
+	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(m.messages) {
+		return nil
+	}
+	return &m.messages[m.reactIdx]
+}
+
+// EnterThreadMode shows only the parent message and its replies.
+func (m *MessageViewModel) EnterThreadMode(parentIdx int) bool {
+	if parentIdx < 0 || parentIdx >= len(m.messages) {
+		return false
+	}
+	parent := m.messages[parentIdx]
+	m.threadMode = true
+	m.threadParent = &parent
+	m.threadParentIdx = parentIdx
+	m.reactMode = false
+	m.rebuildContent()
+	return true
+}
+
+// ExitThreadMode returns to the regular message list view.
+func (m *MessageViewModel) ExitThreadMode() {
+	m.threadMode = false
+	m.threadParent = nil
+	m.rebuildContent()
+}
+
+// InThreadMode returns whether thread view is active.
+func (m *MessageViewModel) InThreadMode() bool {
+	return m.threadMode
+}
+
+// ThreadParentID returns the ID of the message whose thread is open.
+func (m *MessageViewModel) ThreadParentID() string {
+	if m.threadParent == nil {
+		return ""
+	}
+	return m.threadParent.MessageID
+}
+
+// ToggleReplyCollapse toggles inline reply collapse for a message ID.
+func (m *MessageViewModel) ToggleReplyCollapse(msgID string) {
+	if m.collapsedReplies == nil {
+		m.collapsedReplies = make(map[string]bool)
+	}
+	m.collapsedReplies[msgID] = !m.collapsedReplies[msgID]
+	m.rebuildContent()
+}
+
 // EnterFileSelectMode activates file selection if there are files available.
 func (m *MessageViewModel) EnterFileSelectMode() bool {
 	if len(m.selectables) > 0 {
@@ -338,6 +431,11 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 	}
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// Esc exits thread mode.
+		if m.threadMode && keyMsg.String() == "esc" {
+			m.ExitThreadMode()
+			return m, nil
+		}
 		// Toggle file select mode with 'f'.
 		km := DefaultKeyMap()
 		if key.Matches(keyMsg, km.ToggleFileSelect) {
@@ -398,28 +496,36 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				}
 				return m, nil
 			case "enter":
-				// Signal react mode selection — model.go opens emoji picker.
-				msgID := m.SelectedMessageID()
-				m.reactMode = false
-				m.rebuildContent()
-				return m, func() tea.Msg {
-					return ReactModeSelectMsg{MessageID: msgID}
+				// Enter on a message:
+				// - inside mode + has replies → enter thread view
+				// - otherwise → start reply mode (insert [REPLY:id] in input)
+				sel := m.SelectedMessage()
+				if sel == nil {
+					return m, nil
 				}
-			case "r":
-				// Reply to selected message.
-				msgID := m.SelectedMessageID()
-				preview := ""
-				if m.reactIdx >= 0 && m.reactIdx < len(m.messages) {
-					t := m.messages[m.reactIdx].Text
-					if len(t) > 40 {
-						t = t[:40] + "..."
+				msgID := sel.MessageID
+				preview := sel.Text
+				if len(preview) > 40 {
+					preview = preview[:40] + "..."
+				}
+				if m.replyFormat == "inside" && len(sel.Replies) > 0 {
+					m.EnterThreadMode(m.reactIdx)
+					return m, func() tea.Msg {
+						return ThreadOpenedMsg{MessageID: msgID}
 					}
-					preview = t
 				}
 				m.reactMode = false
 				m.rebuildContent()
 				return m, func() tea.Msg {
 					return ReplyToMessageMsg{MessageID: msgID, Preview: preview}
+				}
+			case "r":
+				// 'r' opens emoji picker for reaction.
+				msgID := m.SelectedMessageID()
+				m.reactMode = false
+				m.rebuildContent()
+				return m, func() tea.Msg {
+					return ReactModeSelectMsg{MessageID: msgID}
 				}
 			case "esc":
 				m.reactMode = false
@@ -540,6 +646,19 @@ func (m MessageViewModel) visibleDate() string {
 }
 
 func (m *MessageViewModel) rebuildContent() {
+	// In thread mode, refresh the thread parent from current messages.
+	if m.threadMode && m.threadParent != nil {
+		// Find the latest version of the parent message in m.messages.
+		for i := range m.messages {
+			if m.messages[i].MessageID == m.threadParent.MessageID {
+				p := m.messages[i]
+				m.threadParent = &p
+				m.threadParentIdx = i
+				break
+			}
+		}
+	}
+
 	// Rebuild selectables from current messages.
 	m.selectables = nil
 	msgs := m.messages
@@ -560,9 +679,40 @@ func (m *MessageViewModel) rebuildContent() {
 
 	if m.contextMode {
 		m.viewport.SetContent(m.renderContextMessages())
+	} else if m.threadMode {
+		m.viewport.SetContent(m.renderThreadView())
 	} else {
 		m.viewport.SetContent(m.renderMessages())
 	}
+}
+
+// renderThreadView renders the thread parent + its replies in a focused view.
+func (m *MessageViewModel) renderThreadView() string {
+	if m.threadParent == nil {
+		return ""
+	}
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
+	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("── Thread ──"))
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("(Esc to exit thread, type to reply)"))
+	b.WriteString("\n\n")
+
+	// Render parent + replies as a temporary message slice.
+	saved := m.messages
+	saveReplyFmt := m.replyFormat
+	thread := []types.Message{*m.threadParent}
+	thread = append(thread, m.threadParent.Replies...)
+	m.messages = thread
+	m.replyFormat = "" // don't recursively render replies inside thread
+	rendered := m.renderMessages()
+	m.messages = saved
+	m.replyFormat = saveReplyFmt
+
+	b.WriteString(rendered)
+	return b.String()
 }
 
 func (m *MessageViewModel) renderMessages() string {
@@ -707,7 +857,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		}
 
 		// Inline reply rendering (if enabled).
-		if m.replyFormat == "inline" && replyCount > 0 {
+		if m.replyFormat == "inline" && replyCount > 0 && !m.collapsedReplies[msg.MessageID] {
 			replyIndent := "        "
 			replyHeaderStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 			for _, reply := range msg.Replies {

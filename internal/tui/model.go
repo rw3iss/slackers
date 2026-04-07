@@ -1342,6 +1342,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case ThreadOpenedMsg:
+		// Auto-focus the input so the user can immediately reply.
+		m.focus = types.FocusInput
+		m.updateFocus()
+		// Pre-fill input with the reply syntax.
+		if msg.MessageID != "" {
+			m.input.InsertAtCursor(fmt.Sprintf("[REPLY:%s] ", msg.MessageID))
+		}
+		return m, nil
+
 	case ReactModeSelectMsg:
 		if msg.MessageID != "" {
 			m.reactMsgID = msg.MessageID
@@ -1598,8 +1608,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Slack thread reply if reply ID set.
 			if replyToID != "" && m.slackSvc != nil {
-				go m.slackSvc.SendThreadReply(m.currentCh.ID, replyToID, sendText)
-				return m, nil
+				channelID := m.currentCh.ID
+				return m, tea.Sequence(
+					func() tea.Msg {
+						_ = m.slackSvc.SendThreadReply(channelID, replyToID, sendText)
+						return nil
+					},
+					silentLoadHistoryCmd(m.slackSvc, channelID),
+				)
 			}
 			return m, sendMessageWithFilesCmd(m.slackSvc, m.currentCh.ID, sendText)
 		}
@@ -2097,6 +2113,10 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.emojiPicker, cmd = m.emojiPicker.Update(msg)
 		return m, cmd
+	case overlayMsgOptions:
+		var cmd tea.Cmd
+		m.msgOptions, cmd = m.msgOptions.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -2189,6 +2209,23 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				// Messages area clicked.
 				m.focus = types.FocusMessages
 				m.updateFocus()
+
+				// Check if a "X replies" line was clicked.
+				if replyParentID := m.messages.ReplyLineMessageID(y); replyParentID != "" {
+					if m.cfg.ReplyFormat == "inside" {
+						// Find parent index and enter thread mode.
+						for i, mm := range m.messages.messages {
+							if mm.MessageID == replyParentID {
+								m.messages.EnterThreadMode(i)
+								break
+							}
+						}
+					} else {
+						// Inline mode: toggle collapse.
+						m.messages.ToggleReplyCollapse(replyParentID)
+					}
+					return m, nil
+				}
 
 				// Check if a file was clicked.
 				file := m.messages.FileAtClick(y)
