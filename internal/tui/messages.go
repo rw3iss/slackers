@@ -728,8 +728,8 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 
 	highlightBg := lipgloss.NewStyle().Background(lipgloss.Color("236"))
 	dateSepStyle := lipgloss.NewStyle().Foreground(ColorMuted).Bold(true)
-	fileStyle := lipgloss.NewStyle().Foreground(ColorAccent)
-	fileSelectedStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Background(lipgloss.Color("236"))
+	fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // yellow
+	fileSelectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true).Background(lipgloss.Color("236"))
 
 	var lastDate string
 	fileIdx := 0 // tracks which selectable file we're at

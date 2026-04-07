@@ -25,12 +25,15 @@ type MsgOptionsSelectMsg struct {
 
 // MsgOptionsModel is a small popup menu shown next to a clicked message.
 type MsgOptionsModel struct {
-	messageID string
-	preview   string
-	selected  int
-	x, y      int // anchor position
-	width     int
-	height    int
+	messageID  string
+	preview    string
+	selected   int
+	x, y       int // anchor position
+	finalX     int // computed render position after clamping
+	finalY     int
+	boxW, boxH int
+	width      int
+	height     int
 }
 
 // NewMsgOptions creates an options popup at the given position.
@@ -46,22 +49,37 @@ func NewMsgOptions(messageID, preview string, x, y int) MsgOptionsModel {
 func (m *MsgOptionsModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
+	// Box: border(2) + content (title + items + blank + hint) + Padding(0,1) (h pad only).
+	// Content rows: 1 (title) + len(items) + 1 (blank) + 1 (hint) = len(items)+3
+	m.boxH = len(msgOptionsItems) + 3 + 2 // + 2 borders
+	m.boxW = 22
+	m.finalX = m.x
+	m.finalY = m.y
+	if m.finalX+m.boxW > m.width {
+		m.finalX = m.width - m.boxW - 1
+	}
+	if m.finalX < 0 {
+		m.finalX = 0
+	}
+	if m.finalY+m.boxH > m.height {
+		m.finalY = m.height - m.boxH - 1
+	}
+	if m.finalY < 0 {
+		m.finalY = 0
+	}
 }
 
 // ClickInside returns true if the click coordinates are within the popup box.
 func (m MsgOptionsModel) ClickInside(x, y int) bool {
-	// Box is approximately 22 wide x (3 + items + 2) tall.
-	boxW := 22
-	boxH := 3 + len(msgOptionsItems) + 2
-	return x >= m.x && x < m.x+boxW && y >= m.y && y < m.y+boxH
+	return x >= m.finalX && x < m.finalX+m.boxW && y >= m.finalY && y < m.finalY+m.boxH
 }
 
 var msgOptionsItems = []struct {
 	label  string
 	action MsgOptionsAction
 }{
-	{"React  😀", MsgActionReact},
-	{"Reply  ↩", MsgActionReply},
+	{"React", MsgActionReact},
+	{"Reply", MsgActionReply},
 }
 
 func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
@@ -88,9 +106,9 @@ func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-			// Box layout: border(1) + title(1) + newline(1) + items
-			// So options start at m.y + 3.
-			row := msg.Y - m.y - 3
+			// Box layout from top: border(1) + title(1) + items + blank(1) + hint(1) + border(1)
+			// So items start at finalY + 2 (top border + title row).
+			row := msg.Y - m.finalY - 2
 			if row >= 0 && row < len(msgOptionsItems) {
 				m.selected = row
 				item := msgOptionsItems[row]
@@ -137,25 +155,10 @@ func (m MsgOptionsModel) View(bgContent string) string {
 
 	box := boxStyle.Render(b.String())
 
-	// Position the box near the anchor (x, y), adjust to stay on screen.
+	// Use the precomputed final positions from SetSize.
 	boxLines := strings.Split(box, "\n")
-	boxH := len(boxLines)
-	boxW := lipgloss.Width(box)
-
-	posX := m.x
-	posY := m.y
-	if posX+boxW > m.width {
-		posX = m.width - boxW - 1
-	}
-	if posX < 0 {
-		posX = 0
-	}
-	if posY+boxH > m.height {
-		posY = m.height - boxH - 1
-	}
-	if posY < 0 {
-		posY = 0
-	}
+	posX := m.finalX
+	posY := m.finalY
 
 	// Overlay onto the background content.
 	bgLines := strings.Split(bgContent, "\n")
