@@ -153,9 +153,8 @@ func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-			// Box layout from top: border(1) + title(1) + items + blank(1) + hint(1) + border(1)
-			// Items start at finalY + 2.
-			row := msg.Y - m.finalY - 2
+			// User reports buttons activate when clicking the line below — so add 1.
+			row := msg.Y - m.finalY - 1
 			debug.Log("[msgoptions] click at (%d,%d) finalY=%d row=%d items=%d", msg.X, msg.Y, m.finalY, row, len(msgOptionsItems))
 			if row >= 0 && row < len(msgOptionsItems) {
 				m.selected = row
