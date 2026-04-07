@@ -212,6 +212,7 @@ type Model struct {
 	connStatus types.ConnectionStatus
 	connErr    error
 	teamName   string
+	myUserID   string // local Slack user ID (cached from AuthTest)
 	err        error
 	warning    string
 
@@ -1131,6 +1132,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			userMap[id] = name
 		}
 		m.messages.SetUsers(userMap)
+		// Cache the local Slack user ID for reaction matching.
+		if m.slackSvc != nil {
+			if uid := m.slackSvc.MyUserID(); uid != "" {
+				m.myUserID = uid
+			}
+		}
 		drainWarnings(&m)
 		// Now that users are cached, load channels so DM names resolve properly.
 		return m, loadChannelsCmd(m.slackSvc)
@@ -2491,24 +2498,43 @@ func (m *Model) persistLastSeen() {
 
 // setChannelHeader updates the message view header with channel name and secure indicator.
 // toggleReaction adds or removes the user's reaction on a message.
-// If the user has already reacted with this emoji, removes it; otherwise adds it.
 func (m *Model) toggleReaction(messageID, emoji string) {
-	// Check if "me" is already in the reaction's user list.
+	// Build the set of identifiers that count as "me".
+	myIDs := []string{"me"}
+	if m.myUserID != "" {
+		myIDs = append(myIDs, m.myUserID)
+	}
+
+	// Check if any of my IDs is already in the reaction's user list.
 	hasReacted := false
+	var matchedID string
 	for _, r := range m.messages.MessageReactions(messageID) {
-		if r.Emoji == emoji {
-			for _, uid := range r.UserIDs {
-				if uid == "me" {
+		if r.Emoji != emoji {
+			continue
+		}
+		for _, uid := range r.UserIDs {
+			for _, myID := range myIDs {
+				if uid == myID {
 					hasReacted = true
+					matchedID = uid
 					break
 				}
 			}
-			break
+			if hasReacted {
+				break
+			}
 		}
+		break
 	}
 
 	if m.currentCh == nil {
 		return
+	}
+
+	// Use the real user ID for storage if known, else "me".
+	storeID := "me"
+	if m.myUserID != "" {
+		storeID = m.myUserID
 	}
 
 	if m.currentCh.IsFriend && m.p2pNode != nil {
@@ -2516,14 +2542,14 @@ func (m *Model) toggleReaction(messageID, emoji string) {
 		msgType := secure.MsgTypeReaction
 		if hasReacted {
 			msgType = secure.MsgTypeReactionRemove
-			m.messages.RemoveReactionLocal(messageID, emoji, "me")
+			m.messages.RemoveReactionLocal(messageID, emoji, matchedID)
 			if m.friendHistory != nil {
-				m.friendHistory.RemoveReaction(peerUID, messageID, emoji, "me")
+				m.friendHistory.RemoveReaction(peerUID, messageID, emoji, matchedID)
 			}
 		} else {
-			m.messages.AddReactionLocal(messageID, emoji, "me")
+			m.messages.AddReactionLocal(messageID, emoji, storeID)
 			if m.friendHistory != nil {
-				m.friendHistory.UpdateReaction(peerUID, messageID, emoji, "me")
+				m.friendHistory.UpdateReaction(peerUID, messageID, emoji, storeID)
 			}
 		}
 		go m.p2pNode.SendMessage(peerUID, secure.P2PMessage{
@@ -2539,10 +2565,10 @@ func (m *Model) toggleReaction(messageID, emoji string) {
 	if m.slackSvc != nil {
 		channelID := m.currentCh.ID
 		if hasReacted {
-			m.messages.RemoveReactionLocal(messageID, emoji, "me")
+			m.messages.RemoveReactionLocal(messageID, emoji, matchedID)
 			go m.slackSvc.RemoveReaction(channelID, messageID, emoji)
 		} else {
-			m.messages.AddReactionLocal(messageID, emoji, "me")
+			m.messages.AddReactionLocal(messageID, emoji, storeID)
 			go m.slackSvc.AddReaction(channelID, messageID, emoji)
 		}
 	}
@@ -2771,6 +2797,8 @@ func (m Model) renderStatusBar() string {
 
 func loadUsersCmd(svc slackpkg.SlackService) tea.Cmd {
 	return func() tea.Msg {
+		// AuthTest first to cache the local user ID.
+		_, _ = svc.AuthTest()
 		users, err := svc.ListUsers()
 		if err != nil {
 			return ErrMsg{Err: err}

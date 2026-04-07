@@ -21,6 +21,7 @@ import (
 // SlackService defines the interface for Slack Web API operations.
 type SlackService interface {
 	AuthTest() (string, error)
+	MyUserID() string
 	ListChannels() ([]types.Channel, error)
 	ListUsers() (map[string]types.User, error)
 	FetchHistory(channelID string, limit int) ([]types.Message, error)
@@ -53,6 +54,7 @@ type slackClient struct {
 	primary   *slack.Client // user token (preferred) or bot token
 	fallback  *slack.Client // bot token (fallback), nil if no user token
 	hasUser   bool
+	userID    string // cached after AuthTest
 	mu        sync.RWMutex
 	users     map[string]types.User
 	warnMu    sync.Mutex
@@ -136,7 +138,13 @@ func (c *slackClient) AuthTest() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("slack auth test: %w", err)
 	}
+	c.userID = resp.UserID
 	return resp.Team, nil
+}
+
+// MyUserID returns the authenticated user's Slack ID (cached after AuthTest).
+func (c *slackClient) MyUserID() string {
+	return c.userID
 }
 
 // ListChannels retrieves all conversations the user can see, sorted by type.
