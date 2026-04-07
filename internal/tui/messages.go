@@ -1262,7 +1262,11 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			}
 			sep := fmt.Sprintf("── %s ──", msgDate)
 			lines = append(lines, dateSepStyle.Render("  "+sep))
-			lines = append(lines, "")
+			// Suppress the trailing blank when the very next thing is the
+			// boxed first message's top rule — keeps date and rule adjacent.
+			if !(m.boxFirstMessage && i == 0) {
+				lines = append(lines, "")
+			}
 			lastDate = msgDate
 		}
 
@@ -1300,11 +1304,11 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		// Top rule for the boxed first message (used by thread view).
 		if m.boxFirstMessage && i == 0 {
 			ruleStyle := lipgloss.NewStyle().Foreground(ColorPrimary)
-			ruleW := maxWidth - 2
+			ruleW := maxWidth
 			if ruleW < 10 {
 				ruleW = 10
 			}
-			lines = append(lines, ruleStyle.Render("  "+strings.Repeat("─", ruleW)))
+			lines = append(lines, ruleStyle.Render(strings.Repeat("─", ruleW)))
 		}
 
 		// Track which line this message starts at.
@@ -1486,11 +1490,11 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		// Bottom rule for the boxed first message (used by thread view).
 		if m.boxFirstMessage && i == 0 {
 			ruleStyle := lipgloss.NewStyle().Foreground(ColorPrimary)
-			ruleW := maxWidth - 2
+			ruleW := maxWidth
 			if ruleW < 10 {
 				ruleW = 10
 			}
-			lines = append(lines, ruleStyle.Render("  "+strings.Repeat("─", ruleW)))
+			lines = append(lines, ruleStyle.Render(strings.Repeat("─", ruleW)))
 		}
 
 		lines = append(lines, "")
