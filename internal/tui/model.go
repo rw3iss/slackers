@@ -190,7 +190,8 @@ type Model struct {
 
 	// Friends
 	friendStore    *friends.FriendStore
-	friendMessages map[string][]types.Message // userID -> P2P message history
+	friendHistory  *friends.ChatHistoryStore
+	friendMessages map[string][]types.Message // in-memory cache (backed by friendHistory)
 
 	// State
 	focus      types.Focus
@@ -252,7 +253,7 @@ type Model struct {
 }
 
 // NewModel creates a new root TUI model.
-func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, cfg *config.Config, version string, friendStore *friends.FriendStore) Model {
+func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, cfg *config.Config, version string, friendStore *friends.FriendStore, friendHistory *friends.ChatHistoryStore) Model {
 	ch := NewChannelList()
 	ch.SetFocused(true)
 
@@ -356,6 +357,7 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		initialLoad:  true,
 		version:      version,
 		friendStore:    friendStore,
+		friendHistory:  friendHistory,
 		friendMessages: make(map[string][]types.Message),
 		slackSvc:       slackSvc,
 		socketSvc:      socketSvc,
@@ -827,7 +829,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					// Friend channel — load local P2P message history.
 					if ch.IsFriend {
-						if history, ok := m.friendMessages[ch.UserID]; ok {
+						// Load from persistent history if available.
+						if m.friendHistory != nil {
+							pairKey := ""
+							if f := m.friendStore.Get(ch.UserID); f != nil {
+								pairKey = f.PairKey
+							}
+							msgs := m.friendHistory.GetDecrypted(ch.UserID, pairKey)
+							m.friendMessages[ch.UserID] = msgs
+							m.messages.SetMessages(msgs)
+						} else if history, ok := m.friendMessages[ch.UserID]; ok {
 							m.messages.SetMessages(history)
 						} else {
 							m.messages.SetMessages(nil)
@@ -1446,7 +1457,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Files:     fileInfos,
 				}
 				m.messages.AppendMessage(localMsg)
-				m.friendMessages[peerUID] = append(m.friendMessages[peerUID], localMsg)
+				m.appendFriendMessage(peerUID, localMsg)
 				return m, nil
 			}
 
@@ -1561,7 +1572,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.channels.MarkUnread(friendChID)
 			}
-			m.friendMessages[msg.SenderID] = append(m.friendMessages[msg.SenderID], fileMsg)
+			m.appendFriendMessage(msg.SenderID, fileMsg)
 
 			if m.p2pChan != nil {
 				return m, waitForP2PMsg(m.p2pChan)
@@ -1624,14 +1635,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentCh != nil && m.currentCh.ID == friendChID {
 			// Viewing this friend's channel — append directly.
 			m.messages.AppendMessage(p2pMsg)
-			m.friendMessages[msg.SenderID] = append(m.friendMessages[msg.SenderID], p2pMsg)
+			m.appendFriendMessage(msg.SenderID, p2pMsg)
 		} else if m.currentCh != nil && m.currentCh.IsDM && m.currentCh.UserID == msg.SenderID {
 			// Viewing this user's Slack DM — show as encrypted.
 			p2pMsg.Text = "🔒 " + p2pMsg.Text
 			m.messages.AppendMessage(p2pMsg)
 		} else if m.friendStore != nil && m.friendStore.Get(msg.SenderID) != nil {
 			// Message from a friend, not viewing their channel — mark unread.
-			m.friendMessages[msg.SenderID] = append(m.friendMessages[msg.SenderID], p2pMsg)
+			m.appendFriendMessage(msg.SenderID, p2pMsg)
 			m.channels.MarkUnread(friendChID)
 		} else {
 			// Regular P2P message from non-friend.
@@ -2146,6 +2157,19 @@ func (m *Model) persistLastSeen() {
 }
 
 // setChannelHeader updates the message view header with channel name and secure indicator.
+// appendFriendMessage adds a message to a friend's history and persists it.
+func (m *Model) appendFriendMessage(userID string, msg types.Message) {
+	m.friendMessages[userID] = append(m.friendMessages[userID], msg)
+	if m.friendHistory != nil {
+		pairKey := ""
+		if f := m.friendStore.Get(userID); f != nil {
+			pairKey = f.PairKey
+		}
+		m.friendHistory.Append(userID, msg, pairKey)
+		go m.friendHistory.Save(userID)
+	}
+}
+
 // buildFriendChannels creates Channel entries from the friend store.
 func (m *Model) buildFriendChannels() []types.Channel {
 	if m.friendStore == nil {

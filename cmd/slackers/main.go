@@ -145,10 +145,20 @@ var rootCmd = &cobra.Command{
 			debug.Log("[friends] load error: %v", err)
 		}
 
+		// Create friend chat history store.
+		friendHistory := friends.NewChatHistoryStore(
+			friends.DefaultHistoryDir(),
+			cfg.FriendHistoryEncrypt,
+		)
+		// Prune old history on startup.
+		if cfg.FriendHistoryDays > 0 {
+			friendHistory.Prune(cfg.FriendHistoryDays)
+		}
+
 		slackSvc := slack.NewSlackClient(cfg.BotToken, cfg.UserToken)
 		socketSvc := slack.NewSocketClient(cfg.BotToken, cfg.AppToken)
 
-		model := tui.NewModel(slackSvc, socketSvc, cfg, version, friendStore)
+		model := tui.NewModel(slackSvc, socketSvc, cfg, version, friendStore, friendHistory)
 		opts := []tea.ProgramOption{tea.WithAltScreen()}
 		if cfg.MouseEnabled {
 			opts = append(opts, tea.WithMouseCellMotion())

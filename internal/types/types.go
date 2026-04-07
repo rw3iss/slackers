@@ -26,14 +26,24 @@ type FileInfo struct {
 	Timestamp   time.Time
 }
 
-// Message represents a single Slack message.
+// Reaction represents an emoji reaction on a message.
+type Reaction struct {
+	Emoji    string   `json:"emoji"`     // shortcode (e.g. "thumbsup")
+	UserIDs  []string `json:"user_ids"`
+	Count    int      `json:"count"`
+}
+
+// Message represents a single Slack or P2P message.
 type Message struct {
-	UserID    string
-	UserName  string
-	Text      string
-	Timestamp time.Time
-	ChannelID string
-	Files     []FileInfo
+	MessageID   string     `json:"message_id,omitempty"` // unique ID (Slack TS or generated UUID)
+	UserID      string     `json:"user_id"`
+	UserName    string     `json:"user_name"`
+	Text        string     `json:"text"`
+	Timestamp   time.Time  `json:"timestamp"`
+	ChannelID   string     `json:"channel_id,omitempty"`
+	Files       []FileInfo `json:"files,omitempty"`
+	Reactions   []Reaction `json:"reactions,omitempty"`
+	IsEncrypted bool       `json:"is_encrypted,omitempty"` // true if stored encrypted on disk
 }
 
 // User represents a Slack workspace member.
