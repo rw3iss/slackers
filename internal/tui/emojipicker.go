@@ -99,15 +99,12 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 	m.height = h
 
 	// Cell dimensions:
-	// - horizontal: padding left + padding right + emoji width (2)
-	// - vertical: padding/2 (down) above + emoji line + padding/2 (up) below
+	// - horizontal: padding left + emoji (2) + padding right
+	// - vertical: 1 line above each emoji + emoji line = 2 rows always
 	hPad := m.padding
-	vTop := m.padding / 2
-	vBottom := m.padding - vTop
 	cellW := 2 + 2*hPad
-	rowH := 1 + vTop + vBottom
+	rowH := 2
 
-	// Use a wider base box to accommodate spacing.
 	innerW := min(80, w-8) - 6
 	maxCols := innerW / cellW
 	if maxCols < 4 {
@@ -455,7 +452,7 @@ func (m EmojiPickerModel) Update(msg tea.Msg) (EmojiPickerModel, tea.Cmd) {
 			}
 			// Tab click hit-test.
 			for _, tp := range m.tabsPositions {
-				screenX := m.boxX + 1 + 2 + tp.x // box border + padding-left
+				screenX := m.boxX + 2 + tp.x // box border + padding (observed)
 				screenY := m.tabRowY + tp.y
 				if msg.X >= screenX && msg.X < screenX+tp.w && msg.Y == screenY {
 					m.activeTab = tp.idx
@@ -468,9 +465,7 @@ func (m EmojiPickerModel) Update(msg tea.Msg) (EmojiPickerModel, tea.Cmd) {
 			// Grid cell click hit-test.
 			if msg.Y >= m.gridStartY && msg.X >= m.gridStartX {
 				cellW := 2 + 2*m.padding
-				vTop := m.padding / 2
-				vBottom := m.padding - vTop
-				rowH := 1 + vTop + vBottom
+				rowH := 2
 				dx := msg.X - m.gridStartX
 				dy := msg.Y - m.gridStartY
 				col := dx / cellW
@@ -555,7 +550,7 @@ func (m *EmojiPickerModel) View() string {
 	b.WriteString(strings.Repeat("─", boxInner))
 	b.WriteString("\n")
 
-	// Grid — horizontal padding full, vertical padding split (top floor, bottom ceil).
+	// Grid — horizontal padding from m.padding, always 1 blank line above each emoji.
 	items := m.currentItems()
 	if len(items) == 0 {
 		b.WriteString(dimStyle.Render("  (empty)"))
@@ -563,8 +558,8 @@ func (m *EmojiPickerModel) View() string {
 	} else {
 		hBefore := strings.Repeat(" ", m.padding)
 		hAfter := strings.Repeat(" ", m.padding)
-		vBefore := m.padding / 2          // floor
-		vAfter := m.padding - vBefore    // ceil
+		vBefore := 1
+		vAfter := 0
 
 		// Full cell width for background fill on vertical padding lines.
 		fullCellW := 2 + 2*m.padding
