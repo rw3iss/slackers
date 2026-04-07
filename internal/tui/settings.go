@@ -715,7 +715,7 @@ func (m SettingsModel) View() string {
 
 	verStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 	// Content width = box width - border(2) - padding(6)
-	contentWidth := min(65, m.width-4) - 8
+	contentWidth := min(85, m.width-4) - 8
 	// Version aligns with value column: cursor(2) + label(20) = 22 chars from left
 	verText := "slackers v" + m.version
 	verPad := contentWidth - lipgloss.Width(titleStyle.Render("Settings")) - len(verText)
@@ -838,7 +838,7 @@ func (m SettingsModel) View() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
-		Width(min(65, m.width-4)).
+		Width(min(85, m.width-4)).
 		Height(boxHeight)
 
 	box := boxStyle.Render(content)
