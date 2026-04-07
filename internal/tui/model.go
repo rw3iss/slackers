@@ -728,13 +728,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keymap.Escape):
-			if m.focus == types.FocusSidebar {
-				// Toggle back to input if already on sidebar
-				m.focus = types.FocusInput
-			} else {
-				m.focus = types.FocusSidebar
+			// Exit thread mode if active.
+			if m.messages.InThreadMode() {
+				m.messages.ExitThreadMode()
+				return m, nil
 			}
-			m.updateFocus()
+			// In input pane: first esc → cursor to start, second esc → clear (saved to history).
+			if m.focus == types.FocusInput {
+				if m.input.Value() == "" {
+					m.input.ClearEscapeOnce()
+					return m, nil
+				}
+				if m.input.AtStart() {
+					// Second escape — clear and save to history.
+					prev := m.input.Value()
+					m.input.PushHistory(prev)
+					m.cfg.InputHistory = m.input.History()
+					go config.Save(m.cfg)
+					m.input.Reset()
+					m.input.ClearEscapeOnce()
+				} else {
+					m.input.CursorToStart()
+					m.input.MarkEscapeOnce()
+				}
+				return m, nil
+			}
 			return m, nil
 
 		case key.Matches(msg, m.keymap.ToggleInputMode):
@@ -786,15 +804,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == types.FocusMessages {
 				break // fall through to viewport handler
 			}
-
-		case key.Matches(msg, m.keymap.Escape):
-			if m.focus == types.FocusSidebar {
-				m.focus = types.FocusInput
-			} else {
-				m.focus = types.FocusSidebar
-			}
-			m.updateFocus()
-			return m, nil
 
 		case key.Matches(msg, m.keymap.ToggleFullMode):
 			m.fullMode = !m.fullMode

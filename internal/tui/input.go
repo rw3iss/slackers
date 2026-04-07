@@ -38,7 +38,8 @@ type InputModel struct {
 	histIdx    int
 	draft      string
 	maxHist    int
-	escSeqPart bool // true if we just saw alt+O (first half of Shift+Enter)
+	escSeqPart  bool // true if we just saw alt+O (first half of Shift+Enter)
+	escapedOnce bool // true after first escape (next escape clears)
 }
 
 // NewInput creates a new input model.
@@ -88,6 +89,27 @@ func (m *InputModel) SetValue(s string) {
 func (m *InputModel) InsertAtCursor(s string) {
 	m.textarea.InsertString(s)
 	m.autoResize()
+}
+
+// CursorToStart moves the cursor to the start of the input.
+func (m *InputModel) CursorToStart() {
+	m.textarea.CursorStart()
+}
+
+// AtStart returns true if the cursor is at row 0 and the value is non-empty.
+// Used to detect double-escape behavior (first esc → cursor home, second → clear).
+func (m *InputModel) AtStart() bool {
+	return m.textarea.Line() == 0 && m.escapedOnce
+}
+
+// MarkEscapeOnce sets the flag that the user pressed escape once.
+func (m *InputModel) MarkEscapeOnce() {
+	m.escapedOnce = true
+}
+
+// ClearEscapeOnce clears the flag.
+func (m *InputModel) ClearEscapeOnce() {
+	m.escapedOnce = false
 }
 
 func (m *InputModel) Reset() {
@@ -279,6 +301,11 @@ func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
 	m.autoResize()
+
+	// Any input action clears the escape-once flag.
+	if _, ok := msg.(tea.KeyMsg); ok {
+		m.escapedOnce = false
+	}
 
 	// Detect pasted file paths and wrap them in [FILE:path].
 	newVal := m.textarea.Value()
