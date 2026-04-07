@@ -1152,6 +1152,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if ts != "" {
 					m.lastSeen[evMsg.ChannelID] = ts
 				}
+				// Dedupe: remove any optimistic "pending-" copy of this message.
+				m.messages.RemovePendingMatching(evMsg.Text)
 				m.messages.AppendMessage(evMsg)
 			} else {
 				m.channels.MarkUnread(evMsg.ChannelID)
@@ -1624,6 +1626,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+
+			// Optimistic local append — show the message immediately.
+			myName := "You"
+			myID := "me"
+			if u, ok := m.users[m.cfg.SlackerID]; ok && u.DisplayName != "" {
+				myName = u.DisplayName
+			}
+			localMsg := types.Message{
+				MessageID: "pending-" + generateMessageID(),
+				UserID:    myID,
+				UserName:  myName,
+				Text:      text,
+				Timestamp: time.Now(),
+				ChannelID: m.currentCh.ID,
+			}
+			m.messages.AppendMessage(localMsg)
 
 			// Slack thread reply if reply ID set.
 			if replyToID != "" && m.slackSvc != nil {

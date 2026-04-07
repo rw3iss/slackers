@@ -299,6 +299,20 @@ func (m *MessageViewModel) ExitSelectMode() {
 	}
 }
 
+// RemovePendingMatching removes any "pending-" messages that match the given text.
+// Used to dedupe optimistic local appends when the real message arrives via socket.
+func (m *MessageViewModel) RemovePendingMatching(text string) {
+	filtered := m.messages[:0]
+	for _, msg := range m.messages {
+		if strings.HasPrefix(msg.MessageID, "pending-") && msg.Text == text {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	m.messages = filtered
+	m.rebuildContent()
+}
+
 // EnterReactMode enters message selection mode for adding reactions.
 func (m *MessageViewModel) EnterReactMode() bool {
 	if len(m.messages) > 0 {
