@@ -563,7 +563,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overlay = overlayEmojiPicker
 			return m, nil
 
-		case key.Matches(msg, m.keymap.ReactMessage):
+		case key.Matches(msg, m.keymap.SelectMessage):
 			if m.currentCh != nil {
 				m.focus = types.FocusMessages
 				m.updateFocus()
@@ -728,19 +728,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keymap.Escape):
-			// Exit thread mode if active.
+			// 1. Exit any active selection mode first.
+			if m.messages.InReactMode() {
+				m.messages.ExitReactMode()
+				return m, nil
+			}
+			if m.messages.InSelectMode() {
+				m.messages.ExitSelectMode()
+				return m, nil
+			}
 			if m.messages.InThreadMode() {
 				m.messages.ExitThreadMode()
 				return m, nil
 			}
-			// In input pane: first esc → cursor to start, second esc → clear (saved to history).
+			// 2. In input pane: first esc → cursor to start, second esc → clear.
 			if m.focus == types.FocusInput {
 				if m.input.Value() == "" {
 					m.input.ClearEscapeOnce()
 					return m, nil
 				}
 				if m.input.AtStart() {
-					// Second escape — clear and save to history.
 					prev := m.input.Value()
 					m.input.PushHistory(prev)
 					m.cfg.InputHistory = m.input.History()
@@ -753,6 +760,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// 3. In sidebar or messages: focus the input.
+			m.focus = types.FocusInput
+			m.updateFocus()
 			return m, nil
 
 		case key.Matches(msg, m.keymap.ToggleInputMode):

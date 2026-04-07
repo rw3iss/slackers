@@ -320,9 +320,14 @@ func (m *MessageViewModel) ExitReactMode() {
 	}
 }
 
-// InReactMode returns whether react mode is active.
+// InReactMode returns whether select (formerly react) mode is active.
 func (m *MessageViewModel) InReactMode() bool {
 	return m.reactMode
+}
+
+// InSelectMode returns whether file select mode is active.
+func (m *MessageViewModel) InSelectMode() bool {
+	return m.selectMode
 }
 
 // SelectedMessageID returns the MessageID of the currently selected message in react mode.
@@ -426,6 +431,29 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				m.rebuildContent()
 			}
 			return m, nil
+		}
+
+		// 's' enters select mode (formerly react mode).
+		if !m.selectMode && !m.reactMode && keyMsg.String() == "s" {
+			if len(m.messages) > 0 {
+				m.EnterReactMode()
+			}
+			return m, nil
+		}
+
+		// Plain Up/Down arrows in chat history auto-enter select mode and navigate.
+		// Modifiers (Ctrl, Shift) and PgUp/PgDn fall through to viewport scrolling.
+		if !m.selectMode && !m.reactMode && !m.contextMode {
+			s := keyMsg.String()
+			if s == "up" || s == "down" {
+				if m.EnterReactMode() {
+					if s == "up" && m.reactIdx > 0 {
+						m.reactIdx--
+					}
+					m.rebuildContent()
+					return m, nil
+				}
+			}
 		}
 
 		// File selection navigation.
@@ -768,10 +796,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			TimestampStyle.Render(ts),
 		)
 
-		// Highlight selected message in react mode.
+		// Highlight selected message in select mode.
 		if m.reactMode && i == m.reactIdx {
-			reactHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
-			headerLine = reactHighlight.Render(headerLine + " [Enter to reply, r to react]")
+			selectHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
+			headerLine = selectHighlight.Render(headerLine + " [Enter to reply, r to react]")
 		}
 
 		text := format.FormatMessage(msg.Text, m.users)
