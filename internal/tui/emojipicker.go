@@ -745,6 +745,21 @@ func (m *EmojiPickerModel) View() string {
 		boxHeight = 12
 	}
 
+	// Pad the content to the full inner height with explicit space-filled
+	// lines so the terminal actually clears any leftover glyphs from the
+	// previous tab/frame. Lipgloss .Height() otherwise just appends bare
+	// newlines, which leave wide-emoji artifacts behind on switch.
+	innerH := boxHeight - 4 // top/bottom borders + top/bottom padding
+	innerW := boxWidth - 6  // left/right borders + left/right padding
+	if innerW < 1 {
+		innerW = 1
+	}
+	contentLines := strings.Split(content, "\n")
+	for len(contentLines) < innerH {
+		contentLines = append(contentLines, strings.Repeat(" ", innerW))
+	}
+	content = strings.Join(contentLines, "\n")
+
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
