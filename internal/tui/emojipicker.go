@@ -100,8 +100,7 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 
 	// Cell dimensions: emoji (2 chars wide) + padding gap after.
 	cellW := 2 + m.padding
-	// Box inner width: larger base (60 or screen - 8).
-	innerW := min(60, w-8) - 6 // border + padding
+	innerW := min(60, w-8) - 6
 	maxCols := innerW / cellW
 	if maxCols < 4 {
 		maxCols = 4
@@ -111,10 +110,8 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 	}
 	m.gridCols = maxCols
 
-	// Row height: 1 line per emoji + padding gap below.
 	rowH := 1 + m.padding
-	// Available height for grid: box height - tabs(3) - info(2) - help(2) - header(2).
-	availH := min(h-4, 40) - 9 // larger base height (40 or screen)
+	availH := min(h-4, 40) - 9
 	maxRows := availH / rowH
 	if maxRows < 3 {
 		maxRows = 3
@@ -123,6 +120,76 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 		maxRows = 10
 	}
 	m.gridRows = maxRows
+
+	// Compute layout positions for click hit-testing.
+	m.computeLayout()
+}
+
+// computeLayout calculates the box position and grid/tab coordinates.
+// Mirrors the layout used by View so click hit-testing matches rendering.
+func (m *EmojiPickerModel) computeLayout() {
+	cellW := 2 + m.padding
+	boxInner := m.gridCols*cellW + m.padding/2
+
+	boxWidth := boxInner + 8
+	if boxWidth > m.width-4 {
+		boxWidth = m.width - 4
+	}
+	if boxWidth < 20 {
+		boxWidth = 20
+	}
+	boxHeight := m.height - 4
+	if boxHeight < 12 {
+		boxHeight = 12
+	}
+	m.boxW = boxWidth
+	m.boxH = boxHeight
+	m.boxX = (m.width - boxWidth) / 2
+	m.boxY = (m.height - boxHeight) / 2
+	if m.boxX < 0 {
+		m.boxX = 0
+	}
+	if m.boxY < 0 {
+		m.boxY = 0
+	}
+
+	// Tab layout.
+	tabItemWidth := 5
+	tabsPerRow := boxInner / tabItemWidth
+	if tabsPerRow < 3 {
+		tabsPerRow = 3
+	}
+	m.tabsPerRow = tabsPerRow
+
+	// Box content area: top border(1) + padding(1) = +2 from box top.
+	// Then "Emoji Picker" title row (1) + blank (1) = tabs at +4.
+	contentLeftX := m.boxX + 1 + 2 // border + padding-left
+	m.tabRowY = m.boxY + 4
+
+	m.tabsPositions = nil
+	tabRowOffset := 0
+	tabColOffset := 0
+	for ti := range m.categories {
+		m.tabsPositions = append(m.tabsPositions, tabPos{
+			idx: ti,
+			x:   tabColOffset,
+			y:   tabRowOffset,
+			w:   tabItemWidth,
+		})
+		tabColOffset += tabItemWidth
+		if (ti+1)%tabsPerRow == 0 && ti < len(m.categories)-1 {
+			tabRowOffset += 2
+			tabColOffset = 0
+		}
+	}
+
+	tabRowsUsed := (len(m.categories) + tabsPerRow - 1) / tabsPerRow
+	if tabRowsUsed < 1 {
+		tabRowsUsed = 1
+	}
+	// Grid first row = tab base + (rows-1)*2 + 3 (for "\n\n" + sep + "\n").
+	m.gridStartY = m.tabRowY + (tabRowsUsed-1)*2 + 3
+	m.gridStartX = contentLeftX
 }
 
 func (m *EmojiPickerModel) currentItems() []format.EmojiEntry {
