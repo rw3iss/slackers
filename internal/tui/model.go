@@ -2370,6 +2370,15 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.warning = "Download cancelled"
 				return m, nil
 			}
+			// Click on the settings cog in the bottom-right of the status bar.
+			if y >= m.height-1 {
+				if cogStart, cogEnd := m.settingsCogClickArea(); cogEnd > cogStart && x >= cogStart && x < cogEnd {
+					m.settings = NewSettingsModel(m.cfg, m.version)
+					m.settings.SetSize(m.width, m.height)
+					m.overlay = overlaySettings
+					return m, nil
+				}
+			}
 
 			if y >= m.inputTop {
 				m.focus = types.FocusInput
@@ -2989,7 +2998,13 @@ func (m Model) renderStatusBar() string {
 	hints := HelpStyle.Render(hintsText)
 
 	left := fmt.Sprintf(" %s | %s%s", connStr, hints, extra)
-	right := StatusBarStyle.Render(fmt.Sprintf("slackers v%s ", m.version))
+	versionStr := fmt.Sprintf("slackers v%s ", m.version)
+	cogPart := ""
+	if m.cfg != nil && m.cfg.MouseEnabled {
+		// 1 column of padding on each side of the cog glyph.
+		cogPart = " ⚙ "
+	}
+	right := StatusBarStyle.Render(cogPart + versionStr)
 
 	// Pad the middle to push right label to the edge.
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -2999,6 +3014,23 @@ func (m Model) renderStatusBar() string {
 	status := left + strings.Repeat(" ", gap) + right
 
 	return StatusBarStyle.Width(m.width).Render(status)
+}
+
+// settingsCogClickArea returns the [startX, endX) column range for the
+// settings cog in the status bar. Returns (0, 0) when the cog is not shown.
+func (m Model) settingsCogClickArea() (int, int) {
+	if m.cfg == nil || !m.cfg.MouseEnabled {
+		return 0, 0
+	}
+	versionStr := fmt.Sprintf("slackers v%s ", m.version)
+	cogPart := " ⚙ "
+	rightWidth := lipgloss.Width(cogPart + versionStr)
+	rightStart := m.width - rightWidth
+	// Cog sits at index 1 of cogPart (after the leading pad space). The
+	// click area covers the cog plus its surrounding pad spaces for forgiveness.
+	startX := rightStart
+	endX := rightStart + lipgloss.Width(cogPart)
+	return startX, endX
 }
 
 // Command functions
