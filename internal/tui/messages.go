@@ -1247,9 +1247,9 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 	}
 
 	highlightBg := lipgloss.NewStyle().Background(lipgloss.Color("236"))
-	dateSepStyle := lipgloss.NewStyle().Foreground(ColorMuted).Bold(true)
-	fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // yellow
-	fileSelectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true).Background(lipgloss.Color("236"))
+	dateSepStyle := lipgloss.NewStyle().Foreground(ColorDayLabel).Bold(true)
+	fileStyle := lipgloss.NewStyle().Foreground(ColorFileButton)
+	fileSelectedStyle := lipgloss.NewStyle().Foreground(ColorFileButton).Bold(true).Background(lipgloss.Color("236"))
 
 	var lastDate string
 	fileIdx := 0 // tracks which selectable file we're at
@@ -1357,7 +1357,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		if replyCount > 0 || len(msg.Reactions) > 0 {
 			replyLabel := ""
 			if replyCount > 0 {
-				replyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Italic(true)
+				replyStyle := lipgloss.NewStyle().Foreground(ColorReplyLabel).Italic(true)
 				replyLabel = replyStyle.Render(fmt.Sprintf("%d %s", replyCount, pluralReplies(replyCount)))
 			}
 			var reactionParts []string

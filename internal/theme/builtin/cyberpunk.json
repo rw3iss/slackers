@@ -1,0 +1,25 @@
+{
+  "name": "Cyberpunk",
+  "mode": "dark",
+  "colors": {
+    "primary": "201",
+    "secondary": "55",
+    "accent": "51",
+    "error": "196",
+    "muted": "53",
+    "highlight": "226",
+    "messageText": "159",
+    "infoText": "98",
+    "dayLabel": "201",
+    "timestamp": "55",
+    "background": "",
+    "pageHeader": "201",
+    "groupHeader": "165",
+    "statusMessage": "98",
+    "fileButton": "226",
+    "replyLabel": "51",
+    "selection": "201",
+    "borderDefault": "55",
+    "borderActive": "201"
+  }
+}

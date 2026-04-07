@@ -150,6 +150,12 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				description: "Manage users allowed for E2E encrypted messaging",
 			},
 			{
+				label:       "Theme",
+				key:         "theme",
+				value:       themeValueLabel(cfg.Theme),
+				description: "Choose a color theme (live preview)",
+			},
+			{
 				label:       "Reply Format",
 				key:         "reply_format",
 				value:       replyFormatVal(cfg.ReplyFormat),
@@ -270,6 +276,13 @@ func downloadPathValue(p string) string {
 	return p
 }
 
+func themeValueLabel(name string) string {
+	if name == "" {
+		return "Default"
+	}
+	return name
+}
+
 func boolToOnOff(b bool) string {
 	if b {
 		return "on"
@@ -382,6 +395,13 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		if f.key == "about" {
 			return m, func() tea.Msg {
 				return AboutOpenMsg{}
+			}
+		}
+
+		// Theme opens the theme picker.
+		if f.key == "theme" {
+			return m, func() tea.Msg {
+				return ThemePickerOpenMsg{}
 			}
 		}
 

@@ -1,0 +1,25 @@
+{
+  "name": "Monokai",
+  "mode": "dark",
+  "colors": {
+    "primary": "208",
+    "secondary": "238",
+    "accent": "148",
+    "error": "197",
+    "muted": "242",
+    "highlight": "227",
+    "messageText": "253",
+    "infoText": "242",
+    "dayLabel": "208",
+    "timestamp": "242",
+    "background": "",
+    "pageHeader": "208",
+    "groupHeader": "242",
+    "statusMessage": "242",
+    "fileButton": "227",
+    "replyLabel": "148",
+    "selection": "141",
+    "borderDefault": "238",
+    "borderActive": "208"
+  }
+}

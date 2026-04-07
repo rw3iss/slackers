@@ -1,0 +1,25 @@
+{
+  "name": "Dracula",
+  "mode": "dark",
+  "colors": {
+    "primary": "141",
+    "secondary": "61",
+    "accent": "84",
+    "error": "203",
+    "muted": "60",
+    "highlight": "228",
+    "messageText": "253",
+    "infoText": "60",
+    "dayLabel": "61",
+    "timestamp": "60",
+    "background": "",
+    "pageHeader": "141",
+    "groupHeader": "61",
+    "statusMessage": "61",
+    "fileButton": "215",
+    "replyLabel": "84",
+    "selection": "212",
+    "borderDefault": "60",
+    "borderActive": "141"
+  }
+}

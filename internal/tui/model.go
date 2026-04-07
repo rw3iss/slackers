@@ -22,6 +22,7 @@ import (
 	"github.com/rw3iss/slackers/internal/secure"
 	"github.com/rw3iss/slackers/internal/shortcuts"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
+	"github.com/rw3iss/slackers/internal/theme"
 	"github.com/rw3iss/slackers/internal/types"
 )
 
@@ -45,6 +46,9 @@ const (
 	overlayEmojiPicker
 	overlayMsgOptions
 	overlayAbout
+	overlayThemePicker
+	overlayThemeEditor
+	overlayThemeColorPicker
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -193,8 +197,11 @@ type Model struct {
 	whitelist       WhitelistModel
 	help            HelpModel
 	friendRequest   FriendRequestModel
-	friendsConfig   FriendsConfigModel
-	about           AboutModel
+	friendsConfig    FriendsConfigModel
+	about            AboutModel
+	themePicker      ThemePickerModel
+	themeEditor      ThemeEditorModel
+	themeColorPicker ThemeColorPickerModel
 	emojiPicker     EmojiPickerModel
 	msgOptions      MsgOptionsModel
 
@@ -272,6 +279,12 @@ type Model struct {
 
 // NewModel creates a new root TUI model.
 func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, cfg *config.Config, version string, friendStore *friends.FriendStore, friendHistory *friends.ChatHistoryStore) Model {
+	// Apply the user's selected theme (if any) before any styles are read.
+	if cfg.Theme != "" {
+		if t, ok := theme.FindByName(cfg.Theme); ok {
+			ApplyTheme(t)
+		}
+	}
 	ch := NewChannelList()
 	ch.SetFocused(true)
 
@@ -743,6 +756,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayAbout {
 			var cmd tea.Cmd
 			m.about, cmd = m.about.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayThemePicker {
+			var cmd tea.Cmd
+			m.themePicker, cmd = m.themePicker.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayThemeEditor {
+			var cmd tea.Cmd
+			m.themeEditor, cmd = m.themeEditor.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayThemeColorPicker {
+			var cmd tea.Cmd
+			m.themeColorPicker, cmd = m.themeColorPicker.Update(msg)
 			return m, cmd
 		}
 		if m.overlay == overlayEmojiPicker {
@@ -1422,6 +1450,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AboutCloseMsg:
 		m.overlay = overlayNone
+		return m, nil
+
+	case ThemePickerOpenMsg:
+		m.themePicker = NewThemePicker()
+		m.themePicker.SetSize(m.width, m.height)
+		m.overlay = overlayThemePicker
+		return m, nil
+
+	case ThemePickerCloseMsg:
+		m.overlay = overlayNone
+		return m, nil
+
+	case ThemeAppliedMsg:
+		// Persist the user's chosen theme.
+		m.cfg.Theme = msg.Name
+		go config.Save(m.cfg)
+		return m, nil
+
+	case ThemeEditorOpenMsg:
+		m.themeEditor = NewThemeEditor(msg.Theme)
+		m.themeEditor.SetSize(m.width, m.height)
+		m.overlay = overlayThemeEditor
+		return m, nil
+
+	case ThemeEditorCloseMsg:
+		// Return to the picker so the user can re-select / continue editing.
+		m.themePicker.Refresh()
+		m.overlay = overlayThemePicker
+		return m, nil
+
+	case ThemeColorPickerOpenMsg:
+		m.themeColorPicker = NewThemeColorPicker(msg.Key, msg.Initial)
+		m.themeColorPicker.SetSize(m.width, m.height)
+		m.overlay = overlayThemeColorPicker
+		return m, nil
+
+	case ThemeColorPickerCloseMsg:
+		m.overlay = overlayThemeEditor
+		return m, nil
+
+	case ThemeColorPickedMsg:
+		m.themeEditor.SetColor(msg.Key, msg.Color)
+		m.overlay = overlayThemeEditor
 		return m, nil
 
 	case MsgOptionsSelectMsg:
@@ -2187,6 +2258,12 @@ func (m Model) View() string {
 		return m.friendsConfig.View()
 	case overlayAbout:
 		return m.about.View()
+	case overlayThemePicker:
+		return m.themePicker.View()
+	case overlayThemeEditor:
+		return m.themeEditor.View()
+	case overlayThemeColorPicker:
+		return m.themeColorPicker.View()
 	case overlayEmojiPicker:
 		return m.emojiPicker.View()
 	case overlayMsgOptions:

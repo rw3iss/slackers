@@ -1,0 +1,25 @@
+{
+  "name": "Matrix",
+  "mode": "dark",
+  "colors": {
+    "primary": "46",
+    "secondary": "22",
+    "accent": "82",
+    "error": "196",
+    "muted": "22",
+    "highlight": "190",
+    "messageText": "46",
+    "infoText": "22",
+    "dayLabel": "82",
+    "timestamp": "28",
+    "background": "",
+    "pageHeader": "46",
+    "groupHeader": "28",
+    "statusMessage": "28",
+    "fileButton": "190",
+    "replyLabel": "82",
+    "selection": "46",
+    "borderDefault": "22",
+    "borderActive": "46"
+  }
+}

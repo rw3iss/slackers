@@ -1,0 +1,25 @@
+{
+  "name": "Solarized Light",
+  "mode": "light",
+  "colors": {
+    "primary": "33",
+    "secondary": "245",
+    "accent": "64",
+    "error": "160",
+    "muted": "245",
+    "highlight": "136",
+    "messageText": "240",
+    "infoText": "245",
+    "dayLabel": "245",
+    "timestamp": "245",
+    "background": "",
+    "pageHeader": "33",
+    "groupHeader": "245",
+    "statusMessage": "245",
+    "fileButton": "166",
+    "replyLabel": "64",
+    "selection": "33",
+    "borderDefault": "245",
+    "borderActive": "33"
+  }
+}

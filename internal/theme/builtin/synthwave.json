@@ -1,0 +1,25 @@
+{
+  "name": "Synthwave",
+  "mode": "dark",
+  "colors": {
+    "primary": "198",
+    "secondary": "63",
+    "accent": "159",
+    "error": "203",
+    "muted": "61",
+    "highlight": "227",
+    "messageText": "189",
+    "infoText": "97",
+    "dayLabel": "198",
+    "timestamp": "63",
+    "background": "",
+    "pageHeader": "199",
+    "groupHeader": "141",
+    "statusMessage": "97",
+    "fileButton": "227",
+    "replyLabel": "159",
+    "selection": "198",
+    "borderDefault": "63",
+    "borderActive": "198"
+  }
+}

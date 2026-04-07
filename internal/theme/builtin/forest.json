@@ -1,0 +1,25 @@
+{
+  "name": "Forest",
+  "mode": "dark",
+  "colors": {
+    "primary": "108",
+    "secondary": "65",
+    "accent": "150",
+    "error": "131",
+    "muted": "65",
+    "highlight": "186",
+    "messageText": "187",
+    "infoText": "65",
+    "dayLabel": "108",
+    "timestamp": "65",
+    "background": "",
+    "pageHeader": "108",
+    "groupHeader": "65",
+    "statusMessage": "65",
+    "fileButton": "179",
+    "replyLabel": "150",
+    "selection": "108",
+    "borderDefault": "65",
+    "borderActive": "108"
+  }
+}

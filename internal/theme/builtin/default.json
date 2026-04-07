@@ -1,0 +1,25 @@
+{
+  "name": "Default",
+  "mode": "dark",
+  "colors": {
+    "primary": "12",
+    "secondary": "243",
+    "accent": "10",
+    "error": "9",
+    "muted": "240",
+    "highlight": "229",
+    "messageText": "252",
+    "infoText": "240",
+    "dayLabel": "240",
+    "timestamp": "240",
+    "background": "",
+    "pageHeader": "12",
+    "groupHeader": "240",
+    "statusMessage": "240",
+    "fileButton": "11",
+    "replyLabel": "10",
+    "selection": "12",
+    "borderDefault": "243",
+    "borderActive": "12"
+  }
+}

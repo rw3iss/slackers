@@ -1,0 +1,25 @@
+{
+  "name": "Sunset",
+  "mode": "dark",
+  "colors": {
+    "primary": "209",
+    "secondary": "95",
+    "accent": "215",
+    "error": "160",
+    "muted": "95",
+    "highlight": "221",
+    "messageText": "223",
+    "infoText": "95",
+    "dayLabel": "209",
+    "timestamp": "95",
+    "background": "",
+    "pageHeader": "203",
+    "groupHeader": "131",
+    "statusMessage": "95",
+    "fileButton": "221",
+    "replyLabel": "215",
+    "selection": "209",
+    "borderDefault": "95",
+    "borderActive": "209"
+  }
+}

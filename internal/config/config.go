@@ -45,6 +45,7 @@ type Config struct {
 	ReplyFormat         string        `json:"reply_format,omitempty"` // "inline" or "inside"
 	FriendHistoryDays   int          `json:"friend_history_days,omitempty"`   // 0 = keep all
 	FriendHistoryEncrypt bool        `json:"friend_history_encrypt,omitempty"`
+	Theme           string            `json:"theme,omitempty"`
 	SlackerID       string            `json:"slacker_id,omitempty"`
 	MyName          string            `json:"my_name,omitempty"`
 	MyEmail         string            `json:"my_email,omitempty"`

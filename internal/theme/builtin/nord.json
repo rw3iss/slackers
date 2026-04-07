@@ -1,0 +1,25 @@
+{
+  "name": "Nord",
+  "mode": "dark",
+  "colors": {
+    "primary": "111",
+    "secondary": "67",
+    "accent": "108",
+    "error": "131",
+    "muted": "60",
+    "highlight": "222",
+    "messageText": "188",
+    "infoText": "60",
+    "dayLabel": "67",
+    "timestamp": "60",
+    "background": "",
+    "pageHeader": "111",
+    "groupHeader": "60",
+    "statusMessage": "60",
+    "fileButton": "180",
+    "replyLabel": "108",
+    "selection": "111",
+    "borderDefault": "67",
+    "borderActive": "111"
+  }
+}
