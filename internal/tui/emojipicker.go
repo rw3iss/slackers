@@ -383,21 +383,31 @@ func (m *EmojiPickerModel) View() string {
 	b.WriteString(titleStyle.Render("Emoji Picker"))
 	b.WriteString("\n\n")
 
-	// Tabs.
+	// Tabs — manually wrap into rows with vertical spacing.
 	cellWidth := 2 + m.padding
-	boxInner := m.gridCols*cellWidth + m.padding/2 // account for leading pad on even
-	var tabs []string
-	for i, tab := range m.categories {
+	boxInner := m.gridCols*cellWidth + m.padding/2
+
+	// Each tab icon takes ~4 display chars (emoji 2 + padding 2 from style).
+	tabItemWidth := 5 // approximate rendered width per tab item
+	tabsPerRow := boxInner / tabItemWidth
+	if tabsPerRow < 3 {
+		tabsPerRow = 3
+	}
+
+	for ti, tab := range m.categories {
 		label := tab.icon
-		if i == m.activeTab {
-			tabs = append(tabs, tabActiveStyle.Render(label))
+		if ti == m.activeTab {
+			b.WriteString(tabActiveStyle.Render(label))
 		} else {
-			tabs = append(tabs, tabInactiveStyle.Render(label))
+			b.WriteString(tabInactiveStyle.Render(label))
+		}
+		b.WriteString(" ")
+		// End of row — add vertical spacing.
+		if (ti+1)%tabsPerRow == 0 && ti < len(m.categories)-1 {
+			b.WriteString("\n\n")
 		}
 	}
-	tabLine := strings.Join(tabs, " ")
-	b.WriteString(tabLine)
-	b.WriteString("\n\n\n")
+	b.WriteString("\n\n")
 	b.WriteString(strings.Repeat("─", boxInner))
 	b.WriteString("\n")
 
