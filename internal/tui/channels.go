@@ -256,35 +256,46 @@ func (m *ChannelListModel) visibleChannels() []types.Channel {
 	return filtered
 }
 
-// SelectByRow selects the row at the given Y position within the sidebar viewport.
-// Returns the selected channel (nil for headers), whether a channel was clicked,
-// and the header key if a header was clicked.
-func (m *ChannelListModel) SelectByRow(y int) (*types.Channel, bool, string) {
-	// Map the Y coordinate to a display line, accounting for blank lines before headers.
-	targetLine := m.scrollOff + y
-
-	// Walk through rows counting actual display lines (including blank spacers).
-	displayLine := 0
+// displayLineMap returns a slice mapping display-line index → row index.
+// A value of -1 means the line is a blank spacer (the gap before a non-first
+// header). View() and SelectByRow() both consume this so the visible layout
+// and the click hit-test stay in lock-step.
+func (m *ChannelListModel) displayLineMap() []int {
+	var lines []int
 	for i, row := range m.rows {
 		if row.isHeader && i > 0 {
-			// Blank line before non-first headers.
-			if displayLine == targetLine {
-				// Clicked on the blank line — treat as no-op.
-				return nil, false, ""
-			}
-			displayLine++
+			lines = append(lines, -1) // blank spacer
 		}
-		if displayLine == targetLine {
-			m.selected = i
-			if row.isHeader {
-				return nil, false, row.headerKey
-			}
-			if row.channel != nil {
-				return row.channel, true, ""
-			}
-			return nil, false, ""
-		}
-		displayLine++
+		_ = row
+		lines = append(lines, i)
+	}
+	return lines
+}
+
+// SelectByRow selects the row at the given Y position within the sidebar viewport
+// (i.e. screen Y minus the sidebar's top border). Returns the selected channel
+// (nil for headers), whether a channel was clicked, and the header key if a
+// header was clicked.
+func (m *ChannelListModel) SelectByRow(y int) (*types.Channel, bool, string) {
+	if y < 0 {
+		return nil, false, ""
+	}
+	targetLine := m.scrollOff + y
+	lines := m.displayLineMap()
+	if targetLine < 0 || targetLine >= len(lines) {
+		return nil, false, ""
+	}
+	rowIdx := lines[targetLine]
+	if rowIdx < 0 {
+		return nil, false, "" // clicked on a blank spacer
+	}
+	row := m.rows[rowIdx]
+	m.selected = rowIdx
+	if row.isHeader {
+		return nil, false, row.headerKey
+	}
+	if row.channel != nil {
+		return row.channel, true, ""
 	}
 	return nil, false, ""
 }
@@ -477,24 +488,24 @@ func (m *ChannelListModel) ensureVisible() {
 func (m ChannelListModel) View() string {
 	maxNameLen := m.width - 6
 
-	// Build display lines from rows.
+	// Build display lines from the shared map so click hit-test stays in sync.
 	type displayLine struct {
 		text string
 	}
 	var lines []displayLine
-
-	for i, row := range m.rows {
+	for _, rowIdx := range m.displayLineMap() {
+		if rowIdx < 0 {
+			lines = append(lines, displayLine{text: ""})
+			continue
+		}
+		row := m.rows[rowIdx]
 		if row.isHeader {
-			// Add blank line before headers (except the first).
-			if i > 0 {
-				lines = append(lines, displayLine{text: ""})
-			}
 			arrow := "▼"
 			if m.collapsed[row.headerKey] {
 				arrow = "►"
 			}
 			label := arrow + " " + row.headerLabel
-			if i == m.selected {
+			if rowIdx == m.selected {
 				lines = append(lines, displayLine{text: ChannelSelectedStyle.Render("> " + label)})
 			} else {
 				lines = append(lines, displayLine{text: SectionHeaderStyle.Render("  " + label)})
@@ -502,7 +513,7 @@ func (m ChannelListModel) View() string {
 		} else if row.channel != nil {
 			ch := *row.channel
 			isHidden := m.hidden[ch.ID]
-			lines = append(lines, displayLine{text: m.renderItem(ch, i, maxNameLen, isHidden)})
+			lines = append(lines, displayLine{text: m.renderItem(ch, rowIdx, maxNameLen, isHidden)})
 		}
 	}
 

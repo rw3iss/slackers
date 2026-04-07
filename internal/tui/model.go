@@ -2388,7 +2388,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.focus = types.FocusSidebar
 				m.updateFocus()
 
-				ch, isChannel, headerKey := m.channels.SelectByRow(y)
+				// SelectByRow expects a viewport-relative row. The sidebar
+				// has a top border (1 row) before its content, so subtract.
+				viewportY := y - 1
+				if viewportY < 0 {
+					return m, nil
+				}
+				ch, isChannel, headerKey := m.channels.SelectByRow(viewportY)
 				if headerKey != "" {
 					// Header clicked — toggle collapse.
 					m.channels.ToggleCollapse(headerKey)
@@ -3001,8 +3007,8 @@ func (m Model) renderStatusBar() string {
 	versionStr := fmt.Sprintf("slackers v%s ", m.version)
 	cogPart := ""
 	if m.cfg != nil && m.cfg.MouseEnabled {
-		// 1 column of padding on each side of the cog glyph.
-		cogPart = " ⚙ "
+		// 1 column of padding on each side of the cog emoji.
+		cogPart = " " + settingsCogGlyph + " "
 	}
 	right := StatusBarStyle.Render(cogPart + versionStr)
 
@@ -3016,6 +3022,11 @@ func (m Model) renderStatusBar() string {
 	return StatusBarStyle.Width(m.width).Render(status)
 }
 
+// settingsCogGlyph is the cog emoji shown in the status bar (when mouse mode
+// is enabled). Includes the VS16 variation selector so terminals render it as
+// a graphical emoji rather than a tiny monochrome glyph.
+const settingsCogGlyph = "⚙\ufe0f"
+
 // settingsCogClickArea returns the [startX, endX) column range for the
 // settings cog in the status bar. Returns (0, 0) when the cog is not shown.
 func (m Model) settingsCogClickArea() (int, int) {
@@ -3023,11 +3034,10 @@ func (m Model) settingsCogClickArea() (int, int) {
 		return 0, 0
 	}
 	versionStr := fmt.Sprintf("slackers v%s ", m.version)
-	cogPart := " ⚙ "
+	cogPart := " " + settingsCogGlyph + " "
 	rightWidth := lipgloss.Width(cogPart + versionStr)
 	rightStart := m.width - rightWidth
-	// Cog sits at index 1 of cogPart (after the leading pad space). The
-	// click area covers the cog plus its surrounding pad spaces for forgiveness.
+	// Click area covers the cog glyph plus its surrounding pad spaces for forgiveness.
 	startX := rightStart
 	endX := rightStart + lipgloss.Width(cogPart)
 	return startX, endX
