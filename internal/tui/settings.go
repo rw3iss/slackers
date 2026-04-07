@@ -150,6 +150,12 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				description: "Manage users allowed for E2E encrypted messaging",
 			},
 			{
+				label:       "Friends Config",
+				key:         "friends_config",
+				value:       "Manage...",
+				description: "Manage friends, profile, and P2P connections",
+			},
+			{
 				label:       "Keyboard Shortcuts",
 				key:         "shortcuts",
 				value:       "Customize...",
@@ -334,6 +340,13 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		if f.key == "whitelist" {
 			return m, func() tea.Msg {
 				return WhitelistOpenMsg{}
+			}
+		}
+
+		// Friends config opens the friends manager.
+		if f.key == "friends_config" {
+			return m, func() tea.Msg {
+				return FriendsConfigOpenMsg{}
 			}
 		}
 

@@ -40,6 +40,7 @@ const (
 	overlayShortcuts
 	overlayWhitelist
 	overlayFriendRequest
+	overlayFriendsConfig
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -182,6 +183,7 @@ type Model struct {
 	whitelist       WhitelistModel
 	help            HelpModel
 	friendRequest   FriendRequestModel
+	friendsConfig   FriendsConfigModel
 
 	// Friends
 	friendStore    *friends.FriendStore
@@ -636,6 +638,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.friendRequest, cmd = m.friendRequest.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayFriendsConfig {
+			var cmd tea.Cmd
+			m.friendsConfig, cmd = m.friendsConfig.Update(msg)
 			return m, cmd
 		}
 
@@ -1221,6 +1228,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayWhitelist
 		return m, nil
 
+	case FriendsConfigOpenMsg:
+		m.friendsConfig = NewFriendsConfigModel(m.friendStore, m.cfg)
+		m.friendsConfig.SetSize(m.width, m.height)
+		m.overlay = overlayFriendsConfig
+		return m, nil
+
+	case FriendsConfigCloseMsg:
+		m.overlay = overlayNone
+		// Refresh friend channels in sidebar after config changes.
+		m.channels.SetFriendChannels(m.buildFriendChannels())
+		return m, nil
+
 	case ShortcutsSavedMsg:
 		// Immediately rebuild keymap from the editor's current state.
 		m.shortcutMap = m.shortcutsEditor.Merged()
@@ -1621,6 +1640,8 @@ func (m Model) View() string {
 		return m.whitelist.View()
 	case overlayFriendRequest:
 		return m.friendRequest.View()
+	case overlayFriendsConfig:
+		return m.friendsConfig.View()
 	}
 
 	msgView := m.messages.View()
@@ -1724,6 +1745,10 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case overlayWhitelist:
 		var cmd tea.Cmd
 		m.whitelist, cmd = m.whitelist.Update(msg)
+		return m, cmd
+	case overlayFriendsConfig:
+		var cmd tea.Cmd
+		m.friendsConfig, cmd = m.friendsConfig.Update(msg)
 		return m, cmd
 	}
 	return m, nil
