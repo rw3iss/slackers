@@ -100,6 +100,8 @@ func (m MsgOptionsModel) renderBox() string {
 	b.WriteString(titleStyle.Render("Options"))
 	b.WriteString("\n")
 	for i, item := range msgOptionsItems {
+		// Blank line before each item.
+		b.WriteString("\n")
 		cursor := "  "
 		style := ChannelItemStyle
 		if i == m.selected {
@@ -153,7 +155,12 @@ func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-			row := msg.Y - m.finalY - 2
+			// Items each span 2 rows now (blank line before each).
+			// Layout (relative to finalY): 0=border, 1=title, 2=blank, 3=React, 4=blank, 5=Reply, 6=blank, 7=hint, 8=border
+			// Click on Y in [finalY+2..finalY+3] → React (row 0)
+			// Click on Y in [finalY+4..finalY+5] → Reply (row 1)
+			delta := msg.Y - m.finalY - 2
+			row := delta / 2
 			debug.Log("[msgoptions] click at (%d,%d) finalY=%d row=%d items=%d", msg.X, msg.Y, m.finalY, row, len(msgOptionsItems))
 			if row >= 0 && row < len(msgOptionsItems) {
 				m.selected = row
