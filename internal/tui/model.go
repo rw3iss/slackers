@@ -2213,7 +2213,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				if msgID != "" {
 					// Popup minimum X is the chat history left edge.
 					minX := m.sidebarWidth + 2
-					m.msgOptions = NewMsgOptions(msgID, preview, x+1, y+1, minX)
+					m.msgOptions = NewMsgOptions(msgID, preview, x+1, y, minX)
 					m.msgOptions.SetSize(m.width, m.height)
 					m.overlay = overlayMsgOptions
 					return m, nil

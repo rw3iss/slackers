@@ -153,8 +153,8 @@ func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
 		}
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-			// Shifted up so click on visible button text activates it directly.
-			row := msg.Y - m.finalY - 2
+			// Shifted up another row to align with visible button text.
+			row := msg.Y - m.finalY - 3
 			debug.Log("[msgoptions] click at (%d,%d) finalY=%d row=%d items=%d", msg.X, msg.Y, m.finalY, row, len(msgOptionsItems))
 			if row >= 0 && row < len(msgOptionsItems) {
 				m.selected = row
