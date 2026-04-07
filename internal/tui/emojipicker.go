@@ -98,8 +98,8 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 
-	// Cell dimensions: emoji (2 chars wide) + padding gap after.
-	cellW := 2 + m.padding
+	// Cell dimensions: emoji (2 chars wide) + padding on each side.
+	cellW := 2 + 2*m.padding
 	innerW := min(60, w-8) - 6
 	maxCols := innerW / cellW
 	if maxCols < 4 {
@@ -110,7 +110,8 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 	}
 	m.gridCols = maxCols
 
-	rowH := 1 + m.padding
+	// Row height: 1 emoji line + padding above and below.
+	rowH := 1 + 2*m.padding
 	availH := min(h-4, 40) - 9
 	maxRows := availH / rowH
 	if maxRows < 3 {
@@ -128,8 +129,8 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 // computeLayout calculates the box position and grid/tab coordinates.
 // Mirrors the layout used by View so click hit-testing matches rendering.
 func (m *EmojiPickerModel) computeLayout() {
-	cellW := 2 + m.padding
-	boxInner := m.gridCols*cellW + m.padding/2
+	cellW := 2 + 2*m.padding
+	boxInner := m.gridCols * cellW
 
 	boxWidth := boxInner + 8
 	if boxWidth > m.width-4 {
@@ -460,8 +461,8 @@ func (m EmojiPickerModel) Update(msg tea.Msg) (EmojiPickerModel, tea.Cmd) {
 			}
 			// Grid cell click hit-test.
 			if msg.Y >= m.gridStartY && msg.X >= m.gridStartX {
-				cellW := 2 + m.padding
-				rowH := 1 + m.padding
+				cellW := 2 + 2*m.padding
+				rowH := 1 + 2*m.padding
 				dx := msg.X - m.gridStartX
 				dy := msg.Y - m.gridStartY
 				col := dx / cellW
@@ -546,23 +547,20 @@ func (m *EmojiPickerModel) View() string {
 	b.WriteString(strings.Repeat("─", boxInner))
 	b.WriteString("\n")
 
-	// Grid — padding: odd = gap after emoji, even = split before/after.
+	// Grid — uniform padding on all sides of each emoji cell.
 	items := m.currentItems()
 	if len(items) == 0 {
 		b.WriteString(dimStyle.Render("  (empty)"))
 		b.WriteString("\n")
 	} else {
-		// Horizontal: odd = extra gap after emoji. Vertical: odd = extra gap before emoji.
-		padBefore := m.padding / 2
-		padAfter := m.padding - padBefore
-		hBefore := strings.Repeat(" ", padBefore)
-		hAfter := strings.Repeat(" ", padAfter)
-		// Vertical: odd puts extra BEFORE the emoji so highlight extends above.
-		vAfter := m.padding / 2
-		vBefore := m.padding - vAfter
+		// Padding on all four sides.
+		hBefore := strings.Repeat(" ", m.padding)
+		hAfter := strings.Repeat(" ", m.padding)
+		vBefore := m.padding
+		vAfter := m.padding
 
 		// Full cell width for background fill on vertical padding lines.
-		fullCellW := 2 + m.padding // emoji width + total h-padding
+		fullCellW := 2 + 2*m.padding
 
 		for r := 0; r < m.gridRows; r++ {
 			rowStart := (m.scrollOff + r) * m.gridCols
