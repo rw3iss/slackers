@@ -49,10 +49,10 @@ func NewMsgOptions(messageID, preview string, x, y int) MsgOptionsModel {
 func (m *MsgOptionsModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	// Box: border(2) + content (title + items + blank + hint) + Padding(0,1) (h pad only).
-	// Content rows: 1 (title) + len(items) + 1 (blank) + 1 (hint) = len(items)+3
-	m.boxH = len(msgOptionsItems) + 3 + 2 // + 2 borders
-	m.boxW = 22
+	// Render a sample box to measure exact dimensions.
+	sample := m.renderBox()
+	m.boxH = strings.Count(sample, "\n") + 1
+	m.boxW = lipgloss.Width(sample)
 	m.finalX = m.x
 	m.finalY = m.y
 	if m.finalX+m.boxW > m.width {
@@ -69,9 +69,42 @@ func (m *MsgOptionsModel) SetSize(w, h int) {
 	}
 }
 
-// ClickInside returns true if the click coordinates are within the popup box.
+// ClickInside returns true if the click is within the popup box (with a 1-cell buffer).
+// Lenient buffer allows edge clicks on the border to still count as "inside".
 func (m MsgOptionsModel) ClickInside(x, y int) bool {
-	return x >= m.finalX && x < m.finalX+m.boxW && y >= m.finalY && y < m.finalY+m.boxH
+	const buffer = 1
+	return x >= m.finalX-buffer && x < m.finalX+m.boxW+buffer &&
+		y >= m.finalY-buffer && y < m.finalY+m.boxH+buffer
+}
+
+// renderBox renders the popup contents (used by both View and SetSize).
+func (m MsgOptionsModel) renderBox() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
+	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Options"))
+	b.WriteString("\n")
+	for i, item := range msgOptionsItems {
+		cursor := "  "
+		style := ChannelItemStyle
+		if i == m.selected {
+			cursor = "> "
+			style = ChannelSelectedStyle
+		}
+		b.WriteString(style.Render(cursor + item.label))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("↑↓ Enter Esc"))
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPrimary).
+		Padding(0, 1).
+		Width(18)
+
+	return boxStyle.Render(b.String())
 }
 
 var msgOptionsItems = []struct {
@@ -128,34 +161,7 @@ func (m MsgOptionsModel) Update(msg tea.Msg) (MsgOptionsModel, tea.Cmd) {
 // View renders a small box at the configured anchor position.
 // The box adjusts to stay within the screen bounds.
 func (m MsgOptionsModel) View(bgContent string) string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
-	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
-
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Options"))
-	b.WriteString("\n")
-	for i, item := range msgOptionsItems {
-		cursor := "  "
-		style := ChannelItemStyle
-		if i == m.selected {
-			cursor = "> "
-			style = ChannelSelectedStyle
-		}
-		b.WriteString(style.Render(cursor + item.label))
-		b.WriteString("\n")
-	}
-	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("↑↓ Enter Esc"))
-
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorPrimary).
-		Padding(0, 1).
-		Width(18)
-
-	box := boxStyle.Render(b.String())
-
-	// Use the precomputed final positions from SetSize.
+	box := m.renderBox()
 	boxLines := strings.Split(box, "\n")
 	posX := m.finalX
 	posY := m.finalY
