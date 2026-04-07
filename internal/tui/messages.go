@@ -94,7 +94,11 @@ type MessageViewModel struct {
 	// React mode — select a message to react to
 	reactMode       bool
 	reactIdx        int // index into messages
-	reactionSelIdx  int // -1 = no reaction selected; otherwise index into reactions of selected message
+	reactionSelIdx  int // -1 = none. 0..len(reactions)-1 = a reaction. len(reactions) = "reply list" virtual element (when parent has replies in inline mode)
+	// Inline-mode reply list navigation: when reactionSelIdx == len(reactions),
+	// the user is targeting the reply list. replyIdx selects an individual reply.
+	replyIdx            int // -1 = none, otherwise index into selected parent's Replies
+	replyReactionSelIdx int // -1 = none, otherwise index into selected reply's Reactions
 
 	// Thread view — viewing a single message + its replies
 	threadMode      bool
@@ -267,14 +271,42 @@ func (m *MessageViewModel) ReactionAtClick(x, y int) (string, string) {
 	return "", ""
 }
 
-// MessageReactions returns the reactions on the message at the given index in the cache.
+// MessageReactions returns the reactions on the message with the given ID.
+// Searches both top-level messages and nested replies.
 func (m *MessageViewModel) MessageReactions(messageID string) []types.Reaction {
-	for _, msg := range m.messages {
-		if msg.MessageID == messageID {
-			return msg.Reactions
+	if msg := m.findMessage(messageID); msg != nil {
+		return msg.Reactions
+	}
+	return nil
+}
+
+// findMessage returns a pointer to the message with the given ID, searching
+// both top-level messages and their replies. Returns nil if not found.
+func (m *MessageViewModel) findMessage(messageID string) *types.Message {
+	for i := range m.messages {
+		if m.messages[i].MessageID == messageID {
+			return &m.messages[i]
+		}
+		for j := range m.messages[i].Replies {
+			if m.messages[i].Replies[j].MessageID == messageID {
+				return &m.messages[i].Replies[j]
+			}
 		}
 	}
 	return nil
+}
+
+// findMessagePreview returns the message preview text for the given ID, or empty.
+func (m *MessageViewModel) findMessagePreview(messageID string) string {
+	msg := m.findMessage(messageID)
+	if msg == nil {
+		return ""
+	}
+	preview := msg.Text
+	if len(preview) > 40 {
+		preview = preview[:40] + "..."
+	}
+	return preview
 }
 
 // ReplyLineMessageID returns the parent message ID if the line clicked is a "X replies" line.
@@ -290,22 +322,13 @@ func (m *MessageViewModel) ReplyLineMessageID(y int) string {
 // FileAtClick returns the file at the given Y coordinate in the viewport, or nil.
 
 // MessageAtClick returns the message ID and preview at the given Y coordinate.
-// Uses the rendered line→message map for accurate resolution.
+// Uses the rendered line→message map for accurate resolution. Walks back from
+// the clicked line to find the closest preceding message header (parent or reply).
 func (m *MessageViewModel) MessageAtClick(y int) (string, string) {
 	absLine := y - 1 + m.viewport.YOffset
-	// Walk back from the clicked line to find the closest preceding header.
 	for i := absLine; i >= 0; i-- {
 		if id, ok := m.lineToMsgID[i]; ok {
-			// Find this message to get the preview.
-			for _, msg := range m.messages {
-				if msg.MessageID == id {
-					preview := msg.Text
-					if len(preview) > 40 {
-						preview = preview[:40] + "..."
-					}
-					return id, preview
-				}
-			}
+			return id, m.findMessagePreview(id)
 		}
 	}
 	return "", ""
@@ -347,71 +370,83 @@ func (m *MessageViewModel) ExitSelectMode() {
 	}
 }
 
-// AddReactionLocal optimistically adds a reaction to a message in the current view.
-// Returns true if the message was found and updated.
-func (m *MessageViewModel) AddReactionLocal(messageID, emoji, userID string) bool {
-	wasAtBottom := m.viewport.AtBottom()
-	for i := range m.messages {
-		if m.messages[i].MessageID != messageID {
+// addReactionTo mutates the given message to add a reaction from userID.
+// Returns false if the user already had this reaction (no-op).
+func addReactionTo(msg *types.Message, emoji, userID string) bool {
+	for j, r := range msg.Reactions {
+		if r.Emoji != emoji {
 			continue
 		}
-		found := false
-		for j, r := range m.messages[i].Reactions {
-			if r.Emoji == emoji {
-				// Don't double-add the same user.
-				for _, uid := range r.UserIDs {
-					if uid == userID {
-						return true
-					}
-				}
-				m.messages[i].Reactions[j].UserIDs = append(m.messages[i].Reactions[j].UserIDs, userID)
-				m.messages[i].Reactions[j].Count++
-				found = true
-				break
+		for _, uid := range r.UserIDs {
+			if uid == userID {
+				return false
 			}
 		}
-		if !found {
-			m.messages[i].Reactions = append(m.messages[i].Reactions, types.Reaction{
-				Emoji:   emoji,
-				UserIDs: []string{userID},
-				Count:   1,
-			})
-		}
-		m.rebuildContent()
-		// If we were at the bottom before, stay at the bottom after the
-		// new reaction line was added.
-		if wasAtBottom {
-			m.viewport.GotoBottom()
-		}
+		msg.Reactions[j].UserIDs = append(msg.Reactions[j].UserIDs, userID)
+		msg.Reactions[j].Count++
 		return true
+	}
+	msg.Reactions = append(msg.Reactions, types.Reaction{
+		Emoji:   emoji,
+		UserIDs: []string{userID},
+		Count:   1,
+	})
+	return true
+}
+
+// removeReactionFrom mutates the given message to remove userID's emoji reaction.
+// Returns true if a change was made.
+func removeReactionFrom(msg *types.Message, emoji, userID string) bool {
+	for j, r := range msg.Reactions {
+		if r.Emoji != emoji {
+			continue
+		}
+		for k, uid := range r.UserIDs {
+			if uid != userID {
+				continue
+			}
+			msg.Reactions[j].UserIDs = append(r.UserIDs[:k], r.UserIDs[k+1:]...)
+			msg.Reactions[j].Count--
+			if msg.Reactions[j].Count <= 0 {
+				msg.Reactions = append(msg.Reactions[:j], msg.Reactions[j+1:]...)
+			}
+			return true
+		}
 	}
 	return false
 }
 
-// RemoveReactionLocal removes a user's reaction from a message in the current view.
-func (m *MessageViewModel) RemoveReactionLocal(messageID, emoji, userID string) bool {
-	for i := range m.messages {
-		if m.messages[i].MessageID != messageID {
-			continue
-		}
-		for j, r := range m.messages[i].Reactions {
-			if r.Emoji != emoji {
-				continue
-			}
-			for k, uid := range r.UserIDs {
-				if uid == userID {
-					m.messages[i].Reactions[j].UserIDs = append(r.UserIDs[:k], r.UserIDs[k+1:]...)
-					m.messages[i].Reactions[j].Count--
-					if m.messages[i].Reactions[j].Count <= 0 {
-						m.messages[i].Reactions = append(m.messages[i].Reactions[:j], m.messages[i].Reactions[j+1:]...)
-					}
-					m.rebuildContent()
-					return true
-				}
-			}
-		}
+// AddReactionLocal optimistically adds a reaction to a message in the current view.
+// Searches both top-level messages and nested replies. Returns true on success.
+func (m *MessageViewModel) AddReactionLocal(messageID, emoji, userID string) bool {
+	wasAtBottom := m.viewport.AtBottom()
+	target := m.findMessage(messageID)
+	if target == nil {
+		return false
 	}
-	return false
+	if !addReactionTo(target, emoji, userID) {
+		// Already had this reaction; nothing to update.
+		return true
+	}
+	m.rebuildContent()
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
+	return true
+}
+
+// RemoveReactionLocal removes a user's reaction from a message in the current view.
+// Searches both top-level messages and nested replies.
+func (m *MessageViewModel) RemoveReactionLocal(messageID, emoji, userID string) bool {
+	target := m.findMessage(messageID)
+	if target == nil {
+		return false
+	}
+	if !removeReactionFrom(target, emoji, userID) {
+		return false
+	}
+	m.rebuildContent()
+	return true
 }
 
 // RemovePendingMatching removes any "pending-" messages that match the given text.
@@ -430,16 +465,35 @@ func (m *MessageViewModel) RemovePendingMatching(text string) {
 
 // EnterReactMode enters message selection mode for adding reactions.
 func (m *MessageViewModel) EnterReactMode() bool {
-	if len(m.messages) > 0 {
+	view := m.viewMessages()
+	if len(view) > 0 {
 		// Exit any other selection modes first.
 		m.selectMode = false
 		m.reactMode = true
-		m.reactIdx = len(m.messages) - 1
+		m.reactIdx = len(view) - 1
 		m.reactionSelIdx = -1
+		m.replyIdx = -1
+		m.replyReactionSelIdx = -1
 		m.rebuildContent()
 		return true
 	}
 	return false
+}
+
+// SelectedReplyMessageID returns the ID of the currently-selected inline reply,
+// or empty if none.
+func (m *MessageViewModel) SelectedReplyMessageID() string {
+	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(m.messages) {
+		return ""
+	}
+	parent := &m.messages[m.reactIdx]
+	if m.reactionSelIdx != len(parent.Reactions) {
+		return ""
+	}
+	if m.replyIdx < 0 || m.replyIdx >= len(parent.Replies) {
+		return ""
+	}
+	return parent.Replies[m.replyIdx].MessageID
 }
 
 // ExitReactMode exits react mode.
@@ -460,21 +514,37 @@ func (m *MessageViewModel) InSelectMode() bool {
 	return m.selectMode
 }
 
+// viewMessages returns the message slice currently displayed (thread view → parent+replies,
+// context mode → contextMessages, otherwise top-level m.messages).
+func (m *MessageViewModel) viewMessages() []types.Message {
+	if m.threadMode && m.threadParent != nil {
+		out := []types.Message{*m.threadParent}
+		out = append(out, m.threadParent.Replies...)
+		return out
+	}
+	if m.contextMode {
+		return m.contextMessages
+	}
+	return m.messages
+}
+
 // SelectedMessageID returns the MessageID of the currently selected message in react mode.
 func (m *MessageViewModel) SelectedMessageID() string {
-	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(m.messages) {
+	view := m.viewMessages()
+	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(view) {
 		return ""
 	}
-	return m.messages[m.reactIdx].MessageID
+	return view[m.reactIdx].MessageID
 }
 
 // scrollToReactCursor scrolls the viewport so the currently selected message
 // in react/select mode is visible.
 func (m *MessageViewModel) scrollToReactCursor() {
-	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(m.messages) {
+	view := m.viewMessages()
+	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(view) {
 		return
 	}
-	targetID := m.messages[m.reactIdx].MessageID
+	targetID := view[m.reactIdx].MessageID
 	if targetID == "" {
 		return
 	}
@@ -501,8 +571,27 @@ func (m *MessageViewModel) scrollToReactCursor() {
 }
 
 // SelectedMessage returns the currently selected message in react mode.
+// In thread mode this resolves through the displayed thread slice.
 func (m *MessageViewModel) SelectedMessage() *types.Message {
-	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(m.messages) {
+	view := m.viewMessages()
+	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(view) {
+		return nil
+	}
+	// Resolve back to a pointer in the underlying source (so mutations stick).
+	if m.threadMode && m.threadParent != nil {
+		if m.reactIdx == 0 {
+			// Parent: find by ID in m.messages so writes propagate.
+			if p := m.findMessage(m.threadParent.MessageID); p != nil {
+				return p
+			}
+		} else {
+			replyIdx := m.reactIdx - 1
+			if replyIdx >= 0 && replyIdx < len(m.threadParent.Replies) {
+				if r := m.findMessage(m.threadParent.Replies[replyIdx].MessageID); r != nil {
+					return r
+				}
+			}
+		}
 		return nil
 	}
 	return &m.messages[m.reactIdx]
@@ -649,51 +738,150 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 
 		// React mode navigation.
 		if m.reactMode {
+			view := m.viewMessages()
+			sel := m.SelectedMessage()
+			// Whether the parent has an inline reply list (a virtual sub-element after reactions).
+			// Disabled in thread mode since replies are first-class items there.
+			hasInlineReplies := !m.threadMode && sel != nil && m.replyFormat == "inline" && len(sel.Replies) > 0 && !m.collapsedReplies[sel.MessageID]
+			subElems := 0
+			if sel != nil {
+				subElems = len(sel.Reactions)
+				if hasInlineReplies {
+					subElems++ // virtual "reply list" element
+				}
+			}
+			onReplyList := sel != nil && hasInlineReplies && m.reactionSelIdx == len(sel.Reactions)
+
 			switch keyMsg.String() {
 			case "up":
+				// If reply list is active and a reply is selected, navigate within replies.
+				if onReplyList && m.replyIdx > 0 {
+					m.replyIdx--
+					m.replyReactionSelIdx = -1
+					m.rebuildContent()
+					return m, nil
+				}
+				if onReplyList && m.replyIdx == 0 {
+					// Move out of reply list back to parent navigation.
+					m.replyIdx = -1
+					m.reactionSelIdx = -1
+					m.rebuildContent()
+					return m, nil
+				}
 				if m.reactIdx > 0 {
 					m.reactIdx--
 					m.reactionSelIdx = -1
+					m.replyIdx = -1
+					m.replyReactionSelIdx = -1
 					m.rebuildContent()
 					m.scrollToReactCursor()
 				}
 				return m, nil
 			case "down":
-				if m.reactIdx < len(m.messages)-1 {
+				if onReplyList {
+					if m.replyIdx < 0 {
+						m.replyIdx = 0
+					} else if m.replyIdx < len(sel.Replies)-1 {
+						m.replyIdx++
+					}
+					m.replyReactionSelIdx = -1
+					m.rebuildContent()
+					return m, nil
+				}
+				if m.reactIdx < len(view)-1 {
 					m.reactIdx++
 					m.reactionSelIdx = -1
+					m.replyIdx = -1
+					m.replyReactionSelIdx = -1
 					m.rebuildContent()
 					m.scrollToReactCursor()
 				}
 				return m, nil
 			case "left":
-				sel := m.SelectedMessage()
-				if sel != nil && len(sel.Reactions) > 0 {
+				// On a selected reply: cycle its own reactions.
+				if onReplyList && m.replyIdx >= 0 && m.replyIdx < len(sel.Replies) {
+					reply := sel.Replies[m.replyIdx]
+					if len(reply.Reactions) > 0 {
+						if m.replyReactionSelIdx <= 0 {
+							m.replyReactionSelIdx = len(reply.Reactions) - 1
+						} else {
+							m.replyReactionSelIdx--
+						}
+						m.rebuildContent()
+					}
+					return m, nil
+				}
+				if sel != nil && subElems > 0 {
 					if m.reactionSelIdx <= 0 {
-						m.reactionSelIdx = len(sel.Reactions) - 1
+						m.reactionSelIdx = subElems - 1
 					} else {
 						m.reactionSelIdx--
+					}
+					if !(hasInlineReplies && m.reactionSelIdx == len(sel.Reactions)) {
+						m.replyIdx = -1
+						m.replyReactionSelIdx = -1
 					}
 					m.rebuildContent()
 				}
 				return m, nil
 			case "right":
-				sel := m.SelectedMessage()
-				if sel != nil && len(sel.Reactions) > 0 {
-					if m.reactionSelIdx >= len(sel.Reactions)-1 {
+				if onReplyList && m.replyIdx >= 0 && m.replyIdx < len(sel.Replies) {
+					reply := sel.Replies[m.replyIdx]
+					if len(reply.Reactions) > 0 {
+						if m.replyReactionSelIdx >= len(reply.Reactions)-1 {
+							m.replyReactionSelIdx = 0
+						} else {
+							m.replyReactionSelIdx++
+						}
+						m.rebuildContent()
+					}
+					return m, nil
+				}
+				if sel != nil && subElems > 0 {
+					if m.reactionSelIdx >= subElems-1 {
 						m.reactionSelIdx = 0
 					} else {
 						m.reactionSelIdx++
+					}
+					if !(hasInlineReplies && m.reactionSelIdx == len(sel.Reactions)) {
+						m.replyIdx = -1
+						m.replyReactionSelIdx = -1
 					}
 					m.rebuildContent()
 				}
 				return m, nil
 			case "enter":
-				// If a reaction is selected, toggle it via parent model.
-				selR := m.SelectedMessage()
-				if selR != nil && m.reactionSelIdx >= 0 && m.reactionSelIdx < len(selR.Reactions) {
-					emoji := selR.Reactions[m.reactionSelIdx].Emoji
-					msgID := selR.MessageID
+				// If a reply-reaction is selected, toggle it.
+				if onReplyList && m.replyIdx >= 0 && m.replyIdx < len(sel.Replies) {
+					reply := sel.Replies[m.replyIdx]
+					if m.replyReactionSelIdx >= 0 && m.replyReactionSelIdx < len(reply.Reactions) {
+						emoji := reply.Reactions[m.replyReactionSelIdx].Emoji
+						msgID := reply.MessageID
+						m.reactMode = false
+						m.reactionSelIdx = -1
+						m.replyIdx = -1
+						m.replyReactionSelIdx = -1
+						m.rebuildContent()
+						return m, func() tea.Msg {
+							return ToggleReactionMsg{MessageID: msgID, Emoji: emoji}
+						}
+					}
+					// Enter on a reply with no reaction selected → start a reply to it.
+					msgID := reply.MessageID
+					preview := reply.Text
+					if len(preview) > 40 {
+						preview = preview[:40] + "..."
+					}
+					m.reactMode = false
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return ReplyToMessageMsg{MessageID: msgID, Preview: preview}
+					}
+				}
+				// Parent reaction selected → toggle it.
+				if sel != nil && m.reactionSelIdx >= 0 && m.reactionSelIdx < len(sel.Reactions) {
+					emoji := sel.Reactions[m.reactionSelIdx].Emoji
+					msgID := sel.MessageID
 					m.reactMode = false
 					m.reactionSelIdx = -1
 					m.rebuildContent()
@@ -701,10 +889,7 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 						return ToggleReactionMsg{MessageID: msgID, Emoji: emoji}
 					}
 				}
-				// Enter on a message:
-				// - inside mode + has replies → enter thread view
-				// - otherwise → start reply mode (insert [REPLY:id] in input)
-				sel := m.SelectedMessage()
+				// Enter on a parent message:
 				if sel == nil {
 					return m, nil
 				}
@@ -725,14 +910,36 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					return ReplyToMessageMsg{MessageID: msgID, Preview: preview}
 				}
 			case "r":
-				// 'r' opens emoji picker for reaction.
-				msgID := m.SelectedMessageID()
+				// 'r' opens emoji picker for reaction. Target is the selected reply
+				// (if any) or the parent message.
+				msgID := m.SelectedReplyMessageID()
+				if msgID == "" {
+					msgID = m.SelectedMessageID()
+				}
 				m.reactMode = false
 				m.rebuildContent()
 				return m, func() tea.Msg {
 					return ReactModeSelectMsg{MessageID: msgID}
 				}
 			case "esc":
+				// Esc unwinds: reply-reaction → reply → reactionSelIdx → exit react mode.
+				if onReplyList && m.replyReactionSelIdx >= 0 {
+					m.replyReactionSelIdx = -1
+					m.rebuildContent()
+					return m, nil
+				}
+				if onReplyList && m.replyIdx >= 0 {
+					m.replyIdx = -1
+					m.rebuildContent()
+					return m, nil
+				}
+				if m.reactionSelIdx >= 0 {
+					m.reactionSelIdx = -1
+					m.replyIdx = -1
+					m.replyReactionSelIdx = -1
+					m.rebuildContent()
+					return m, nil
+				}
 				m.reactMode = false
 				m.rebuildContent()
 				return m, nil
@@ -1117,17 +1324,70 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		if m.replyFormat == "inline" && replyCount > 0 && !m.collapsedReplies[msg.MessageID] {
 			replyIndent := "        "
 			replyHeaderStyle := lipgloss.NewStyle().Foreground(ColorMuted)
-			for _, reply := range msg.Replies {
+			reactionStyle := lipgloss.NewStyle().
+				Background(lipgloss.Color("236")).
+				Foreground(lipgloss.Color("252")).
+				Padding(0, 1)
+			selectedReactionStyle := lipgloss.NewStyle().
+				Background(lipgloss.Color("240")).
+				Foreground(ColorPrimary).
+				Bold(true).
+				Padding(0, 1)
+			// Highlight when this parent message has its reply list active.
+			replyListActive := m.reactMode && i == m.reactIdx && m.reactionSelIdx == len(msg.Reactions) && replyCount > 0
+			for ri, reply := range msg.Replies {
 				rTime := reply.Timestamp.Format("15:04")
 				rName := reply.UserName
 				if rName == "" {
 					rName = reply.UserID
 				}
+				// Track this reply's header line for click → reply resolution.
+				if reply.MessageID != "" {
+					m.lineToMsgID[len(lines)] = reply.MessageID
+				}
 				header := replyHeaderStyle.Render(fmt.Sprintf("↳ %s %s", rName, rTime))
+				if replyListActive && ri == m.replyIdx {
+					selectHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
+					header = selectHighlight.Render(header + " [r: react  Esc: back]")
+				}
 				lines = append(lines, replyIndent+header)
 				rText := format.FormatMessage(reply.Text, m.users)
 				for _, rLine := range strings.Split(rText, "\n") {
 					lines = append(lines, replyIndent+"  "+rLine)
+				}
+				// Reactions row for this reply.
+				if len(reply.Reactions) > 0 {
+					var parts []string
+					var widths []int
+					for rj, r := range reply.Reactions {
+						emoji := r.Emoji
+						if e, ok := emojiLookup[r.Emoji]; ok {
+							emoji = e
+						}
+						var rendered string
+						if replyListActive && ri == m.replyIdx && rj == m.replyReactionSelIdx {
+							rendered = selectedReactionStyle.Render(fmt.Sprintf("%s %d", emoji, r.Count))
+						} else {
+							rendered = reactionStyle.Render(fmt.Sprintf("%s %d", emoji, r.Count))
+						}
+						parts = append(parts, rendered)
+						widths = append(widths, lipgloss.Width(rendered))
+					}
+					// reactions sit indented under the reply text body.
+					reactionLineCol := len(replyIndent) + 2
+					currentLine := len(lines)
+					col := reactionLineCol
+					for k, w := range widths {
+						m.reactionHits = append(m.reactionHits, reactionHit{
+							messageID: reply.MessageID,
+							emoji:     reply.Reactions[k].Emoji,
+							line:      currentLine,
+							startCol:  col,
+							endCol:    col + w,
+						})
+						col += w + 1
+					}
+					lines = append(lines, replyIndent+"  "+strings.Join(parts, " "))
 				}
 			}
 		}

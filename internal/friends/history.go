@@ -207,72 +207,81 @@ func (s *ChatHistoryStore) AppendReply(userID, parentMsgID string, reply types.M
 	}
 }
 
+// findMsgPtr returns a pointer to the message with the given ID, searching
+// both top-level messages and their nested replies.
+func findMsgPtr(msgs []types.Message, messageID string) *types.Message {
+	for i := range msgs {
+		if msgs[i].MessageID == messageID {
+			return &msgs[i]
+		}
+		for j := range msgs[i].Replies {
+			if msgs[i].Replies[j].MessageID == messageID {
+				return &msgs[i].Replies[j]
+			}
+		}
+	}
+	return nil
+}
+
 // RemoveReaction removes a user's reaction from a message in the cache.
+// Searches both top-level messages and nested replies.
 func (s *ChatHistoryStore) RemoveReaction(userID, messageID, emoji, reactUserID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	msgs := s.cache[userID]
-	for i, msg := range msgs {
-		if msg.MessageID != messageID {
+	target := findMsgPtr(s.cache[userID], messageID)
+	if target == nil {
+		return
+	}
+	for j, r := range target.Reactions {
+		if r.Emoji != emoji {
 			continue
 		}
-		for j, r := range msg.Reactions {
-			if r.Emoji != emoji {
+		for k, uid := range r.UserIDs {
+			if uid != reactUserID {
 				continue
 			}
-			for k, uid := range r.UserIDs {
-				if uid == reactUserID {
-					msgs[i].Reactions[j].UserIDs = append(r.UserIDs[:k], r.UserIDs[k+1:]...)
-					msgs[i].Reactions[j].Count--
-					if msgs[i].Reactions[j].Count <= 0 {
-						msgs[i].Reactions = append(msgs[i].Reactions[:j], msgs[i].Reactions[j+1:]...)
-					}
-					s.dirty[userID] = true
-					return
-				}
+			target.Reactions[j].UserIDs = append(r.UserIDs[:k], r.UserIDs[k+1:]...)
+			target.Reactions[j].Count--
+			if target.Reactions[j].Count <= 0 {
+				target.Reactions = append(target.Reactions[:j], target.Reactions[j+1:]...)
 			}
+			s.dirty[userID] = true
+			return
 		}
 	}
 }
 
 // UpdateReaction adds or updates a reaction on a message in the cache.
+// Searches both top-level messages and nested replies.
 func (s *ChatHistoryStore) UpdateReaction(userID, messageID, emoji, reactUserID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	msgs := s.cache[userID]
-	for i, msg := range msgs {
-		if msg.MessageID == messageID {
-			found := false
-			for j, r := range msg.Reactions {
-				if r.Emoji == emoji {
-					// Add user to existing reaction if not already there.
-					for _, uid := range r.UserIDs {
-						if uid == reactUserID {
-							found = true
-							break
-						}
-					}
-					if !found {
-						msgs[i].Reactions[j].UserIDs = append(msgs[i].Reactions[j].UserIDs, reactUserID)
-						msgs[i].Reactions[j].Count++
-					}
-					found = true
-					break
-				}
-			}
-			if !found {
-				msgs[i].Reactions = append(msgs[i].Reactions, types.Reaction{
-					Emoji:   emoji,
-					UserIDs: []string{reactUserID},
-					Count:   1,
-				})
-			}
-			s.dirty[userID] = true
-			break
-		}
+	target := findMsgPtr(s.cache[userID], messageID)
+	if target == nil {
+		return
 	}
+	for j, r := range target.Reactions {
+		if r.Emoji != emoji {
+			continue
+		}
+		for _, uid := range r.UserIDs {
+			if uid == reactUserID {
+				return
+			}
+		}
+		target.Reactions[j].UserIDs = append(target.Reactions[j].UserIDs, reactUserID)
+		target.Reactions[j].Count++
+		s.dirty[userID] = true
+		return
+	}
+	target.Reactions = append(target.Reactions, types.Reaction{
+		Emoji:   emoji,
+		UserIDs: []string{reactUserID},
+		Count:   1,
+	})
+	s.dirty[userID] = true
 }
 
 // --- Encryption helpers ---

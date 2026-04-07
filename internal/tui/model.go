@@ -1778,25 +1778,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.friendHistory != nil {
 				m.friendHistory.UpdateReaction(msg.SenderID, targetMsgID, emoji, msg.SenderID)
 			}
-			// Update in-memory cache too.
+			// Update in-memory cache too (walks nested replies).
 			if msgs, ok := m.friendMessages[msg.SenderID]; ok {
-				for i, m2 := range msgs {
-					if m2.MessageID == targetMsgID {
-						found := false
-						for j, r := range m2.Reactions {
-							if r.Emoji == emoji {
-								msgs[i].Reactions[j].Count++
-								msgs[i].Reactions[j].UserIDs = append(msgs[i].Reactions[j].UserIDs, msg.SenderID)
-								found = true
-								break
-							}
+				if target := findFriendMsgPtr(msgs, targetMsgID); target != nil {
+					found := false
+					for j, r := range target.Reactions {
+						if r.Emoji == emoji {
+							target.Reactions[j].Count++
+							target.Reactions[j].UserIDs = append(target.Reactions[j].UserIDs, msg.SenderID)
+							found = true
+							break
 						}
-						if !found {
-							msgs[i].Reactions = append(msgs[i].Reactions, types.Reaction{
-								Emoji: emoji, UserIDs: []string{msg.SenderID}, Count: 1,
-							})
-						}
-						break
+					}
+					if !found {
+						target.Reactions = append(target.Reactions, types.Reaction{
+							Emoji: emoji, UserIDs: []string{msg.SenderID}, Count: 1,
+						})
 					}
 				}
 				// Refresh view if we're looking at this channel.
@@ -2581,26 +2578,38 @@ func (m *Model) toggleReaction(messageID, emoji string) {
 	}
 }
 
+// findFriendMsgPtr returns a pointer to a friend message by ID, walking nested replies.
+func findFriendMsgPtr(msgs []types.Message, messageID string) *types.Message {
+	for i := range msgs {
+		if msgs[i].MessageID == messageID {
+			return &msgs[i]
+		}
+		for j := range msgs[i].Replies {
+			if msgs[i].Replies[j].MessageID == messageID {
+				return &msgs[i].Replies[j]
+			}
+		}
+	}
+	return nil
+}
+
 // addLocalReaction updates in-memory friend message reactions and refreshes the view.
 func (m *Model) addLocalReaction(friendUID, messageID, emoji string) {
 	msgs := m.friendMessages[friendUID]
-	for i, msg := range msgs {
-		if msg.MessageID == messageID {
-			found := false
-			for j, r := range msg.Reactions {
-				if r.Emoji == emoji {
-					msgs[i].Reactions[j].Count++
-					msgs[i].Reactions[j].UserIDs = append(msgs[i].Reactions[j].UserIDs, "me")
-					found = true
-					break
-				}
+	if target := findFriendMsgPtr(msgs, messageID); target != nil {
+		found := false
+		for j, r := range target.Reactions {
+			if r.Emoji == emoji {
+				target.Reactions[j].Count++
+				target.Reactions[j].UserIDs = append(target.Reactions[j].UserIDs, "me")
+				found = true
+				break
 			}
-			if !found {
-				msgs[i].Reactions = append(msgs[i].Reactions, types.Reaction{
-					Emoji: emoji, UserIDs: []string{"me"}, Count: 1,
-				})
-			}
-			break
+		}
+		if !found {
+			target.Reactions = append(target.Reactions, types.Reaction{
+				Emoji: emoji, UserIDs: []string{"me"}, Count: 1,
+			})
 		}
 	}
 	friendChID := "friend:" + friendUID
