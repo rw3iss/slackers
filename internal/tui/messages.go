@@ -302,6 +302,8 @@ func (m *MessageViewModel) ExitSelectMode() {
 // EnterReactMode enters message selection mode for adding reactions.
 func (m *MessageViewModel) EnterReactMode() bool {
 	if len(m.messages) > 0 {
+		// Exit any other selection modes first.
+		m.selectMode = false
 		m.reactMode = true
 		m.reactIdx = len(m.messages) - 1
 		m.rebuildContent()
@@ -390,6 +392,8 @@ func (m *MessageViewModel) ToggleReplyCollapse(msgID string) {
 // EnterFileSelectMode activates file selection if there are files available.
 func (m *MessageViewModel) EnterFileSelectMode() bool {
 	if len(m.selectables) > 0 {
+		// Exit any other selection modes first.
+		m.reactMode = false
 		m.selectMode = true
 		m.selectIdx = len(m.selectables) - 1
 		m.rebuildContent()
@@ -416,6 +420,7 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 			if len(m.selectables) > 0 {
 				m.selectMode = !m.selectMode
 				if m.selectMode {
+					m.reactMode = false // exit react mode if active
 					m.selectIdx = len(m.selectables) - 1
 				}
 				m.rebuildContent()
