@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -375,11 +377,42 @@ func (m *FriendsConfigModel) buildContactJSON() {
 }
 
 func (m FriendsConfigModel) handleShareInfoKey(msg tea.KeyMsg) (FriendsConfigModel, tea.Cmd) {
-	if msg.String() == "esc" {
+	switch msg.String() {
+	case "esc":
 		m.page = fcPageMenu
 		m.selected = 2
+	case "enter":
+		if copyToClipboard(m.contactJSON) {
+			m.message = "Copied to clipboard!"
+		} else {
+			m.message = "Could not copy — select the text manually"
+		}
 	}
 	return m, nil
+}
+
+// copyToClipboard attempts to copy text to the system clipboard.
+func copyToClipboard(text string) bool {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "windows":
+		cmd = exec.Command("clip")
+	default: // linux/bsd
+		// Try xclip first, fall back to xsel.
+		if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		} else if _, err := exec.LookPath("xsel"); err == nil {
+			cmd = exec.Command("xsel", "--clipboard", "--input")
+		} else if _, err := exec.LookPath("wl-copy"); err == nil {
+			cmd = exec.Command("wl-copy")
+		} else {
+			return false
+		}
+	}
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run() == nil
 }
 
 // --- Add a Friend page ---
@@ -892,13 +925,19 @@ func (m FriendsConfigModel) viewShareInfo() string {
 	b.WriteString("\n\n")
 	b.WriteString(dimStyle.Render("  Share this JSON with friends so they can add you:"))
 	b.WriteString("\n\n")
-	b.WriteString(codeStyle.Render(m.contactJSON))
-	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("  Copy the above JSON and send it to your friend."))
+	// Render JSON lines individually to avoid lipgloss wrapping.
+	for _, line := range strings.Split(m.contactJSON, "\n") {
+		b.WriteString(codeStyle.Render(line))
+		b.WriteString("\n")
+	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  They can paste it in: Friends Config > Add a Friend > Ctrl-J"))
-	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("  Esc: back"))
+	if m.message != "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.message))
+		b.WriteString("\n")
+	}
+	b.WriteString(dimStyle.Render("  Enter: copy to clipboard | Esc: back"))
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("  Send this to a friend. They paste it with Ctrl-J in Add a Friend."))
 
 	return m.renderBox(b.String())
 }
