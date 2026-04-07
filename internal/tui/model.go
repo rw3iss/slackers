@@ -1614,6 +1614,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				replyToID = rm[1]
 				text = strings.TrimSpace(replyPattern.ReplaceAllString(text, ""))
 			}
+			// If no explicit reply marker but the user is in thread view,
+			// implicitly direct the message at the thread parent.
+			if replyToID == "" && m.messages.InThreadMode() {
+				replyToID = m.messages.ThreadParentID()
+			}
 
 			// Friend channel — send via P2P, not Slack.
 			if m.currentCh.IsFriend && m.p2pNode != nil {
