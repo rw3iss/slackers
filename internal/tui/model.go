@@ -947,7 +947,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.currentCh != nil {
 					chID = m.currentCh.ID
 				}
-				m.msgSearch = NewMsgSearchModel(m.slackSvc, chID, m.resolveChannelDisplay)
+				m.msgSearch = NewMsgSearchModel(m.slackSvc, m.friendStore, m.friendHistory, chID, m.resolveChannelDisplay)
 				m.msgSearch.SetSize(m.width, m.height)
 				m.overlay = overlayMsgSearch
 			}
@@ -1483,6 +1483,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgSearchSelectMsg:
 		m.overlay = overlayNone
+		// Friend-chat results: the ID is "friend:<uid>", the
+		// full history is already local, so we just switch to
+		// that friend chat rather than calling Slack's context
+		// API (which would return channel_not_found).
+		if strings.HasPrefix(msg.ChannelID, "friend:") {
+			friendUID := strings.TrimPrefix(msg.ChannelID, "friend:")
+			for _, ch := range m.channels.AllChannels() {
+				if ch.ID == msg.ChannelID {
+					m.currentCh = &ch
+					m.channels.SelectByID(ch.ID)
+					m.channels.ClearUnread(ch.ID)
+					m.clearChannelNotifs(ch.ID)
+					m.setChannelHeader()
+					m.saveLastChannel(ch.ID)
+					break
+				}
+			}
+			m.loadFriendHistory(friendUID)
+			m.focus = types.FocusMessages
+			m.updateFocus()
+			return m, nil
+		}
 		channelName := ""
 		if m.currentCh == nil || m.currentCh.ID != msg.ChannelID {
 			for _, ch := range m.channels.AllChannels() {
