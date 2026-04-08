@@ -174,6 +174,22 @@ Task 2 `handlers_p2p.go` extraction and Task 3 (OverlayScaffold) are left as fol
 - `model.go` shrank from 5,849 → 5,261 lines (−588). Combined with the `cmds.go` extraction earlier this session, `model.go` is down from ~6,200 → 5,261 lines total, a ~15% reduction.
 - Verification: `go build ./...`, `go vet ./...`, `make build` all clean.
 
+### Task 2 (continued) — persist.go + handlers_ui.go extractions — ✅ complete
+
+- **`persist.go`** (41 lines): small pass to relocate `saveLastChannel`, `loadLastSeen`, `persistLastSeen` — the thin wrappers around `config.SaveDebounced`. Committed as a self-contained change.
+- **`handlers_ui.go`** (457 lines): extracted the UI-layer interaction methods `applySettings`, `resizeComponents`, `handleOverlayMouse`, `handleMouse`, `cycleFocusForward`, `cycleFocusBackward`, `updateFocus`. Everything that deals with how the user interacts with the chrome (resize, focus cycling, mouse clicks) now lives in one file. `handleMouse` was the biggest win — ~270 lines of branchy click dispatching that were crowding the middle of model.go.
+- Left in model.go for later: `renderStatusBar`, `settingsCogClickArea`, `buildSidebarOptionsItems`, `buildChannelIndex`, `resolveChannelDisplay`, `expandFriendMarkers`, `activateNotification`, and the Slack message methods (`editMessage`, `toggleReaction`, `confirmMessageDelete`, etc.). Those cluster into `handlers_slack.go` for a future pass.
+- Line count: model.go is now **4,794 lines** (down from ~6,200 at the start of Phase C — a 23% reduction). Across this session so far the split is:
+  ```
+  4794 internal/tui/model.go
+   610 internal/tui/handlers_p2p.go
+   457 internal/tui/handlers_ui.go
+   373 internal/tui/cmds.go
+   176 internal/tui/selectablelist.go
+    41 internal/tui/persist.go
+  ```
+- Verification: `go build ./...`, `go vet ./...`, `make build` all clean; binary installed to `~/.local/bin/slackers`.
+
 ### Task 3 — OverlayScaffold — deferred
 
 Not attempted in this pass. Reason: after Task 1 + Task 2 landed I was at a good stopping point and the `OverlayScaffold` migration would have touched another 3+ files with visual risk. Picking it up fresh in a dedicated session is safer than rushing the tail of this one. The `OverlayBox` helper added during Phase A remains available as the foundation for that future refactor.
