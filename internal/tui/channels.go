@@ -28,22 +28,63 @@ type sidebarRow struct {
 
 // ChannelListModel represents the sidebar channel list.
 type ChannelListModel struct {
-	channels    []types.Channel
-	rows        []sidebarRow // computed: headers + channels interleaved
-	selected    int
-	scrollOff   int
-	unread      map[string]bool
-	hidden      map[string]bool
-	showHidden  bool
-	aliases     map[string]string
-	latestTS    map[string]string
-	collapsed   map[string]bool // headerKey -> collapsed
-	sortBy      string
-	sortAsc     bool
-	focused     bool
-	width       int
-	height      int
-	itemSpacing int // empty lines after each item / header (0..3)
+	channels []types.Channel
+	rows     []sidebarRow // computed: headers + channels interleaved
+	// rowIndexByID maps a channel ID to its index into rows. Built
+	// by buildRows so SelectByID is O(1) instead of an O(n) scan.
+	// Headers do not appear in this map.
+	rowIndexByID map[string]int
+	selected     int
+	scrollOff    int
+	unread       map[string]bool
+	hidden       map[string]bool
+	showHidden   bool
+	aliases      map[string]string
+	latestTS     map[string]string
+	collapsed    map[string]bool // headerKey -> collapsed
+	sortBy       string
+	sortAsc      bool
+	focused      bool
+	width        int
+	height       int
+	itemSpacing  int // empty lines after each item / header (0..3)
+
+	// bulkUpdate > 0 suspends the automatic buildRows() call at
+	// the end of every setter. BeginBulk / EndBulk wrap a chunk
+	// of setters (used by ChannelsLoadedMsg which applies
+	// channels + friends + hidden + aliases + collapsed + sort
+	// in a single message) so the sidebar is only rebuilt once
+	// at the end instead of once per setter.
+	bulkUpdate int
+}
+
+// BeginBulkUpdate suspends automatic buildRows() calls until a
+// matching EndBulkUpdate. Pair calls 1:1 — nesting is supported via
+// an internal counter. Use when applying multiple channel-list
+// setters back-to-back so the sidebar doesn't get rebuilt for each.
+func (m *ChannelListModel) BeginBulkUpdate() {
+	m.bulkUpdate++
+}
+
+// EndBulkUpdate decrements the bulk counter and forces a single
+// buildRows() on the final call. Always call in a defer or pair it
+// with BeginBulkUpdate to avoid leaving buildRows suppressed.
+func (m *ChannelListModel) EndBulkUpdate() {
+	if m.bulkUpdate > 0 {
+		m.bulkUpdate--
+	}
+	if m.bulkUpdate == 0 {
+		m.buildRows()
+	}
+}
+
+// rebuild runs buildRows unless we're inside a bulk update, in which
+// case it's deferred until EndBulkUpdate.
+func (m *ChannelListModel) rebuild() {
+	if m.bulkUpdate > 0 {
+		return
+	}
+	m.buildRows()
 }
 
 // SetItemSpacing sets the number of blank lines rendered after every
@@ -61,19 +102,20 @@ func (m *ChannelListModel) SetItemSpacing(n int) {
 // NewChannelList creates a new channel list model.
 func NewChannelList() ChannelListModel {
 	return ChannelListModel{
-		unread:    make(map[string]bool),
-		hidden:    make(map[string]bool),
-		aliases:   make(map[string]string),
-		latestTS:  make(map[string]string),
-		collapsed: make(map[string]bool),
-		sortBy:    SortByType,
-		sortAsc:   true,
+		unread:       make(map[string]bool),
+		hidden:       make(map[string]bool),
+		aliases:      make(map[string]string),
+		latestTS:     make(map[string]string),
+		collapsed:    make(map[string]bool),
+		rowIndexByID: make(map[string]int),
+		sortBy:       SortByType,
+		sortAsc:      true,
 	}
 }
 
 func (m *ChannelListModel) SetChannels(channels []types.Channel) {
 	m.channels = channels
-	m.buildRows()
+	m.rebuild()
 }
 
 // SetFriendChannels sets the friend channels that render at the top of the sidebar.
@@ -87,7 +129,7 @@ func (m *ChannelListModel) SetFriendChannels(friends []types.Channel) {
 	}
 	// Prepend friends so they appear first.
 	m.channels = append(friends, workspace...)
-	m.buildRows()
+	m.rebuild()
 }
 
 func (m *ChannelListModel) SetSize(w, h int) {
@@ -133,7 +175,7 @@ func (m *ChannelListModel) SetCollapsedGroups(keys []string) {
 	for _, k := range keys {
 		m.collapsed[k] = true
 	}
-	m.buildRows()
+	m.rebuild()
 }
 
 // CollapsedGroups returns the list of collapsed section keys.
@@ -155,6 +197,7 @@ func (m *ChannelListModel) ToggleCollapse(headerKey string) {
 func (m *ChannelListModel) SetSort(sortBy string, ascending bool) {
 	m.sortBy = sortBy
 	m.sortAsc = ascending
+	m.rebuild()
 }
 
 // ToggleShowHidden toggles whether hidden channels are shown inline.
@@ -221,6 +264,11 @@ func (m *ChannelListModel) displayName(ch types.Channel) string {
 }
 
 // visibleChannels returns channels in display order, respecting hide/sort.
+// The sort comparators previously called strings.ToLower(displayName(...))
+// twice per comparison, allocating fresh strings on every compare. We now
+// precompute the lowercase name once per filtered entry and use the
+// precomputed value from the closures, which cuts sort allocations from
+// O(n log n) strings to O(n).
 func (m *ChannelListModel) visibleChannels() []types.Channel {
 	var filtered []types.Channel
 	for _, ch := range m.channels {
@@ -230,20 +278,38 @@ func (m *ChannelListModel) visibleChannels() []types.Channel {
 		filtered = append(filtered, ch)
 	}
 
+	// Precompute lowercase display names parallel to filtered.
+	// Only build this slice for sort modes that actually need it.
+	var lowerNames []string
+	needsLower := m.sortBy == SortByName || m.sortBy == SortByType
+	if needsLower {
+		lowerNames = make([]string, len(filtered))
+		for i := range filtered {
+			lowerNames[i] = strings.ToLower(m.displayName(filtered[i]))
+		}
+	}
+	// When we swap entries during sort we have to keep lowerNames
+	// in lockstep. sort.SliceStable doesn't expose a Swap hook, so
+	// we build an index slice, sort THAT, and then emit the result.
+	idx := make([]int, len(filtered))
+	for i := range idx {
+		idx[i] = i
+	}
+
 	switch m.sortBy {
 	case SortByName:
-		sort.SliceStable(filtered, func(i, j int) bool {
-			a := strings.ToLower(m.displayName(filtered[i]))
-			b := strings.ToLower(m.displayName(filtered[j]))
+		sort.SliceStable(idx, func(i, j int) bool {
+			a := lowerNames[idx[i]]
+			b := lowerNames[idx[j]]
 			if m.sortAsc {
 				return a < b
 			}
 			return a > b
 		})
 	case SortByRecent:
-		sort.SliceStable(filtered, func(i, j int) bool {
-			tsI := m.latestTS[filtered[i].ID]
-			tsJ := m.latestTS[filtered[j].ID]
+		sort.SliceStable(idx, func(i, j int) bool {
+			tsI := m.latestTS[filtered[idx[i]].ID]
+			tsJ := m.latestTS[filtered[idx[j]].ID]
 			if tsI == "" {
 				tsI = "0"
 			}
@@ -256,22 +322,24 @@ func (m *ChannelListModel) visibleChannels() []types.Channel {
 			return tsI > tsJ // newest first (most useful default)
 		})
 	default: // SortByType
-		sort.SliceStable(filtered, func(i, j int) bool {
-			oi := channelSortOrder(filtered[i])
-			oj := channelSortOrder(filtered[j])
+		sort.SliceStable(idx, func(i, j int) bool {
+			oi := channelSortOrder(filtered[idx[i]])
+			oj := channelSortOrder(filtered[idx[j]])
 			if oi != oj {
 				if m.sortAsc {
 					return oi < oj
 				}
 				return oi > oj
 			}
-			a := strings.ToLower(m.displayName(filtered[i]))
-			b := strings.ToLower(m.displayName(filtered[j]))
-			return a < b
+			return lowerNames[idx[i]] < lowerNames[idx[j]]
 		})
 	}
 
-	return filtered
+	out := make([]types.Channel, len(filtered))
+	for i, k := range idx {
+		out[i] = filtered[k]
+	}
+	return out
 }
 
 // displayLineMap returns a slice mapping display-line index → row index.
@@ -352,10 +420,23 @@ func sectionLabel(key string) string {
 	return key
 }
 
-// buildRows constructs the interleaved list of headers and channels.
+// buildRows constructs the interleaved list of headers and channels
+// and refreshes the rowIndexByID fast-lookup map so SelectByID /
+// NextUnreadChannel / click hit-tests can land in O(1).
 func (m *ChannelListModel) buildRows() {
 	visible := m.visibleChannels()
 	m.rows = nil
+	// Reset rather than reallocate so we avoid churning the map on
+	// every rebuild. Rebuilds are already rare (channel add/remove,
+	// hide toggle, sort change) compared with the per-render path
+	// that uses this map for lookups.
+	if m.rowIndexByID == nil {
+		m.rowIndexByID = make(map[string]int, len(visible))
+	} else {
+		for k := range m.rowIndexByID {
+			delete(m.rowIndexByID, k)
+		}
+	}
 
 	prevKey := ""
 	for i := range visible {
@@ -371,7 +452,11 @@ func (m *ChannelListModel) buildRows() {
 		}
 		if !m.collapsed[key] {
 			chCopy := ch
+			idx := len(m.rows)
 			m.rows = append(m.rows, sidebarRow{channel: &chCopy})
+			if chCopy.ID != "" {
+				m.rowIndexByID[chCopy.ID] = idx
+			}
 		}
 	}
 
@@ -396,12 +481,13 @@ func (m *ChannelListModel) SelectedChannel() *types.Channel {
 }
 
 // SelectByID moves the cursor to the channel with the given ID.
+// Lookup is O(1) via rowIndexByID maintained by buildRows.
 func (m *ChannelListModel) SelectByID(id string) {
-	for i, row := range m.rows {
-		if !row.isHeader && row.channel != nil && row.channel.ID == id {
-			m.selected = i
-			return
-		}
+	if id == "" {
+		return
+	}
+	if idx, ok := m.rowIndexByID[id]; ok && idx < len(m.rows) {
+		m.selected = idx
 	}
 }
 

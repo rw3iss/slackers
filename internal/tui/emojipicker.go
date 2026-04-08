@@ -48,6 +48,17 @@ type EmojiPickerModel struct {
 	width        int
 	height       int
 
+	// Precomputed padding strings and dimensions, refreshed in
+	// SetSize. Keeps View() from calling strings.Repeat on every
+	// render, which would otherwise run (padBefore + padAfter +
+	// fullCellW) times per frame × every emoji cell.
+	cellHBefore string // leading space padding before each emoji
+	cellHAfter  string // trailing space padding after each emoji
+	cellFullRow string // fullCellW spaces — used for vertical gap fills
+	cellFullW   int    // emoji width + horizontal padding
+	cellVBefore int    // number of blank rows rendered before each emoji row
+	cellVAfter  int    // number of blank rows rendered after each emoji row
+
 	// Render layout (computed in View, used by mouse hit-testing).
 	boxX, boxY    int // top-left of the rendered box
 	boxW, boxH    int
@@ -174,6 +185,18 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 		maxRows = 10
 	}
 	m.gridRows = maxRows
+
+	// Precompute padding strings used by the grid render loop so
+	// View() can just reuse them per-cell instead of rebuilding
+	// them with strings.Repeat on every render.
+	padBefore := m.padding / 2
+	padAfter := m.padding - padBefore + m.extraRightPad
+	m.cellHBefore = strings.Repeat(" ", padBefore)
+	m.cellHAfter = strings.Repeat(" ", padAfter)
+	m.cellFullW = 2 + m.padding + m.extraRightPad
+	m.cellFullRow = strings.Repeat(" ", m.cellFullW)
+	m.cellVAfter = m.padding / 2
+	m.cellVBefore = m.padding - m.cellVAfter
 
 	// Compute layout positions for click hit-testing.
 	m.computeLayout()
@@ -591,17 +614,16 @@ func (m *EmojiPickerModel) View() string {
 	// emoji + background) so the highlight extends one row above the icon.
 	// Right padding is 2 columns instead of 1 so the highlight extends 1 column
 	// further right of the emoji as well.
-	activeBg := lipgloss.Color("236")
-	activeBgStyle := lipgloss.NewStyle().Background(activeBg)
-	activeIconStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Background(activeBg)
-	inactiveIconStyle := lipgloss.NewStyle().Foreground(ColorMuted)
+	activeBgStyle := EmojiActiveBgStyle
+	activeIconStyle := EmojiActiveIconStyle
+	inactiveIconStyle := EmojiInactiveIconStyle
 	// tab cell layout: " EE  " (1 left pad + 2 emoji + 2 right pad = 5 cols).
 	const tabCellLeftPad = 1
 	const tabCellRightPad = 2
 	const tabCellInnerW = tabCellLeftPad + 2 + tabCellRightPad // 5
-	cellStyle := lipgloss.NewStyle()
-	selectedCellStyle := lipgloss.NewStyle().Background(lipgloss.Color("240"))
-	favCellStyle := lipgloss.NewStyle().Background(lipgloss.Color("235"))
+	cellStyle := EmojiCellStyle
+	selectedCellStyle := EmojiSelectedCellStyle
+	favCellStyle := EmojiFavCellStyle
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 	codeStyle := lipgloss.NewStyle().Foreground(ColorAccent)
@@ -699,22 +721,19 @@ func (m *EmojiPickerModel) View() string {
 	b.WriteString("\n")
 
 	// Grid — padding: odd = gap after emoji, even = split before/after.
+	// hBefore / hAfter / fullRow / vBefore / vAfter are all
+	// precomputed in SetSize so View doesn't call strings.Repeat
+	// per cell on every render.
 	items := m.currentItems()
 	if len(items) == 0 {
 		b.WriteString(dimStyle.Render("  (empty)"))
 		b.WriteString("\n")
 	} else {
-		// Horizontal: split symmetric padding + extra columns to the right.
-		padBefore := m.padding / 2
-		padAfter := m.padding - padBefore + m.extraRightPad
-		hBefore := strings.Repeat(" ", padBefore)
-		hAfter := strings.Repeat(" ", padAfter)
-		// Vertical: odd puts extra BEFORE the emoji so highlight extends above.
-		vAfter := m.padding / 2
-		vBefore := m.padding - vAfter
-
-		// Full cell width for background fill on vertical padding lines.
-		fullCellW := 2 + m.padding + m.extraRightPad // emoji width + total h-padding
+		hBefore := m.cellHBefore
+		hAfter := m.cellHAfter
+		fullRow := m.cellFullRow
+		vBefore := m.cellVBefore
+		vAfter := m.cellVAfter
 
 		for r := 0; r < m.gridRows; r++ {
 			rowStart := (m.scrollOff + r) * m.gridCols
@@ -735,7 +754,7 @@ func (m *EmojiPickerModel) View() string {
 							style = favCellStyle
 						}
 					}
-					vRow.WriteString(style.Render(strings.Repeat(" ", fullCellW)))
+					vRow.WriteString(style.Render(fullRow))
 				}
 				b.WriteString(vRow.String())
 				b.WriteString("\n")
@@ -775,7 +794,7 @@ func (m *EmojiPickerModel) View() string {
 							style = favCellStyle
 						}
 					}
-					vRow.WriteString(style.Render(strings.Repeat(" ", fullCellW)))
+					vRow.WriteString(style.Render(fullRow))
 				}
 				b.WriteString(vRow.String())
 				b.WriteString("\n")

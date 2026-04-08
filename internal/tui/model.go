@@ -754,6 +754,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// last-second edits (theme change, shortcut
 			// rebind, etc.) actually hit disk.
 			config.FlushDebounced()
+			// Same for the notifications store — mutations
+			// self-schedule a debounced save, so a quit
+			// within the 750 ms window would otherwise lose
+			// the last change.
+			if m.notifStore != nil {
+				m.notifStore.FlushPending()
+			}
 			if m.p2pNode != nil {
 				_ = m.p2pNode.Close()
 			}
@@ -1538,6 +1545,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ChannelsLoadedMsg:
+		// Coalesce the six setter calls below into a single
+		// buildRows pass — previously each setter rebuilt the
+		// sidebar independently, resulting in up to 6 full
+		// rebuilds per ChannelsLoadedMsg on large workspaces.
+		m.channels.BeginBulkUpdate()
 		m.channels.SetChannels(msg.Channels)
 		// Re-apply friend channels — SetChannels above replaces the entire
 		// channel slice and would otherwise wipe the friends loaded earlier.
@@ -1555,6 +1567,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			sortBy = SortByType
 		}
 		m.channels.SetSort(sortBy, sortAsc)
+		m.channels.EndBulkUpdate()
 		drainWarnings(&m)
 
 		// SetChannels + buildRows resets the sidebar selection. If we
@@ -1918,7 +1931,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NotificationDeleteMsg:
 		if m.notifStore != nil {
 			m.notifStore.Remove(msg.NotifID)
-			go m.notifStore.Save()
 		}
 		// Refresh the overlay list in place.
 		m.notifs.SetItems(m.notifStore.All())
@@ -2090,7 +2102,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err := m.p2pNode.SendMessage(uid, req); err == nil {
 				if m.notifStore != nil {
 					if m.notifStore.ClearFriendRequest(uid) > 0 {
-						_ = m.notifStore.Save()
 					}
 				}
 			}
@@ -3416,7 +3427,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Drop any pending friend-request notification.
 				if m.notifStore != nil {
 					if m.notifStore.ClearFriendRequest(msg.SenderID) > 0 {
-						go m.notifStore.Save()
 					}
 				}
 			}
@@ -3585,6 +3595,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case FriendsLoadedMsg:
+		// Coalesce the four setter calls below into a single
+		// sidebar rebuild.
+		m.channels.BeginBulkUpdate()
 		m.channels.SetFriendChannels(msg.Channels)
 		// Wire the alias / hidden / collapsed maps onto the
 		// channel list. ChannelsLoadedMsg normally does this for
@@ -3594,6 +3607,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.channels.SetAliases(m.cfg.ChannelAliases)
 		m.channels.SetHiddenChannels(m.cfg.HiddenChannels)
 		m.channels.SetCollapsedGroups(m.cfg.CollapsedGroups)
+		m.channels.EndBulkUpdate()
 		for uid, on := range msg.Online {
 			if on {
 				m.channels.MarkUnread("friend:" + uid)
@@ -3649,7 +3663,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// friend-request notification for this peer.
 		if m.notifStore != nil {
 			if m.notifStore.ClearFriendRequest(msg.UserID) > 0 {
-				go m.notifStore.Save()
 			}
 		}
 		if msg.Accepted && m.friendStore != nil {
@@ -5300,7 +5313,6 @@ func (m *Model) clearChannelNotifs(channelID string) {
 		return
 	}
 	if m.notifStore.ClearChannel(channelID) > 0 {
-		go m.notifStore.Save()
 	}
 }
 
@@ -5429,7 +5441,6 @@ func (m *Model) activateNotification(n notifications.Notification) tea.Cmd {
 		// Drop the notification and any siblings from the same channel,
 		// then switch to that channel.
 		m.notifStore.ClearChannel(n.ChannelID)
-		go m.notifStore.Save()
 		ch := m.lookupChannelByID(n.ChannelID)
 		if ch == nil {
 			m.warning = "Channel not found for notification"
@@ -5480,7 +5491,6 @@ func (m *Model) recordUnreadMessage(channelID, messageID, userID, userName, text
 		UserName:  userName,
 		Text:      text,
 	})
-	go m.notifStore.Save()
 }
 
 // recordReaction drops a TypeReaction notification.
@@ -5497,7 +5507,6 @@ func (m *Model) recordReaction(channelID, messageID, reactorID, reactorName, emo
 		Emoji:            emoji,
 		TargetMessageTxt: targetText,
 	})
-	go m.notifStore.Save()
 }
 
 // recordFriendRequest drops a TypeFriendRequest notification.
@@ -5513,7 +5522,6 @@ func (m *Model) recordFriendRequest(senderID, senderName, pubKey, multiaddr stri
 		FriendPublicKey: pubKey,
 		FriendMultiaddr: multiaddr,
 	})
-	go m.notifStore.Save()
 }
 
 // hostPortFromMultiaddr parses a /ip4/<ip>/tcp/<port>/p2p/<id> string

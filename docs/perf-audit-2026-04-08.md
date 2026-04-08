@@ -99,3 +99,41 @@ Functional correctness preserved:
 - **Config saves** still get written — they just coalesce idle-period bursts into one write, and the shutdown path flushes any pending one.
 - **Theme changes** still apply everywhere — `rebuildDerivedStyles()` refreshes the new cached styles alongside the existing ones.
 
+## Second pass — additional backlog items shipped
+
+### 6. Notifications store debounced saves + size cap
+- **`internal/notifications/notifications.go`** — added `MaxItems = 500` cap applied inside `Add`: when an insert would push the item count past the limit, the oldest overflow is trimmed in one shot (slice re-slice, no copy). Newest entries are always preserved.
+- Added `saveTimer` + `scheduleSaveLocked()` + `FlushPending()`. Every mutation path (`Add`, `Remove`, `ClearChannel`, `ClearFriendRequest`) now auto-schedules a debounced 750 ms save. `FlushPending()` is wired into the Quit handler alongside `config.FlushDebounced()`.
+- **`internal/tui/model.go`** — removed 9 explicit `go m.notifStore.Save()` / `_ = m.notifStore.Save()` call sites (including the one that was synchronous on the Update goroutine at the profile-sync path). The store now writes itself in the background.
+- **Impact:** a burst of unread-message / reaction / friend-request events used to each trigger a full JSON rewrite of the notifications file. Now they coalesce into one write per ~750 ms idle window, and the file can't grow unbounded.
+
+### 7. `ChannelListModel` ID-indexed lookups
+- **`internal/tui/channels.go`** — added `rowIndexByID map[string]int`, refreshed in `buildRows()`. `SelectByID` is now an O(1) map lookup instead of a linear scan across `m.rows`.
+- The map is reset in-place (delete-all) rather than reallocated on every `buildRows`, so there's no map-churn cost.
+
+### 8. Sort-comparator `strings.ToLower` memoisation
+- **`internal/tui/channels.go::visibleChannels`** — previously each of the three sort modes called `strings.ToLower(m.displayName(...))` twice per comparison, allocating fresh strings O(n log n) times. The new path:
+  - Precomputes a lowercase-name slice once per filtered entry.
+  - Sorts an `[]int` of indices instead of the channels directly (so `strings.ToLower` is not called inside the comparator at all).
+  - Materialises the sorted result at the end.
+- **Impact:** sidebar sort allocations drop from O(n log n) strings to O(n) per rebuild.
+
+### 9. Emoji picker layout precompute
+- **`internal/tui/emojipicker.go`** — moved all `strings.Repeat(" ", ...)` padding calculations from `View()` into `SetSize()`, cached on the model as `cellHBefore`, `cellHAfter`, `cellFullRow`, `cellFullW`, `cellVBefore`, `cellVAfter`. `View` now just references them.
+- **`internal/tui/styles.go`** — added 6 new cached emoji-picker styles (`EmojiActiveBgStyle`, `EmojiActiveIconStyle`, `EmojiInactiveIconStyle`, `EmojiCellStyle`, `EmojiSelectedCellStyle`, `EmojiFavCellStyle`), rebuilt by `rebuildDerivedStyles()` so theme switches still take effect.
+- **Impact:** a typical emoji picker render used to call `strings.Repeat` 3 × `gridCols` × grid-rows × (1 + vBefore + vAfter) times per frame, plus 3-6 fresh `lipgloss.NewStyle()` allocations. Now it's zero `strings.Repeat` and zero `NewStyle` in the steady state.
+
+### 10. `ChannelsLoadedMsg` / `FriendsLoadedMsg` double-rebuild elimination
+- **`internal/tui/channels.go`** — added `BeginBulkUpdate` / `EndBulkUpdate` + an internal `rebuild()` helper. Inside a bulk window, setters skip the automatic `buildRows()` call; the final `EndBulkUpdate()` runs it once.
+- **`internal/tui/model.go`**:
+  - `ChannelsLoadedMsg` wraps its six channel-list setter calls in `BeginBulkUpdate` / `EndBulkUpdate`, collapsing up to 6 sidebar rebuilds into 1.
+  - `FriendsLoadedMsg` wraps its four setter calls the same way.
+- `SetSort` also now calls `rebuild()` (previously it didn't at all — the sort change only took effect when something else triggered a rebuild). Gated on the bulk counter so it's still a no-op during Begin/End.
+- **Impact:** on a large workspace, initial channel load used to trigger 5-6 full sidebar rebuilds back-to-back (one per setter). Now it's a single rebuild at the end of the message handler.
+
+### Remaining backlog (not in this pass)
+- Line-map / reaction-hit / friend-card-hit dirty-flag caching in `MessageViewModel` — needs a careful dirty-flag audit across every mutation.
+- `ChatHistoryStore` LRU eviction — cache miss + reload testing.
+- Help / shortcuts filter debouncing — UX tradeoff.
+- Any remaining synchronous IO on the Update loop (opportunistic audit).
+

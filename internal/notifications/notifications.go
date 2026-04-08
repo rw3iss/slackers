@@ -55,17 +55,52 @@ type Notification struct {
 	FriendMultiaddr string `json:"friend_multiaddr,omitempty"`
 }
 
+// MaxItems caps the number of notifications retained in memory and
+// on disk. Older entries beyond this limit are discarded on insert
+// so the store can't grow unbounded on a long-running session.
+const MaxItems = 500
+
 // Store is a thread-safe in-memory + on-disk notification log.
 type Store struct {
 	path  string
 	mu    sync.Mutex
 	items []Notification
+
+	// saveTimer is the pending debounced save. Set by any
+	// mutation method and cleared by the flush goroutine.
+	// Access protected by mu.
+	saveTimer *time.Timer
 }
 
 // NewStore creates a store backed by the given file path. The file is
 // created on the first Save call.
 func NewStore(path string) *Store {
 	return &Store{path: path}
+}
+
+// scheduleSaveLocked arms the debounced save timer, coalescing any
+// previously-pending write into a single one. Caller must hold s.mu.
+// The idle window matches the config-save window so settings + notif
+// bursts collapse at roughly the same rhythm.
+func (s *Store) scheduleSaveLocked() {
+	if s.saveTimer != nil {
+		s.saveTimer.Stop()
+	}
+	s.saveTimer = time.AfterFunc(750*time.Millisecond, func() {
+		_ = s.Save()
+	})
+}
+
+// FlushPending writes any pending debounced save synchronously.
+// Call on clean shutdown so last-second mutations aren't lost.
+func (s *Store) FlushPending() {
+	s.mu.Lock()
+	if s.saveTimer != nil {
+		s.saveTimer.Stop()
+		s.saveTimer = nil
+	}
+	s.mu.Unlock()
+	_ = s.Save()
 }
 
 // DefaultPath returns the standard notifications file location.
@@ -113,7 +148,9 @@ func (s *Store) Save() error {
 // Add appends a notification (auto-generates ID + timestamp if blank).
 // If a notification with the same Type+ChannelID+MessageID already
 // exists, no duplicate is added and the existing notification is
-// returned unchanged.
+// returned unchanged. If the total item count would exceed MaxItems
+// after the append, the oldest entries are dropped from the head of
+// the slice — the newest are always preserved.
 func (s *Store) Add(n Notification) Notification {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,6 +166,11 @@ func (s *Store) Add(n Notification) Notification {
 		n.Timestamp = time.Now()
 	}
 	s.items = append(s.items, n)
+	if len(s.items) > MaxItems {
+		// Drop the oldest overflow in one shot. Slice trim, no copy.
+		s.items = s.items[len(s.items)-MaxItems:]
+	}
+	s.scheduleSaveLocked()
 	return n
 }
 
@@ -139,6 +181,7 @@ func (s *Store) Remove(id string) bool {
 	for i, n := range s.items {
 		if n.ID == id {
 			s.items = append(s.items[:i], s.items[i+1:]...)
+			s.scheduleSaveLocked()
 			return true
 		}
 	}
@@ -183,6 +226,9 @@ func (s *Store) ClearChannel(channelID string) int {
 		kept = append(kept, n)
 	}
 	s.items = kept
+	if removed > 0 {
+		s.scheduleSaveLocked()
+	}
 	return removed
 }
 
@@ -202,6 +248,9 @@ func (s *Store) ClearFriendRequest(peerUserID string) int {
 		kept = append(kept, n)
 	}
 	s.items = kept
+	if removed > 0 {
+		s.scheduleSaveLocked()
+	}
 	return removed
 }
 

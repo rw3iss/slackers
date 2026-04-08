@@ -108,6 +108,14 @@ var (
 	MessageHeaderHighlight    lipgloss.Style // highlight color used for header info banners
 	MessageCogStyle           lipgloss.Style // "⚙" cog in friend chat header
 	FriendCardPillStyle       lipgloss.Style // styled pill rendered in place of [FRIEND:…] markers
+
+	// Emoji picker hot-path styles.
+	EmojiActiveBgStyle     lipgloss.Style // tab highlight background for the active category
+	EmojiActiveIconStyle   lipgloss.Style // bold + themed fg on the active category icon
+	EmojiInactiveIconStyle lipgloss.Style // muted fg on inactive category icons
+	EmojiCellStyle         lipgloss.Style // plain grid cell background
+	EmojiSelectedCellStyle lipgloss.Style // grid cell for the hovered/selected emoji
+	EmojiFavCellStyle      lipgloss.Style // grid cell for a favourited emoji
 )
 
 // activeTheme tracks the most recently applied theme so the UI can
@@ -288,6 +296,17 @@ func rebuildDerivedStyles() {
 		Background(lipgloss.Color("236")).
 		Bold(true).
 		Padding(0, 1)
+
+	// Emoji picker styles.
+	EmojiActiveBgStyle = lipgloss.NewStyle().Background(lipgloss.Color("236"))
+	EmojiActiveIconStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorPrimary).
+		Background(lipgloss.Color("236"))
+	EmojiInactiveIconStyle = lipgloss.NewStyle().Foreground(ColorMuted)
+	EmojiCellStyle = lipgloss.NewStyle()
+	EmojiSelectedCellStyle = lipgloss.NewStyle().Background(lipgloss.Color("240"))
+	EmojiFavCellStyle = lipgloss.NewStyle().Background(lipgloss.Color("235"))
 }
 
 // UserColors assigns a consistent color to a username by hashing.
