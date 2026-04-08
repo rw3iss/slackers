@@ -981,10 +981,3 @@ func (m SettingsModel) View() string {
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
 	)
 }
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

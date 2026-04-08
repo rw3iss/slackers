@@ -312,7 +312,6 @@ type Model struct {
 	lastSeen     map[string]string
 	lastChecked  map[string]time.Time // when each channel was last polled
 	pollChannels []string             // ordered list for round-robin polling
-	pollOffset   int
 
 	// Config
 	cfg *config.Config
@@ -5047,16 +5046,6 @@ func loadHistoryCmd(svc slackpkg.SlackService, channelID string) tea.Cmd {
 	}
 }
 
-func sendMessageCmd(svc slackpkg.SlackService, channelID, text string) tea.Cmd {
-	return func() tea.Msg {
-		err := svc.SendMessage(channelID, text)
-		if err != nil {
-			return ErrMsg{Err: err}
-		}
-		return MessageSentMsg{}
-	}
-}
-
 func connectSocketCmd(socketSvc slackpkg.SocketService, eventCh chan slackpkg.SocketEvent) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -6008,11 +5997,7 @@ func (m *Model) friendPingTickCmd() tea.Cmd {
 	})
 }
 
-func friendPingCmd(store *friends.FriendStore, p2p *secure.P2PNode) tea.Cmd {
-	return friendPingCmdWithCurrent(store, p2p, "")
-}
-
-// friendPingCmdWithCurrent is the same as friendPingCmd but knows
+// friendPingCmdWithCurrent pings every friend for liveness and knows
 // which friend the user is currently viewing — that connection is
 // (re)dialed proactively if it dropped, so the active chat stays
 // connected. Other friends remain observe-only.

@@ -844,9 +844,6 @@ func shareInfoOptions() []shareInfoOption {
 	}
 }
 
-// shareInfoMaxIdx is the highest valid shareInfoSelected value.
-var shareInfoMaxIdx = len(shareInfoOptions()) - 1
-
 func (m FriendsConfigModel) handleShareInfoKey(msg tea.KeyMsg) (FriendsConfigModel, tea.Cmd) {
 	opts := shareInfoOptions()
 	switch msg.String() {

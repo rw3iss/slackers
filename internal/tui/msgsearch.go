@@ -35,7 +35,6 @@ type MsgSearchModel struct {
 	slackSvc       slackpkg.SlackService
 	width          int
 	height         int
-	debounce       time.Time
 	channelResolve func(string) string
 }
 
