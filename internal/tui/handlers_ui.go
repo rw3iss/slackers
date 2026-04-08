@@ -245,6 +245,18 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+			// Click on the floating "X Notifications" indicator at
+			// the top-centre of the message pane. Takes priority
+			// over the underlying row content since the button
+			// visually overlays it. Opens the notifications panel,
+			// matching the keyboard binding behaviour.
+			if nx0, nx1, ny, visible := m.notificationsButtonClickArea(); visible && y == ny && x >= nx0 && x < nx1 {
+				m.notifs = NewNotificationsOverlay(m.notifStore.All())
+				m.notifs.SetSize(m.width, m.height)
+				m.overlay = overlayNotifications
+				return m, nil
+			}
+
 			if y >= m.inputTop {
 				m.focus = types.FocusInput
 				m.updateFocus()

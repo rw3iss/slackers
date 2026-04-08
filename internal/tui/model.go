@@ -3957,27 +3957,16 @@ func (m Model) viewInner() string {
 		return m.sidebarOptions.View(base)
 	}
 
-	msgView := m.messages.View()
-
-	var topRow string
-	showSidebar := !m.fullMode || m.focus == types.FocusSidebar
-	if showSidebar {
-		sidebar := m.channels.View()
-		topRow = lipgloss.JoinHorizontal(lipgloss.Top, sidebar, msgView)
-	} else {
-		topRow = msgView
-	}
-	inputBar := m.input.View()
-	statusLine := m.renderStatusBar()
-
-	return lipgloss.JoinVertical(lipgloss.Left,
-		topRow,
-		inputBar,
-		statusLine,
-	)
+	// Normal view path: delegate to renderBaseView so the
+	// notifications indicator overlay is rendered in one place.
+	return m.renderBaseView()
 }
 
 // renderBaseView builds the base TUI view (channels + messages + input + status).
+// It also overlays the floating "X Notifications" indicator on row 0
+// of the message pane when there are any unread notifications, so the
+// indicator is visible in every view state that falls through to the
+// base (including when a popup like msgOptions is stacked on top).
 func (m Model) renderBaseView() string {
 	msgView := m.messages.View()
 	var topRow string
@@ -3990,7 +3979,13 @@ func (m Model) renderBaseView() string {
 	}
 	inputBar := m.input.View()
 	statusLine := m.renderStatusBar()
-	return lipgloss.JoinVertical(lipgloss.Left, topRow, inputBar, statusLine)
+	base := lipgloss.JoinVertical(lipgloss.Left, topRow, inputBar, statusLine)
+
+	// Notifications indicator overlay.
+	if x0, _, y, visible := m.notificationsButtonClickArea(); visible {
+		base = overlayOnRow(base, y, x0, renderNotificationsButton(m.notifStore.Count()))
+	}
+	return base
 }
 
 
