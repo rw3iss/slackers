@@ -4320,11 +4320,6 @@ func (m *Model) cycleFocusBackward() {
 }
 
 // saveLastChannel persists the currently viewed channel ID to config.
-func (m *Model) saveLastChannel(channelID string) {
-	m.cfg.LastChannelID = channelID
-	config.SaveDebounced(m.cfg) // fire-and-forget, don't block the UI
-}
-
 // buildChannelIndex populates the channel ID -> name/alias lookup.
 func (m *Model) buildChannelIndex() {
 	m.channelIndex = make(map[string]channelInfo, len(m.channels.channels))
@@ -4365,30 +4360,6 @@ func setWarning(m *Model, msg string) tea.Cmd {
 func setError(m *Model, err error) tea.Cmd {
 	m.err = err
 	return clearWarningCmd()
-}
-
-// loadLastSeen initializes lastSeen from persisted config.
-func loadLastSeen(cfg *config.Config) map[string]string {
-	if cfg.LastSeenTS != nil && len(cfg.LastSeenTS) > 0 {
-		// Clone it so we don't mutate the config map directly.
-		m := make(map[string]string, len(cfg.LastSeenTS))
-		for k, v := range cfg.LastSeenTS {
-			m[k] = v
-		}
-		return m
-	}
-	return make(map[string]string)
-}
-
-// persistLastSeen saves lastSeen timestamps to config (fire-and-forget).
-func (m *Model) persistLastSeen() {
-	m.cfg.LastSeenTS = make(map[string]string, len(m.lastSeen))
-	for k, v := range m.lastSeen {
-		if v != "0" && v != "" {
-			m.cfg.LastSeenTS[k] = v
-		}
-	}
-	config.SaveDebounced(m.cfg)
 }
 
 // stripQuotePrefix removes a leading "> " (or ">") from each non-empty line.
