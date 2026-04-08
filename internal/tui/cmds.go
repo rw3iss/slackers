@@ -165,6 +165,13 @@ func sendMessageWithFilesCmd(svc slackpkg.SlackService, channelID, text string) 
 
 // seedLastSeenCmd fetches baseline timestamps for unseeded channels.
 // Batches requests to avoid rate limits (5 channels per batch with delays).
+//
+// For cold-start read-state sync: after fetching the latest message ts
+// per channel, we also pull Slack's server-side `last_read` cursor via
+// GetChannelLastRead and use `max(last_read, latest_ts)` as the baseline.
+// This means if the user has already read the channel from the official
+// Slack app while slackers was offline, slackers starts up already
+// aware of it and doesn't flash a stale unread indicator.
 func seedLastSeenCmd(svc slackpkg.SlackService, lastSeen map[string]string) tea.Cmd {
 	channelIDs := make([]string, 0)
 	for id, ts := range lastSeen {
@@ -187,6 +194,13 @@ func seedLastSeenCmd(svc slackpkg.SlackService, lastSeen map[string]string) tea.
 			}
 			_, resultTS, _ := svc.CheckNewMessages(batch)
 			for id, ts := range resultTS {
+				// Reconcile with Slack's server-side last_read — if
+				// the user read this channel in another client while
+				// slackers was offline, use the higher cursor.
+				lastRead, err := svc.GetChannelLastRead(id)
+				if err == nil && lastRead != "" && lastRead > ts {
+					ts = lastRead
+				}
 				timestamps[id] = ts
 			}
 			// Small delay between batches to stay under rate limits.
@@ -197,6 +211,88 @@ func seedLastSeenCmd(svc slackpkg.SlackService, lastSeen map[string]string) tea.
 		return SeedLastSeenMsg{Timestamps: timestamps}
 	}
 }
+
+// ReconcileReadStateMsg carries the result of a background sync with
+// Slack's server-side read cursor. Channels whose `last_read` has
+// advanced past the local seen timestamp are listed in ReadChannels —
+// the TUI clears their unread indicators and updates lastSeen in
+// response.
+type ReconcileReadStateMsg struct {
+	// ReadChannels maps channelID → the new (higher) last-read
+	// timestamp Slack has on file. Only entries where Slack's cursor
+	// is AHEAD of the local lastSeen are included.
+	ReadChannels map[string]string
+}
+
+// reconcileReadStateCmd asks Slack what the user's current `last_read`
+// cursor is for each of the given channels. Any channel where the
+// server cursor is ahead of the local one is reported back as read —
+// meaning it was marked read from another client (official Slack app,
+// web, mobile). The TUI clears those local unread badges in response.
+//
+// The caller should only pass channels that are currently showing
+// unread locally, so we only spend extra API calls on channels that
+// would actually benefit from the reconcile. Empty input returns a
+// zero-value message immediately.
+func reconcileReadStateCmd(svc slackpkg.SlackService, unreadChannels map[string]string) tea.Cmd {
+	// Defensive copy so the caller's map can't be mutated from under us.
+	local := make(map[string]string, len(unreadChannels))
+	for id, ts := range unreadChannels {
+		local[id] = ts
+	}
+	return func() tea.Msg {
+		if len(local) == 0 {
+			return ReconcileReadStateMsg{}
+		}
+		readNow := make(map[string]string)
+		// Process in small batches with delays, same shape as
+		// seedLastSeenCmd, to stay under rate limits.
+		ids := make([]string, 0, len(local))
+		for id := range local {
+			ids = append(ids, id)
+		}
+		for i := 0; i < len(ids); i += 5 {
+			end := i + 5
+			if end > len(ids) {
+				end = len(ids)
+			}
+			for _, id := range ids[i:end] {
+				lastRead, err := svc.GetChannelLastRead(id)
+				if err != nil {
+					continue
+				}
+				if lastRead == "" {
+					continue
+				}
+				if lastRead > local[id] {
+					readNow[id] = lastRead
+				}
+			}
+			if end < len(ids) {
+				time.Sleep(2 * time.Second)
+			}
+		}
+		return ReconcileReadStateMsg{ReadChannels: readNow}
+	}
+}
+
+// reconcileReadStateTickCmd schedules the next periodic read-state
+// reconcile. Runs independently of the message-polling tick so it
+// can cadence separately (1 minute default) without interfering with
+// unread detection latency.
+func reconcileReadStateTickCmd(intervalSec int) tea.Cmd {
+	if intervalSec < 10 {
+		intervalSec = 60
+	}
+	return tea.Tick(time.Duration(intervalSec)*time.Second, func(t time.Time) tea.Msg {
+		return ReconcileReadStateTickMsg{}
+	})
+}
+
+// ReconcileReadStateTickMsg is fired by reconcileReadStateTickCmd.
+// The TUI collects the currently-unread channels from m.lastSeen and
+// dispatches reconcileReadStateCmd in response, then re-schedules.
+type ReconcileReadStateTickMsg struct{}
 
 // ---- Update check ------------------------------------------------------
 

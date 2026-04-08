@@ -275,6 +275,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					}
 					m.currentCh = ch
 					m.channels.ClearUnread(ch.ID)
+					m.markSlackRead(ch)
 					m.clearChannelNotifs(ch.ID)
 					m.setChannelHeader()
 					m.saveLastChannel(ch.ID)

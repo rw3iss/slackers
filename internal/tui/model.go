@@ -685,6 +685,12 @@ func (m Model) Init() tea.Cmd {
 	}
 	cmds = append(cmds, activityCheckCmd(m.cfg.AwayTimeout))
 	cmds = append(cmds, notifyWatchdogCmd())
+	// Periodic two-way read-state reconcile with Slack's server.
+	// Only meaningful when Slack is configured — friend-only installs
+	// skip it (no server to sync with).
+	if m.slackSvc != nil {
+		cmds = append(cmds, reconcileReadStateTickCmd(m.cfg.ReadSyncIntervalSec))
+	}
 	if m.p2pChan != nil {
 		cmds = append(cmds, waitForP2PMsg(m.p2pChan))
 	}
@@ -1338,6 +1344,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.currentCh = ch
 				m.channels.ClearUnread(ch.ID)
+				m.markSlackRead(ch)
 				m.clearChannelNotifs(ch.ID)
 				m.setChannelHeader()
 				m.saveLastChannel(ch.ID)
@@ -1410,6 +1417,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.currentCh = ch
 					m.channels.ClearUnread(ch.ID)
+					m.markSlackRead(ch)
 					m.clearChannelNotifs(ch.ID)
 					m.setChannelHeader()
 					m.saveLastChannel(ch.ID)
@@ -1478,6 +1486,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.currentCh = &ch
 					m.channels.SelectByID(ch.ID)
 					m.channels.ClearUnread(ch.ID)
+					m.markSlackRead(&ch)
 					m.clearChannelNotifs(ch.ID)
 					channelName = "#" + m.channels.displayName(ch)
 					m.saveLastChannel(ch.ID)
@@ -1520,6 +1529,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentCh = &ch
 				m.channels.SelectByID(ch.ID)
 				m.channels.ClearUnread(ch.ID)
+				m.markSlackRead(&ch)
 				m.clearChannelNotifs(ch.ID)
 				m.channels.UnhideChannel(ch.ID)
 				m.setChannelHeader()
@@ -2969,6 +2979,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.channels.SetLatestTimestamps(msg.Timestamps)
+		m.persistLastSeen()
+		return m, nil
+
+	case ReconcileReadStateTickMsg:
+		// Periodic two-way read-state sync with Slack's server.
+		// Collect every channel that's currently showing as unread
+		// locally and ask Slack whether its `last_read` cursor has
+		// already advanced past our local seen timestamp (i.e. the
+		// user read it from another client). Only Slack channels —
+		// friend chats don't have a server-side read cursor.
+		unread := m.channels.UnreadChannelIDs()
+		batch := make(map[string]string, len(unread))
+		for _, id := range unread {
+			// Skip friend channels (ID starts with "friend:").
+			if strings.HasPrefix(id, "friend:") {
+				continue
+			}
+			if ts, ok := m.lastSeen[id]; ok && ts != "" && ts != "0" {
+				batch[id] = ts
+			}
+		}
+		next := reconcileReadStateTickCmd(m.cfg.ReadSyncIntervalSec)
+		if len(batch) == 0 || m.slackSvc == nil {
+			return m, next
+		}
+		return m, tea.Batch(next, reconcileReadStateCmd(m.slackSvc, batch))
+
+	case ReconcileReadStateMsg:
+		// Result of a reconcile pass. Clear local unread for any
+		// channel where Slack's last_read is now ahead of ours,
+		// advance lastSeen, and persist.
+		if len(msg.ReadChannels) == 0 {
+			return m, nil
+		}
+		for id, ts := range msg.ReadChannels {
+			m.lastSeen[id] = ts
+			m.channels.ClearUnread(id)
+			m.clearChannelNotifs(id)
+		}
 		m.persistLastSeen()
 		return m, nil
 

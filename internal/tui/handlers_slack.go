@@ -292,6 +292,42 @@ func (m *Model) toggleReaction(messageID, emoji string) {
 	}
 }
 
+// markSlackRead propagates the user's read state for a Slack channel
+// upstream via `conversations.mark`, so other Slack clients (web,
+// mobile, official desktop) see the channel as read immediately.
+//
+// This is the outbound half of the two-way read-state sync: every
+// time slackers clears a channel's unread indicator locally we also
+// tell Slack's server where our read cursor now sits. Fire-and-forget
+// goroutine — failure to mark is not user-visible and will be retried
+// on the next open of the same channel.
+//
+// Friend channels are no-ops (no Slack server involved). Channels
+// without a known latest-message timestamp are skipped because
+// Slack's API requires a valid ts to move the cursor.
+func (m *Model) markSlackRead(ch *types.Channel) {
+	if ch == nil || ch.IsFriend {
+		return
+	}
+	if m.slackSvc == nil {
+		return
+	}
+	ts, ok := m.lastSeen[ch.ID]
+	if !ok || ts == "" || ts == "0" {
+		return
+	}
+	channelID := ch.ID
+	cursor := ts
+	go func() {
+		if err := m.slackSvc.MarkConversation(channelID, cursor); err != nil {
+			// Log only — no need to surface to the user, the next
+			// open of the same channel will retry.
+			// (debug.Log happens inside the client wrapper.)
+			_ = err
+		}
+	}()
+}
+
 // ---- Channel header / secure indicator --------------------------------
 
 func (m *Model) setChannelHeader() {
@@ -415,6 +451,7 @@ func (m *Model) activateNotification(n notifications.Notification) tea.Cmd {
 		m.currentCh = ch
 		m.channels.SelectByID(ch.ID)
 		m.channels.ClearUnread(ch.ID)
+		m.markSlackRead(ch)
 		m.clearChannelNotifs(ch.ID)
 		m.setChannelHeader()
 		m.saveLastChannel(ch.ID)

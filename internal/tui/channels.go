@@ -256,6 +256,17 @@ func (m *ChannelListModel) ClearUnread(channelID string) {
 	delete(m.unread, channelID)
 }
 
+// UnreadChannelIDs returns a snapshot of every channel ID currently
+// marked as unread. Used by the background read-state reconciler to
+// know which channels to query `conversations.info` for.
+func (m *ChannelListModel) UnreadChannelIDs() []string {
+	out := make([]string, 0, len(m.unread))
+	for id := range m.unread {
+		out = append(out, id)
+	}
+	return out
+}
+
 func (m *ChannelListModel) displayName(ch types.Channel) string {
 	if alias, ok := m.aliases[ch.ID]; ok && alias != "" {
 		return alias

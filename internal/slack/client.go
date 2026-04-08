@@ -49,6 +49,17 @@ type SlackService interface {
 	DeleteMessage(channelID, timestamp string) error
 	// UpdateMessage edits a message authored by the calling user.
 	UpdateMessage(channelID, timestamp, newText string) error
+	// MarkConversation sets the server-side read cursor for the given
+	// channel to `timestamp`, so other Slack clients (web, mobile, the
+	// official desktop app) see the channel as read. Requires the
+	// user-token code path — the bot token can't mark conversations
+	// as read on the user's behalf.
+	MarkConversation(channelID, timestamp string) error
+	// GetChannelLastRead returns the server-side `last_read` pointer
+	// for the given channel as known by Slack. Used at startup to
+	// reconcile slackers' local lastSeen with whatever the official
+	// apps have already read while slackers was offline.
+	GetChannelLastRead(channelID string) (string, error)
 	// Warnings returns and clears any accumulated fallback warnings.
 	Warnings() []string
 }
@@ -124,6 +135,54 @@ func (c *slackClient) UpdateMessage(channelID, timestamp, newText string) error 
 		_, _, _, err := api.UpdateMessage(channelID, timestamp, slack.MsgOptionText(newText, false))
 		return err
 	})
+}
+
+// MarkConversation sets the user's server-side read cursor for the
+// channel. Slack fans this out to every other client logged in as the
+// same user and emits a `channel_marked` Socket Mode event to all of
+// them (including us), so no extra local bookkeeping is needed here —
+// the event handler in the TUI takes care of clearing local state.
+//
+// Only the user-token code path is meaningful: a bot token can't
+// move the user's read cursor. When slackers was only configured with
+// a bot token, the call is silently skipped so we don't spam warnings
+// on every channel switch.
+func (c *slackClient) MarkConversation(channelID, timestamp string) error {
+	if channelID == "" || timestamp == "" {
+		return nil
+	}
+	if !c.hasUser {
+		// Bot-only install — nothing we can legitimately mark.
+		return nil
+	}
+	debug.Log("[api] MarkConversation channel=%s ts=%s", channelID, timestamp)
+	// Route straight through the primary (user) client. No fallback:
+	// the bot client wouldn't accept it anyway.
+	return c.primary.MarkConversation(channelID, timestamp)
+}
+
+// GetChannelLastRead fetches `conversations.info` for the channel and
+// returns the `last_read` timestamp Slack has on file for this user.
+// Returns ("", nil) if the channel is not known or the field is empty.
+// Errors from the Slack API propagate up so the caller can decide
+// whether to retry (or skip the reconcile entirely on cold start).
+func (c *slackClient) GetChannelLastRead(channelID string) (string, error) {
+	if channelID == "" {
+		return "", nil
+	}
+	var lastRead string
+	err := c.tryWithFallback("get channel info", func(api *slack.Client) error {
+		info, err := api.GetConversationInfo(&slack.GetConversationInfoInput{
+			ChannelID:     channelID,
+			IncludeLocale: false,
+		})
+		if err != nil {
+			return err
+		}
+		lastRead = info.LastRead
+		return nil
+	})
+	return lastRead, err
 }
 
 func (c *slackClient) addWarning(msg string) {

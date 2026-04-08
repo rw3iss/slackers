@@ -42,6 +42,12 @@ type Config struct {
 	PollInterval             int               `json:"poll_interval,omitempty"`
 	PollIntervalBg           int               `json:"poll_interval_bg,omitempty"`
 	PollPriority             int               `json:"poll_priority,omitempty"`
+	// ReadSyncIntervalSec controls how often slackers reconciles its
+	// local unread state with Slack's server-side `last_read` cursor.
+	// This catches channels the user marked read in another client
+	// (official Slack app, web, mobile) so slackers clears its
+	// unread indicator. 0 → default of 60s. Minimum clamped to 10s.
+	ReadSyncIntervalSec      int               `json:"read_sync_interval_sec,omitempty"`
 	Notifications            bool              `json:"notifications,omitempty"`
 	EmojiFavorites           []string          `json:"emoji_favorites,omitempty"`
 	FavoriteFolders          []string          `json:"favorite_folders,omitempty"`
@@ -105,9 +111,10 @@ func defaults() *Config {
 		AutoUpdate:      boolPtr(true),
 		MouseEnabled:    true,
 		Notifications:   true,
-		PollInterval:    10,
-		PollIntervalBg:  30,
-		PollPriority:    3,
+		PollInterval:        10,
+		PollIntervalBg:      30,
+		PollPriority:        3,
+		ReadSyncIntervalSec: 60,
 		InputHistoryMax: 20,
 		DownloadPath:    downloadPath,
 		P2PPort:         9900,
@@ -146,6 +153,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 10
+	}
+	if cfg.ReadSyncIntervalSec == 0 {
+		cfg.ReadSyncIntervalSec = 60
 	}
 	cfg.ConfigPath = path
 
