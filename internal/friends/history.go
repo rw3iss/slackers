@@ -51,6 +51,35 @@ func (s *ChatHistoryStore) filePath(userID string) string {
 	return filepath.Join(s.baseDir, safe+".json")
 }
 
+// FilePath returns the on-disk location of a friend's chat history
+// file. Used by callers that want to show the path in confirmation
+// prompts before destructive operations.
+func (s *ChatHistoryStore) FilePath(userID string) string {
+	return s.filePath(userID)
+}
+
+// ClearHistory removes the on-disk history file for a friend, drops
+// the cache for that user, and writes back an empty file so the
+// next save call has somewhere to go. Returns the path that was
+// cleared (or would have been) for status messages.
+func (s *ChatHistoryStore) ClearHistory(userID string) (string, error) {
+	s.mu.Lock()
+	delete(s.cache, userID)
+	delete(s.dirty, userID)
+	s.mu.Unlock()
+	path := s.filePath(userID)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return path, err
+	}
+	if err := os.MkdirAll(s.baseDir, 0o755); err != nil {
+		return path, err
+	}
+	if err := os.WriteFile(path, []byte("[]"), 0o600); err != nil {
+		return path, err
+	}
+	return path, nil
+}
+
 // Load reads chat history for a friend from disk into cache.
 func (s *ChatHistoryStore) Load(userID string) ([]types.Message, error) {
 	s.mu.Lock()
@@ -135,18 +164,49 @@ func (s *ChatHistoryStore) SaveDirty() {
 }
 
 // Get returns the cached history for a friend, loading from disk if needed.
+// The returned slice is always a fresh copy so callers can mutate it
+// (e.g. AddReactionLocal) without aliasing the store's internal cache.
 func (s *ChatHistoryStore) Get(userID string) []types.Message {
 	s.mu.Lock()
 	if msgs, ok := s.cache[userID]; ok {
-		out := make([]types.Message, len(msgs))
-		copy(out, msgs)
+		out := cloneMessages(msgs)
 		s.mu.Unlock()
 		return out
 	}
 	s.mu.Unlock()
 
 	msgs, _ := s.Load(userID)
-	return msgs
+	// Load stores the slice directly in s.cache; return a clone so the
+	// caller's view is detached from the store's internal state.
+	return cloneMessages(msgs)
+}
+
+// cloneMessages returns a deep-enough copy of a message slice: each
+// Message is value-copied, and its Reactions / Replies slices are also
+// copied so that mutations on the returned slice (e.g. appending to a
+// reaction's UserIDs) cannot leak back into the source.
+func cloneMessages(src []types.Message) []types.Message {
+	if src == nil {
+		return nil
+	}
+	out := make([]types.Message, len(src))
+	for i, m := range src {
+		out[i] = m
+		if len(m.Reactions) > 0 {
+			rs := make([]types.Reaction, len(m.Reactions))
+			for j, r := range m.Reactions {
+				rs[j] = r
+				if len(r.UserIDs) > 0 {
+					rs[j].UserIDs = append([]string(nil), r.UserIDs...)
+				}
+			}
+			out[i].Reactions = rs
+		}
+		if len(m.Replies) > 0 {
+			out[i].Replies = cloneMessages(m.Replies)
+		}
+	}
+	return out
 }
 
 // GetDecrypted returns history with encrypted messages decrypted.
@@ -207,6 +267,21 @@ func (s *ChatHistoryStore) AppendReply(userID, parentMsgID string, reply types.M
 	}
 }
 
+// EditMessage updates the text of a message (top-level or nested reply)
+// in the cache. Returns true if a matching message was found and updated.
+func (s *ChatHistoryStore) EditMessage(userID, messageID, newText string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target := findMsgPtr(s.cache[userID], messageID)
+	if target == nil {
+		return false
+	}
+	target.Text = newText
+	s.dirty[userID] = true
+	return true
+}
+
 // DeleteMessage removes a message (top-level or nested reply) from the cache.
 // Returns true if a message was found and removed.
 func (s *ChatHistoryStore) DeleteMessage(userID, messageID string) bool {
@@ -229,6 +304,85 @@ func (s *ChatHistoryStore) DeleteMessage(userID, messageID string) bool {
 		}
 	}
 	return false
+}
+
+// SetPending toggles the Pending flag on a message (top-level or nested
+// reply) in a friend's history cache. Returns true if the target was
+// found so callers can trigger a save on success.
+func (s *ChatHistoryStore) SetPending(userID, messageID string, pending bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target := findMsgPtr(s.cache[userID], messageID)
+	if target == nil {
+		return false
+	}
+	if target.Pending == pending {
+		return false
+	}
+	target.Pending = pending
+	s.dirty[userID] = true
+	return true
+}
+
+// PendingForResend returns the messages in a friend's history that
+// still have the Pending flag set, walking newest-first and stopping
+// as soon as the first already-delivered (non-Pending, non-me) entry
+// is hit — under the assumption that everything before a confirmed
+// delivery would already have been re-sent on a prior connect. The
+// returned slice is ordered oldest-first (send order) and includes
+// both top-level messages and nested replies authored locally. Each
+// returned message has its Text decrypted using pairKey if the
+// store's at-rest encryption is on.
+func (s *ChatHistoryStore) PendingForResend(userID, pairKey string) []types.Message {
+	s.mu.Lock()
+	msgs := s.cache[userID]
+	s.mu.Unlock()
+
+	var out []types.Message
+	// Walk top-level messages in reverse; stop at the first locally
+	// authored (UserID=="me") message that is NOT pending, since
+	// anything older should have been dealt with already.
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.UserID == "me" {
+			if !m.Pending {
+				break
+			}
+			// Decrypt in-place for send.
+			if m.IsEncrypted && pairKey != "" {
+				if plain, err := decryptString(m.Text, pairKey); err == nil {
+					m.Text = plain
+					m.IsEncrypted = false
+				}
+			}
+			out = append(out, m)
+		}
+		// Walk replies newest-first too so any pending reply under
+		// a top-level message gets included. Replies share the
+		// same "stop at first delivered local" rule.
+		for j := len(m.Replies) - 1; j >= 0; j-- {
+			r := m.Replies[j]
+			if r.UserID != "me" {
+				continue
+			}
+			if !r.Pending {
+				continue
+			}
+			if r.IsEncrypted && pairKey != "" {
+				if plain, err := decryptString(r.Text, pairKey); err == nil {
+					r.Text = plain
+					r.IsEncrypted = false
+				}
+			}
+			out = append(out, r)
+		}
+	}
+	// Reverse out to chronological order.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
 }
 
 // findMsgPtr returns a pointer to the message with the given ID, searching

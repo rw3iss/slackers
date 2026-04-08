@@ -360,3 +360,72 @@ This allows Slackers to function as a standalone P2P chat client for users who o
 ### Network requirements
 
 P2P connections require port 9900/tcp (or the configured P2P port) to be reachable. Slackers uses libp2p with UPnP and NAT hole punching, which often works without manual configuration. For reliable connections behind NAT routers, users may need to set up port forwarding. Run `slackers friends` for platform-specific firewall instructions.
+
+### Testing the P2P connections locally, with yourself:
+
+To actually verify the full libp2p handshake (key exchange, ping, friend chat) on a single machine, run a second instance with its own config dir + port:
+
+XDG_CONFIG_HOME=/tmp/slackers-test slackers
+
+### Pending messages & reconnect recovery
+
+Messages sent to an offline friend never fail silently. Every friend P2P send is issued as a `tea.Cmd` that wraps `P2PNode.SendMessage` plus a one-shot reconnect-and-retry. The outcome is reported back to the model as a `FriendSendResultMsg{Success bool}`:
+
+- On `Success == false`, the model flips the corresponding history entry's `Pending` flag to `true` and saves the store. The message view then renders a `⏳ pending` badge next to the timestamp so the user knows it hasn't been delivered.
+- On `Success == true`, any pre-existing `Pending` flag is cleared.
+
+Recovery runs on two independent triggers so neither side of a reconnect is dependent on its own ping cycle being the faster one:
+
+1. **Local edge-trigger.** The `friendPingCmd` cycle (interval configurable via `cfg.FriendPingSeconds`, minimum 2s, default 5s) tracks each friend's online state in `friendPrevOnline`. An `offline → online` transition queues a `resendPendingFriendMessagesCmd(peerUID)`, which scans the friend's history newest-first — stopping at the first already-delivered locally-authored message — collects everything still flagged `Pending`, and dispatches them one at a time via `tea.Sequence`. Sequencing (not batching) guarantees receive order: each send's `FriendSendResultMsg` is processed before the next one starts.
+
+2. **Remote pull.** When `connectFriend` successfully transitions a peer from offline to online, it fires a `MsgTypeProfileSync` **and** a `MsgTypeRequestPending` at the peer. The receiver of `request_pending` runs its own `resendPendingFriendMessagesCmd` against the requester, so pending messages also flow in the opposite direction immediately on reconnect — not just when the sender's own ping cycle happens to notice.
+
+To preserve ordering across network races, every regular friend message now carries its original `Timestamp` on the wire, and the receiver stamps the stored message with that value instead of the arrival time. The original send order is therefore preserved even if out-of-order delivery happens.
+
+`P2PNode.ConnectToPeer` is wrapped in a 3-second dial timeout so an offline peer can't block the bubbletea Update loop, and `connectFriend` itself dispatches the dial in a goroutine so typing is never frozen by a stale friend connection.
+
+### Profile auto-sync
+
+A fresh wire message type, `MsgTypeProfileSync`, carries the sender's full contact card as single-line JSON. `connectFriend` fires it on every offline→online transition; the receiver merges non-empty fields into the matching stored friend record (matching by `SlackerID` → `PublicKey` → `Multiaddr`, centralised in `FriendStore.FindByCard`). Merge rules:
+
+- `Email`, `PublicKey`, `Multiaddr`, `SlackerID` overwrite the stored value when they differ. A changed `PublicKey` also clears the cached per-pair `PairKey` so the next handshake re-derives the shared secret.
+- `Name` is **only** filled in when the stored name is empty. The user's locally-chosen display name for that friend (their alias for that person) is never overwritten by what the peer calls themselves.
+
+`P2PNode` also exposes a `SetPeerLookup` callback used by the incoming stream handler to resolve an otherwise-unknown remote `peer.ID` against the friend store's multiaddrs, so inbound-only connections (where the remote dialed us first and we never dialed back) still attribute messages to the right friend and auto-populate the `peerMap` / `slackMap` tables for future outbound sends.
+
+### Sharing contact cards in chat
+
+Any outgoing message can embed a contact card inline using the `[FRIEND:me]` token (insert from the input with **Alt-M**, or via the sidebar right-click → **Invite to Slackers** action for non-friend DMs) or `[FRIEND:<friend-id>]` for a friend already in the store. A dedicated `expandFriendMarkers` pass runs on every outgoing text and replaces the token with either:
+
+- A compact **SLF2** binary hash (~109 chars, base64url-encoded, 32-byte X25519 public key + peer ID + ipv4 + port — no name/email), or
+- A **single-line JSON** contact card with the full profile (name, email, slacker_id, public key, multiaddr).
+
+The encoding is chosen per-user via `Friends Config → Share Format` (stored as `cfg.ShareMyInfoFormat`). New users default to JSON so the recipient sees a real name instead of a `Friend XXXXXX` placeholder. Already-encoded markers (ones starting with `{`, `SLF1.`, `SLF2.`, or `#` placeholder refs) pass through unchanged, so baked-in invites (e.g. the Slack invite builder) aren't double-processed and `]` characters aren't escaped to `\u005d`.
+
+On the receiving side the message renderer runs a two-pass pipeline:
+
+1. **`collapseFriendMarkers`** runs BEFORE word-wrap on the full message text. It finds each `[FRIEND:<blob>]`, decodes it with `friends.ParseAnyContactCard`, stores the result in `MessageViewModel.friendCards[key]`, and replaces the long blob with a short `[FRIEND:#fc-N]` reference token. This guarantees the marker survives line wrapping intact — without this, a long JSON card would wrap across two visual lines and the regex (which requires `[FRIEND:` and `]` on the same line) would silently miss it, leaving the raw blob in the chat output.
+2. **`rewriteFriendCards`** runs per-rendered-line during message layout. It resolves the `#fc-N` reference (or parses a short hash inline) and substitutes a styled `👤 Friend: <label>` pill, where the label comes from Name → Email → `ShortPeerID` fallback. The pill's click hit area is recorded in `friendCardHits` with its line/column bounds.
+
+The full original `[FRIEND:...]` marker is preserved in the underlying message text and in the persisted chat history — the pill is purely a render-time substitution, so the embedded card is always recoverable on click.
+
+**Click flow.** Clicking a pill dispatches a `FriendCardClickedMsg{Card}`. The handler first checks whether the card represents the local user (by SlackerID, PublicKey, or local Multiaddr) and shows `"That's your own contact card — nothing to import."` if so. Otherwise it calls `FriendStore.FindByCard` to look up an existing match and drives one of three confirmation prompts: **Add as new friend**, **Merge missing fields into existing**, or **Replace existing fields**. On confirm, `applyFriendCard` writes through, kicks off the standard `FriendAddedHandshakeMsg` P2P handshake for brand-new friends, and refreshes the sidebar.
+
+## Notifications view
+
+Beyond the terminal BEL / OSC 9 / X11 urgency hints already used for arrival alerts, Slackers now also maintains a persistent **notifications store** at `~/.config/slackers/notifications.json` backed by `internal/notifications/Store`. Three notification types are tracked:
+
+- `TypeUnreadMessage` — a message arrived in a channel you weren't viewing.
+- `TypeReaction` — someone reacted to one of your messages.
+- `TypeFriendRequest` — a pending friend-request handshake you haven't responded to.
+
+Entries are added as the app observes the underlying event and cleared when the user opens the referenced channel / friend chat / clears the friend request. The **Notifications view** (`Alt-N`, or via the status bar indicator) renders a scrollable list; activating a notification routes through `activateNotification`, which navigates the UI to the source (channel, friend chat, or friend request modal) and removes the entry.
+
+## Right-click context menus
+
+The TUI exposes two overlay-backed right-click context menus that share the same popup-positioning machinery (`ansiTruncatePad` + computed click-inside hit test):
+
+- **Message options** (`MsgOptionsModel`, `overlayMsgOptions`) — right-click any message in the chat view to get React / Reply / Edit / Delete. Edit and Delete only appear when `isMyMessage(msg)` returns true. The same set of actions is available by keyboard via the select-mode hint (`r` / `e` / `d`) so mouse and keyboard users stay in sync.
+- **Sidebar channel options** (`SidebarOptionsModel`, `overlaySidebarOptions`) — right-click any channel entry in the sidebar. Every channel gets Hide / Rename; DM / private-group entries whose target user is not already a friend also get **Invite to Slackers** (which switches to that chat and pre-fills the input with the Slack-mrkdwn invite text plus a `[FRIEND:<json>]` payload on its own line); friend channels instead get **View Contact Info**, which opens the Friends Config overlay directly on that friend's Edit Friend page.
+
+In that second instance set a different P2P Port (e.g. 9901), share its contact card to the primary instance, and you can chat between the two.

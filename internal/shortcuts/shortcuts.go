@@ -52,6 +52,9 @@ var ActionDescriptions = map[string]string{
 	"sidebar_collapse":   "Collapse/expand channel group",
 	"toggle_input_mode": "Toggle input mode (normal/edit)",
 	"toggle_theme":      "Toggle between primary and alternate themes",
+	"friend_details":    "Open friend details for current friend chat",
+	"notifications":     "Open the notifications view",
+	"share_my_info":     "Insert [FRIEND:me] into the chat input — expands to your full contact card on send",
 }
 
 // ActionOrder defines the display order for the shortcuts editor.
@@ -65,7 +68,7 @@ var ActionOrder = []string{
 	"enter_file_select", "focus_input_global", "cancel_download",
 	"hide_channel", "show_hidden", "toggle_hidden",
 	"rename_group", "sidebar_collapse",
-	"toggle_input_mode", "toggle_full_mode", "toggle_theme", "help", "settings",
+	"toggle_input_mode", "toggle_full_mode", "toggle_theme", "friend_details", "notifications", "share_my_info", "help", "settings",
 }
 
 // DefaultShortcuts returns the built-in default shortcut mappings.

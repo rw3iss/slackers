@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/format"
+	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/types"
 )
 
@@ -39,6 +41,13 @@ type DeleteMessageRequestMsg struct {
 	MessageID string
 }
 
+// EditMessageRequestMsg is sent when the user requests to edit a message.
+// The model verifies authorship and pre-fills the input with the message
+// text wrapped in [EDIT:id] syntax.
+type EditMessageRequestMsg struct {
+	MessageID string
+}
+
 // emojiLookup maps shortcodes to unicode for reaction rendering.
 var emojiLookup map[string]string
 
@@ -49,19 +58,48 @@ func init() {
 	}
 }
 
+// slackEmojiAliases maps Slack-specific reaction shortcodes that don't match
+// the canonical names in our emoji database to a canonical equivalent.
+var slackEmojiAliases = map[string]string{
+	"+1":             "thumbsup",
+	"-1":             "thumbsdown",
+	"100":            "100",
+	"raised_hands":   "raised_hands",
+	"clap":           "clap",
+	"tada":           "tada",
+	"fire":           "fire",
+	"heart":          "heart",
+	"smile":          "smile",
+	"smiley":         "smiley",
+	"joy":            "joy",
+	"sob":            "sob",
+	"thinking_face":  "thinking",
+	"white_check_mark": "white_check_mark",
+	"heavy_check_mark": "heavy_check_mark",
+	"x":              "x",
+}
+
 // resolveEmoji turns a Slack reaction shortcode into a renderable string.
 // Handles modifier suffixes (e.g. "pray::skin-tone-5") by stripping the
-// "::..." tail and falling back to the base emoji. Wraps the result in
-// colons (":code:") if no unicode emoji is known so the user still sees
+// "::..." tail and falling back to the base emoji. Also resolves common
+// Slack-specific aliases like "+1" → thumbsup → 👍. If still nothing
+// matches, wraps the result in colons (":code:") so the user still sees
 // a recognizable label.
 func resolveEmoji(code string) string {
 	if e, ok := emojiLookup[code]; ok {
 		return e
 	}
 	// Strip Slack modifier suffix and try the base.
+	base := code
 	if i := strings.Index(code, "::"); i >= 0 {
-		base := code[:i]
+		base = code[:i]
 		if e, ok := emojiLookup[base]; ok {
+			return e
+		}
+	}
+	// Try the Slack alias map.
+	if alias, ok := slackEmojiAliases[base]; ok {
+		if e, ok := emojiLookup[alias]; ok {
 			return e
 		}
 	}
@@ -84,9 +122,33 @@ type FileDownloadMsg struct {
 	File types.FileInfo
 }
 
+// CancelUploadRequestMsg is sent when the user wants to cancel the
+// upload of a file that's still in flight. The model handles it by
+// queuing a confirmation prompt at the status bar.
+type CancelUploadRequestMsg struct {
+	File types.FileInfo
+}
+
+// FriendCardClickedMsg is dispatched when the user clicks (or
+// activates) a [FRIEND:...] pill rendered inside a chat message.
+// The model decides whether to import, view, or merge based on
+// whether the friend already exists in the local store.
+type FriendCardClickedMsg struct {
+	Card friends.ContactCard
+}
+
 // selectableItem tracks a file in the message view that can be selected.
 type selectableItem struct {
 	file types.FileInfo
+}
+
+// friendCardHit tracks a clickable [FRIEND:...] pill rendered inside
+// a chat message body. The model uses these for mouse hit-testing.
+type friendCardHit struct {
+	cardKey  string // key into MessageViewModel.friendCards
+	line     int    // absolute line in viewport content
+	startCol int
+	endCol   int
 }
 
 // reactionHit tracks a clickable reaction badge for mouse hit-testing.
@@ -103,9 +165,19 @@ type MessageViewModel struct {
 	viewport    viewport.Model
 	messages    []types.Message
 	users       map[string]string
-	channelName string
-	secureLabel string
-	replyFormat string
+	channelName       string
+	secureLabel       string
+	isFriendCh        bool
+	friendDetailsHint string
+	replyFormat       string
+
+	// Cached local-user identity, used by ownership-dependent UI
+	// (e.g. hiding the "d: delete" hint on messages the local
+	// user didn't author). Set once at startup and refreshed
+	// whenever the model learns a new id (e.g. after Slack
+	// AuthTest completes).
+	localSlackUserID string // Slack workspace user id (xUxx...)
+	localSlackerID   string // friend-system slacker id
 	focused     bool
 	autoScroll  bool
 	width       int
@@ -138,10 +210,24 @@ type MessageViewModel struct {
 	// horizontal rules so it stands out (used by the thread view).
 	boxFirstMessage bool
 
+	// itemSpacing controls vertical padding between rendered messages.
+	// 0 = compact (default), 1 = relaxed (extra blank below each message),
+	// 2 = comfortable (extra blank above and below message text + reactions row).
+	itemSpacing int
+
 	// Line-to-message map for click resolution (rebuilt in renderMessages).
 	lineToMsgID    map[int]string // line index → message ID for the message at that line
 	replyLineMsgID map[int]string // line index → parent message ID for "X replies" lines
 	reactionHits   []reactionHit  // clickable reaction badges with positions
+
+	// Friend-card pills rendered inside message text. Each is a
+	// clickable button that activates an import-or-update prompt.
+	friendCardHits []friendCardHit
+	// friendCards maps a per-render key (e.g. "fc-3") to the
+	// decoded ContactCard so the click handler can resolve back to
+	// the full data without re-parsing or carrying the entire blob
+	// in the rendered text.
+	friendCards map[string]friends.ContactCard
 
 	// Context mode (search result viewing)
 	contextMode     bool
@@ -262,9 +348,102 @@ func (m *MessageViewModel) SetSecureLabel(label string) {
 	m.secureLabel = label
 }
 
+// SetIsFriendChannel marks the current channel as a friend channel so the
+// header renders the friend-details cog and uses the friend-style indicator.
+func (m *MessageViewModel) SetIsFriendChannel(b bool) {
+	m.isFriendCh = b
+}
+
+// SetLocalIdentity caches the IDs the renderer compares against to
+// determine if a given message is authored by the local user. Either
+// or both can be empty (the comparison just falls back to the next
+// rule). Triggers a re-render so existing select-mode hints reflect
+// the new authorship calculation.
+func (m *MessageViewModel) SetLocalIdentity(slackUserID, slackerID string) {
+	if m.localSlackUserID == slackUserID && m.localSlackerID == slackerID {
+		return
+	}
+	m.localSlackUserID = slackUserID
+	m.localSlackerID = slackerID
+	m.rebuildContent()
+}
+
+// isMyMessage reports whether a message was authored by the local
+// user, using the cached identity fields. Locally-sent friend
+// messages use UserID=="me"; Slack messages use the workspace id;
+// outgoing P2P friend messages may also carry the slacker id.
+func (m *MessageViewModel) isMyMessage(msg types.Message) bool {
+	if msg.UserID == "me" {
+		return true
+	}
+	if m.localSlackUserID != "" && msg.UserID == m.localSlackUserID {
+		return true
+	}
+	if m.localSlackerID != "" && msg.UserID == m.localSlackerID {
+		return true
+	}
+	return false
+}
+
+// SetFriendDetailsHint sets a short string (e.g. "Alt+I") that the
+// header renders just left of the secure-status / cog area when on a
+// friend chat. Empty disables the hint.
+func (m *MessageViewModel) SetFriendDetailsHint(s string) {
+	m.friendDetailsHint = s
+}
+
+// IsFriendChannel reports whether the message view is showing a friend chat.
+func (m MessageViewModel) IsFriendChannel() bool {
+	return m.isFriendCh
+}
+
+// FriendCogGlyph is the icon rendered in the upper-right of friend chats.
+const friendCogGlyph = "⚙\ufe0f"
+
+// FriendCogPaneClickArea returns the (startCol, endCol) range, in pane
+// content coordinates (0 = first column inside the border+padding), of
+// the friend-details cog in the header line. Returns (0,0) when the cog
+// is not currently shown.
+func (m MessageViewModel) FriendCogPaneClickArea() (int, int) {
+	if !m.isFriendCh {
+		return 0, 0
+	}
+	contentW := m.width - 4
+	if contentW <= 0 {
+		return 0, 0
+	}
+	cw := lipgloss.Width(friendCogGlyph)
+	// Be generous with the click area: extend a couple of columns to
+	// the left of the rendered glyph and a few columns to the right
+	// (covering right padding + border) so the cog catches clicks
+	// regardless of off-by-one differences in emoji width reporting
+	// across terminals.
+	start := contentW - cw - 2
+	end := contentW + 4
+	if start < 0 {
+		start = 0
+	}
+	return start, end
+}
+
 func (m *MessageViewModel) SetReplyFormat(format string) {
 	m.replyFormat = format
 	m.rebuildContent()
+}
+
+// SetItemSpacing sets the vertical-spacing level for chat messages.
+// 0 = compact, 1 = relaxed, 2 = comfortable. Values are clamped to 0..2.
+func (m *MessageViewModel) SetItemSpacing(n int) {
+	if n < 0 {
+		n = 0
+	}
+	if n > 2 {
+		n = 2
+	}
+	if m.itemSpacing != n {
+		m.itemSpacing = n
+		m.rebuildContent()
+	}
 }
 
 func (m *MessageViewModel) SetSize(w, h int) {
@@ -345,6 +524,18 @@ func (m *MessageViewModel) Refresh() {
 	m.rebuildContent()
 }
 
+// EditMessageLocal replaces the text of a message (top-level or nested reply)
+// in the in-memory view. Returns true if a matching message was found.
+func (m *MessageViewModel) EditMessageLocal(messageID, newText string) bool {
+	target := m.findMessage(messageID)
+	if target == nil {
+		return false
+	}
+	target.Text = newText
+	m.rebuildContent()
+	return true
+}
+
 // DeleteMessageLocal removes a message (top-level or nested reply) from the
 // in-memory view. Returns true if a message was removed.
 func (m *MessageViewModel) DeleteMessageLocal(messageID string) bool {
@@ -402,11 +593,13 @@ func (m *MessageViewModel) findMessagePreview(messageID string) string {
 }
 
 // ReplyLineMessageID returns the parent message ID if the line clicked is a "X replies" line.
-// Accepts a 1-line buffer above and below the actual line for forgiving hit-testing.
+// Accepts a forgiving buffer (1 row above, 2 rows below) for hit-testing,
+// which also covers the extra blank lines added by message item spacing.
 func (m *MessageViewModel) ReplyLineMessageID(y int) string {
 	// Convert viewport y to absolute content line number.
-	absLine := y - 1 + m.viewport.YOffset
-	for _, off := range []int{0, -1, 1} {
+	// Pane chrome: top border (1) + header line (1) → subtract 2.
+	absLine := y - 2 + m.viewport.YOffset
+	for _, off := range []int{0, -1, 1, 2} {
 		if id, ok := m.replyLineMsgID[absLine+off]; ok {
 			return id
 		}
@@ -420,7 +613,9 @@ func (m *MessageViewModel) ReplyLineMessageID(y int) string {
 // Uses the rendered line→message map for accurate resolution. Walks back from
 // the clicked line to find the closest preceding message header (parent or reply).
 func (m *MessageViewModel) MessageAtClick(y int) (string, string) {
-	absLine := y - 1 + m.viewport.YOffset
+	// Same pane chrome as FileAtClick / ReactionAtClick: top border (1)
+	// + header line (1) before the viewport content begins.
+	absLine := y - 2 + m.viewport.YOffset
 	for i := absLine; i >= 0; i-- {
 		if id, ok := m.lineToMsgID[i]; ok {
 			return id, m.findMessagePreview(id)
@@ -468,6 +663,251 @@ func (m *MessageViewModel) ExitSelectMode() {
 		m.selectMode = false
 		m.rebuildContent()
 	}
+}
+
+// MessageIDForFile returns the ID of the message containing the given
+// file ID, walking nested replies. Empty if not found.
+func (m *MessageViewModel) MessageIDForFile(fileID string) string {
+	for i := range m.messages {
+		for _, f := range m.messages[i].Files {
+			if f.ID == fileID {
+				return m.messages[i].MessageID
+			}
+		}
+		for j := range m.messages[i].Replies {
+			for _, f := range m.messages[i].Replies[j].Files {
+				if f.ID == fileID {
+					return m.messages[i].Replies[j].MessageID
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// SelectedFile returns the currently-selected file in file-select mode,
+// or nil if none.
+func (m *MessageViewModel) SelectedFile() *types.FileInfo {
+	if !m.selectMode || m.selectIdx < 0 || m.selectIdx >= len(m.selectables) {
+		return nil
+	}
+	f := m.selectables[m.selectIdx].file
+	return &f
+}
+
+// SetFileUploaded marks a file (identified by FileInfo.ID) inside a
+// specific message as no longer uploading and triggers a re-render.
+// Returns true if the file was found and updated.
+func (m *MessageViewModel) SetFileUploaded(messageID, fileID string) bool {
+	target := m.findMessage(messageID)
+	if target == nil {
+		return false
+	}
+	for i := range target.Files {
+		if target.Files[i].ID == fileID {
+			if !target.Files[i].Uploading {
+				return true
+			}
+			target.Files[i].Uploading = false
+			m.rebuildContent()
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveFile removes a file (by ID) from a message and re-renders.
+// Used when a user cancels an upload before it completes.
+func (m *MessageViewModel) RemoveFile(messageID, fileID string) bool {
+	target := m.findMessage(messageID)
+	if target == nil {
+		return false
+	}
+	for i := range target.Files {
+		if target.Files[i].ID == fileID {
+			target.Files = append(target.Files[:i], target.Files[i+1:]...)
+			m.rebuildContent()
+			return true
+		}
+	}
+	return false
+}
+
+// inboundFriendMarkerPattern matches [FRIEND:<token>] inside an
+// incoming message body. The token can be JSON, an SLF1./SLF2. hash,
+// or already a short label (in which case we leave it alone). Used
+// by the renderer to swap full hashes for compact pills.
+var inboundFriendMarkerPattern = regexp.MustCompile(`\[FRIEND:([^\]]+)\]`)
+
+// collapseFriendMarkers walks the raw message text and collapses any
+// decodable [FRIEND:<long-blob>] marker into a short reference token
+// like [FRIEND:#0]. The original marker is decoded once and the
+// resulting card is cached on the view model under that index, so
+// the per-line rewriteFriendCards pass can resolve the placeholder
+// without re-parsing.
+//
+// This MUST run before wordWrap — long JSON markers otherwise wrap
+// across multiple lines and the regex (which requires '[FRIEND:' and
+// ']' on the same line) silently misses them, leaving the raw blob
+// in the chat output.
+func (m *MessageViewModel) collapseFriendMarkers(text string) string {
+	if !strings.Contains(text, "[FRIEND:") {
+		return text
+	}
+	if m.friendCards == nil {
+		m.friendCards = make(map[string]friends.ContactCard)
+	}
+	out := text
+	idx := 0
+	for {
+		loc := inboundFriendMarkerPattern.FindStringIndex(out[idx:])
+		if loc == nil {
+			break
+		}
+		start := idx + loc[0]
+		end := idx + loc[1]
+		raw := out[start:end]
+		inner := raw[len("[FRIEND:") : len(raw)-1]
+		// Skip already-collapsed placeholders so this is idempotent
+		// across re-renders.
+		if strings.HasPrefix(inner, "#") {
+			idx = end
+			continue
+		}
+		card, err := friends.ParseAnyContactCard(inner)
+		if err != nil {
+			idx = end
+			continue
+		}
+		key := fmt.Sprintf("fc-%d", len(m.friendCards))
+		m.friendCards[key] = card
+		placeholder := "[FRIEND:#" + key + "]"
+		out = out[:start] + placeholder + out[end:]
+		idx = start + len(placeholder)
+	}
+	return out
+}
+
+// rewriteFriendCards walks the given line, finds any [FRIEND:<blob>]
+// markers whose payload decodes to a ContactCard, replaces them with
+// a styled compact pill (`[FRIEND:<name-or-email-or-id>]`), and
+// records the resulting click hit area. Each successful decode adds
+// an entry to m.friendCards keyed by a render-local id; the click
+// handler uses that id to resolve back to the full card.
+//
+// Returns the rewritten line. Lines without a friend marker (or with
+// only undecodable markers) are returned untouched.
+func (m *MessageViewModel) rewriteFriendCards(line string, lineIdx int) string {
+	if !strings.Contains(line, "[FRIEND:") {
+		return line
+	}
+	pillStyle := lipgloss.NewStyle().
+		Foreground(ColorAccent).
+		Background(lipgloss.Color("236")).
+		Bold(true).
+		Padding(0, 1)
+	if m.friendCards == nil {
+		m.friendCards = make(map[string]friends.ContactCard)
+	}
+	out := line
+	idx := 0
+	for {
+		match := inboundFriendMarkerPattern.FindStringIndex(out[idx:])
+		if match == nil {
+			break
+		}
+		matchStart := idx + match[0]
+		matchEnd := idx + match[1]
+		raw := out[matchStart:matchEnd]
+		inner := raw[len("[FRIEND:") : len(raw)-1]
+		var card friends.ContactCard
+		var key string
+		if strings.HasPrefix(inner, "#") {
+			// Placeholder reference produced by
+			// collapseFriendMarkers earlier in the render.
+			key = strings.TrimPrefix(inner, "#")
+			cached, ok := m.friendCards[key]
+			if !ok {
+				idx = matchEnd
+				continue
+			}
+			card = cached
+		} else {
+			parsed, err := friends.ParseAnyContactCard(inner)
+			if err != nil {
+				// Not a decodable hash/json, leave the marker
+				// alone and skip past it.
+				idx = matchEnd
+				continue
+			}
+			card = parsed
+			// Cache the decoded card. The full marker stays in
+			// the underlying message text on disk; the pill is
+			// just a render-time substitution.
+			key = fmt.Sprintf("fc-%d", len(m.friendCards))
+			m.friendCards[key] = card
+		}
+		label := friendCardDisplayName(card)
+		pillText := "👤 Friend: " + label
+		pillRendered := pillStyle.Render(pillText)
+		// Compute the click hit area for this pill in the *rewritten* line.
+		// We need to know what column the pill ends up at after the
+		// substitution. Walk the visible width of out[:matchStart].
+		preWidth := lipgloss.Width(out[:matchStart])
+		pillWidth := lipgloss.Width(pillRendered)
+		m.friendCardHits = append(m.friendCardHits, friendCardHit{
+			cardKey:  key,
+			line:     lineIdx,
+			startCol: preWidth,
+			endCol:   preWidth + pillWidth,
+		})
+		out = out[:matchStart] + pillRendered + out[matchEnd:]
+		// Continue scanning after the inserted pill.
+		idx = matchStart + len(pillRendered)
+	}
+	return out
+}
+
+// friendCardDisplayName returns the best short label for a friend
+// card pill. Order of preference:
+//  1. Real Name from the card (e.g. "Ryan Weiss")
+//  2. Email (e.g. "ryan@example.com")
+//  3. ShortPeerID derived from the multiaddr (e.g. "WFKy7Pmh")
+//  4. "(unknown)" only if literally nothing is available.
+//
+// This is purely a display helper — the underlying message text
+// retains the full [FRIEND:...] marker so the original card data
+// is always recoverable on click.
+func friendCardDisplayName(card friends.ContactCard) string {
+	if s := strings.TrimSpace(card.Name); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(card.Email); s != "" {
+		return s
+	}
+	if s := friends.ShortPeerID(card); s != "" {
+		return s
+	}
+	return "(unknown)"
+}
+
+// FriendCardAtClick returns the cached friend card whose pill was
+// clicked at (paneX, paneY) in the messages pane. The coordinates
+// match the same scheme as ReactionAtClick.
+func (m *MessageViewModel) FriendCardAtClick(x, y int) *friends.ContactCard {
+	contentX := x - 2
+	absLine := y - 2 + m.viewport.YOffset
+	for _, h := range m.friendCardHits {
+		if h.line != absLine {
+			continue
+		}
+		if contentX >= h.startCol && contentX < h.endCol {
+			if card, ok := m.friendCards[h.cardKey]; ok {
+				return &card
+			}
+		}
+	}
+	return nil
 }
 
 // addReactionTo mutates the given message to add a reaction from userID.
@@ -745,6 +1185,23 @@ func (m *MessageViewModel) ToggleReplyCollapse(msgID string) {
 	m.rebuildContent()
 }
 
+// ExpandReplies forces a message's inline reply tree to render
+// expanded. Used when a new reply arrives so the user sees it
+// immediately instead of having to click "X replies" to expand.
+func (m *MessageViewModel) ExpandReplies(msgID string) {
+	if msgID == "" {
+		return
+	}
+	if m.expandedReplies == nil {
+		m.expandedReplies = make(map[string]bool)
+	}
+	if m.expandedReplies[msgID] {
+		return
+	}
+	m.expandedReplies[msgID] = true
+	m.rebuildContent()
+}
+
 // EnterFileSelectMode activates file selection if there are files available.
 func (m *MessageViewModel) EnterFileSelectMode() bool {
 	if len(m.selectables) > 0 {
@@ -823,12 +1280,31 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 			case "enter":
 				if m.selectIdx >= 0 && m.selectIdx < len(m.selectables) {
 					f := m.selectables[m.selectIdx].file
+					if f.Uploading {
+						// Don't trigger a download for in-flight
+						// uploads — instead surface a cancel request
+						// so the model can prompt for confirmation.
+						return m, func() tea.Msg {
+							return CancelUploadRequestMsg{File: f}
+						}
+					}
 					m.selectMode = false
 					m.rebuildContent()
 					return m, func() tea.Msg {
 						return FileDownloadMsg{File: f}
 					}
 				}
+			case "c", "C":
+				// Cancel an in-flight upload while in file-select mode.
+				if m.selectIdx >= 0 && m.selectIdx < len(m.selectables) {
+					f := m.selectables[m.selectIdx].file
+					if f.Uploading {
+						return m, func() tea.Msg {
+							return CancelUploadRequestMsg{File: f}
+						}
+					}
+				}
+				return m, nil
 			case "esc":
 				m.selectMode = false
 				m.rebuildContent()
@@ -1034,6 +1510,30 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				return m, func() tea.Msg {
 					return DeleteMessageRequestMsg{MessageID: msgID}
 				}
+			case "e":
+				// 'e' opens the inline edit flow for the selected
+				// author-owned message. The hint in the header
+				// only shows this for messages the local user
+				// authored, but gate it here too so the key is
+				// a no-op on someone else's message instead of
+				// routing a nonsensical edit request to the
+				// model.
+				msgID := m.SelectedReplyMessageID()
+				if msgID == "" {
+					msgID = m.SelectedMessageID()
+				}
+				if msgID == "" {
+					return m, nil
+				}
+				target := m.MessageByID(msgID)
+				if target == nil || !m.isMyMessage(*target) {
+					return m, nil
+				}
+				m.reactMode = false
+				m.rebuildContent()
+				return m, func() tea.Msg {
+					return EditMessageRequestMsg{MessageID: msgID}
+				}
 			case "esc":
 				// Esc unwinds: reply-reaction → reply → reactionSelIdx → exit react mode.
 				if onReplyList && m.replyReactionSelIdx >= 0 {
@@ -1105,7 +1605,10 @@ func (m MessageViewModel) View() string {
 		}
 		headerParts = append(headerParts, titleStyle.Render(title))
 	}
-	if m.secureLabel != "" {
+	// For non-friend channels, show the secure label inline (right after the
+	// title). Friend channels render the label right-aligned alongside the
+	// cog icon further down, so skip it here in that case.
+	if m.secureLabel != "" && !m.isFriendCh {
 		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00")).Render(" "+m.secureLabel))
 	}
 
@@ -1127,8 +1630,52 @@ func (m MessageViewModel) View() string {
 		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorMuted).Italic(true).Render("  (Esc to exit thread, type to reply)"))
 	}
 
-	header := strings.Join(headerParts, "") + "\n"
+	headerLeft := strings.Join(headerParts, "")
 
+	// Right-aligned section: friend channels show "<secure label>  ⚙" so the
+	// user can click the cog to open Friend Details. Hit-testing of the cog
+	// is done by the model via FriendCogPaneClickArea, which derives the
+	// position from the same content-width math used here.
+	header := headerLeft
+	if m.isFriendCh {
+		contentW := m.width - 4 // pane width minus 2 borders minus 2 padding
+		if contentW < 0 {
+			contentW = 0
+		}
+		hintStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+		rightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00"))
+		cogStyle := lipgloss.NewStyle().Foreground(ColorHighlight)
+		rightVisible := strings.TrimLeft(m.secureLabel, " ")
+		// Compose right block plain text to measure visible width.
+		// Layout: "<hint>  <secure label>  ⚙"
+		var rightPlainParts []string
+		if m.friendDetailsHint != "" {
+			rightPlainParts = append(rightPlainParts, m.friendDetailsHint)
+		}
+		if rightVisible != "" {
+			rightPlainParts = append(rightPlainParts, rightVisible)
+		}
+		rightPlainParts = append(rightPlainParts, friendCogGlyph)
+		rightPlain := strings.Join(rightPlainParts, "  ")
+		rightVisW := lipgloss.Width(rightPlain)
+		leftVisW := lipgloss.Width(headerLeft)
+		pad := contentW - leftVisW - rightVisW
+		if pad < 1 {
+			pad = 1
+		}
+		var rightRenderedParts []string
+		if m.friendDetailsHint != "" {
+			rightRenderedParts = append(rightRenderedParts, hintStyle.Render(m.friendDetailsHint))
+		}
+		if rightVisible != "" {
+			rightRenderedParts = append(rightRenderedParts, rightStyle.Render(rightVisible))
+		}
+		rightRenderedParts = append(rightRenderedParts, cogStyle.Render(friendCogGlyph))
+		rightRendered := strings.Join(rightRenderedParts, "  ")
+		header = headerLeft + strings.Repeat(" ", pad) + rightRendered
+	}
+
+	header += "\n"
 	content := header + m.viewport.View()
 
 	style := MessagePaneStyle
@@ -1284,6 +1831,8 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 	m.lineToMsgID = make(map[int]string)
 	m.replyLineMsgID = make(map[int]string)
 	m.reactionHits = nil
+	m.friendCardHits = nil
+	m.friendCards = make(map[string]friends.ContactCard)
 
 	var lines []string
 	maxWidth := m.width - 4
@@ -1331,27 +1880,48 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			nameStyle.Render(name),
 			TimestampStyle.Render(ts),
 		)
+		// Pending badge: shown for friend P2P messages that haven't
+		// been delivered yet. Flag is cleared automatically once the
+		// peer comes back online and the message is re-sent.
+		if msg.Pending {
+			pendingStyle := lipgloss.NewStyle().
+				Foreground(ColorHighlight).
+				Italic(true)
+			headerLine += "  " + pendingStyle.Render("⏳ pending")
+		}
 
 		// Highlight selected message in select mode.
 		if m.reactMode && i == m.reactIdx {
 			selectHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
 			hasReactions := len(msg.Reactions) > 0
 			hasInlineReplies := !m.threadMode && m.replyFormat == "inline" && len(msg.Replies) > 0 && m.expandedReplies[msg.MessageID]
+			// Only authors can edit or delete their own messages,
+			// so hide the "e: edit" / "d: delete" hints when the
+			// local user isn't the author.
+			authorHint := ""
+			if m.isMyMessage(msg) {
+				authorHint = "  e: edit  d: delete"
+			}
 			var hint string
 			switch {
 			case hasReactions && hasInlineReplies:
-				hint = " [Enter: reply  r: react  d: delete  ←/→: reactions/replies  ↓: into replies]"
+				hint = " [Enter: reply  r: react" + authorHint + "  ←/→: reactions/replies  ↓: into replies]"
 			case hasReactions:
-				hint = " [Enter: reply  r: react  d: delete  ←/→: select reaction]"
+				hint = " [Enter: reply  r: react" + authorHint + "  ←/→: select reaction]"
 			case hasInlineReplies:
-				hint = " [Enter: reply  r: react  d: delete  →: select reply list  ↓: into replies]"
+				hint = " [Enter: reply  r: react" + authorHint + "  →: select reply list  ↓: into replies]"
 			default:
-				hint = " [Enter: reply  r: react  d: delete]"
+				hint = " [Enter: reply  r: react" + authorHint + "]"
 			}
 			headerLine = selectHighlight.Render(headerLine + hint)
 		}
 
 		text := format.FormatMessage(msg.Text, m.users)
+		// Collapse long [FRIEND:<json|hash>] markers into short
+		// [FRIEND:#fc-N] reference tokens *before* word-wrapping,
+		// so the marker stays on a single line and the per-line
+		// rewriteFriendCards pass can find it.
+		text = m.collapseFriendMarkers(text)
 		wrapped := wordWrap(text, maxWidth)
 		var textLines []string
 		if wrapped != "" {
@@ -1376,26 +1946,52 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		if i == highlightIdx {
 			headerLine = highlightBg.Render("► " + headerLine)
 			lines = append(lines, headerLine)
+			// Spacing 1+ adds a blank line below the message header (above
+			// the message text). Spacing 2+ also adds one below the text.
+			if m.itemSpacing >= 1 {
+				lines = append(lines, "")
+			}
 			for _, tl := range textLines {
-				lines = append(lines, highlightBg.Render("  "+MessageTextStyle.Render(tl)))
+				rendered := highlightBg.Render("  " + MessageTextStyle.Render(tl))
+				rendered = m.rewriteFriendCards(rendered, len(lines))
+				lines = append(lines, rendered)
+			}
+			if m.itemSpacing >= 2 && len(textLines) > 0 {
+				lines = append(lines, "")
 			}
 		} else {
 			lines = append(lines, headerLine)
+			if m.itemSpacing >= 1 {
+				lines = append(lines, "")
+			}
 			for _, tl := range textLines {
-				lines = append(lines, "  "+MessageTextStyle.Render(tl))
+				rendered := "  " + MessageTextStyle.Render(tl)
+				rendered = m.rewriteFriendCards(rendered, len(lines))
+				lines = append(lines, rendered)
+			}
+			if m.itemSpacing >= 2 && len(textLines) > 0 {
+				lines = append(lines, "")
 			}
 		}
 
 		// Render file attachments.
+		uploadingStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 		for _, f := range msg.Files {
 			isSelected := m.selectMode && fileIdx == m.selectIdx
 			sizeStr := formatFileSize(f.Size)
-			if isSelected {
+			switch {
+			case f.Uploading && isSelected:
+				lines = append(lines, fileSelectedStyle.Render(
+					fmt.Sprintf("  > [FILE:%s] (%s) uploading… — c: cancel", f.Name, sizeStr)))
+			case f.Uploading:
+				lines = append(lines, uploadingStyle.Render(
+					fmt.Sprintf("  [FILE:%s] (%s) uploading…", f.Name, sizeStr)))
+			case isSelected:
 				lines = append(lines, fileSelectedStyle.Render(
 					fmt.Sprintf("  > [FILE:%s] (%s) — Enter to download", f.Name, sizeStr)))
-			} else {
+			default:
 				lines = append(lines, fileStyle.Render(
-					fmt.Sprintf("    [FILE:%s] (%s)", f.Name, sizeStr)))
+					fmt.Sprintf("  [FILE:%s] (%s)", f.Name, sizeStr)))
 			}
 			fileIdx++
 		}
@@ -1403,6 +1999,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		// Build reply count + reactions row.
 		replyCount := len(msg.Replies)
 		if replyCount > 0 || len(msg.Reactions) > 0 {
+			// Spacing 1+ adds a blank line before the row.
+			if m.itemSpacing >= 1 {
+				lines = append(lines, "")
+			}
 			replyLabel := ""
 			if replyCount > 0 {
 				replyStyle := lipgloss.NewStyle().Foreground(ColorReplyLabel).Italic(true)
@@ -1435,10 +2035,11 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			reactionsStr := strings.Join(reactionParts, " ")
 
 			// Compute the start column of the reactions block.
-			// Layout: "   " (3 spaces) + replyLabel + "  " (2 spaces) + reactions
+			// Layout when reply label present: "  " (2 spaces) + replyLabel + "  " + reactions
+			// Layout when only reactions:      "   " (3 spaces) + reactions
 			reactionStartCol := 3
 			if replyLabel != "" && reactionsStr != "" {
-				reactionStartCol = 3 + lipgloss.Width(replyLabel) + 2
+				reactionStartCol = 2 + lipgloss.Width(replyLabel) + 2
 			}
 
 			// Record reaction badge positions for click hit-testing.
@@ -1459,10 +2060,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 
 			if replyLabel != "" && reactionsStr != "" {
 				m.replyLineMsgID[currentLine] = msg.MessageID
-				lines = append(lines, "   "+replyLabel+"  "+reactionsStr)
+				lines = append(lines, "  "+replyLabel+"  "+reactionsStr)
 			} else if replyLabel != "" {
 				m.replyLineMsgID[currentLine] = msg.MessageID
-				lines = append(lines, "   "+replyLabel)
+				lines = append(lines, "  "+replyLabel)
 			} else {
 				lines = append(lines, "   "+reactionsStr)
 			}
@@ -1481,9 +2082,23 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				Foreground(ColorPrimary).
 				Bold(true).
 				Padding(0, 1)
+			// Spacing-1 adds 1 blank between the "X replies" row and the
+			// reply list, plus 1 between each reply. Spacing-2 adds 2.
+			betweenReplies := 0
+			if m.itemSpacing >= 1 {
+				betweenReplies = m.itemSpacing
+			}
+			for k := 0; k < betweenReplies; k++ {
+				lines = append(lines, "")
+			}
 			// Highlight when this parent message has its reply list active.
 			replyListActive := m.reactMode && i == m.reactIdx && m.reactionSelIdx == len(msg.Reactions) && replyCount > 0
 			for ri, reply := range msg.Replies {
+				if ri > 0 {
+					for k := 0; k < betweenReplies; k++ {
+						lines = append(lines, "")
+					}
+				}
 				rTime := reply.Timestamp.Format("15:04")
 				rName := reply.UserName
 				if rName == "" {
@@ -1496,7 +2111,11 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				header := replyHeaderStyle.Render(fmt.Sprintf("↳ %s %s", rName, rTime))
 				if replyListActive && ri == m.replyIdx {
 					selectHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
-					header = selectHighlight.Render(header + " [r: react  d: delete  Esc: back]")
+					replyDelete := ""
+					if m.isMyMessage(reply) {
+						replyDelete = "  d: delete"
+					}
+					header = selectHighlight.Render(header + " [r: react" + replyDelete + "  Esc: back]")
 				}
 				lines = append(lines, replyIndent+header)
 				rText := format.FormatMessage(reply.Text, m.users)
@@ -1547,7 +2166,18 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			lines = append(lines, ruleStyle.Render(strings.Repeat("─", ruleW)))
 		}
 
-		lines = append(lines, "")
+		// Trailing blank line(s) — number depends on the spacing level.
+		// 0 = 1 blank, 1 = 2 blanks, 2 = 3 blanks.
+		trailingBlanks := 1 + m.itemSpacing
+		for k := 0; k < trailingBlanks; k++ {
+			lines = append(lines, "")
+		}
+	}
+
+	// Trim trailing blank lines so the latest message hugs the bottom of
+	// the viewport instead of leaving padding below it.
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
 	}
 
 	return strings.Join(lines, "\n")

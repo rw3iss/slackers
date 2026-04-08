@@ -127,6 +127,13 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				options:     []string{"0", "1", "2"},
 			},
 			{
+				label:       "Message Item Spacing",
+				key:         "message_item_spacing",
+				value:       strconv.Itoa(cfg.MessageItemSpacing),
+				description: "Vertical spacing between chat messages (0=compact, 1=relaxed, 2=comfortable)",
+				options:     []string{"0", "1", "2"},
+			},
+			{
 				label:       "Timestamp Format",
 				key:         "timestamp_format",
 				value:       cfg.TimestampFormat,
@@ -174,6 +181,12 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				key:         "input_history_max",
 				value:       strconv.Itoa(inputHistMax(cfg.InputHistoryMax)),
 				description: "Max sent messages to remember (1-200)",
+			},
+			{
+				label:       "Notification Timeout",
+				key:         "notification_timeout",
+				value:       strconv.Itoa(notificationTimeoutValue(cfg.NotificationTimeout)),
+				description: "Seconds before status, warning, and notification messages auto-clear (default 3)",
 			},
 
 			// ───── Channels ─────
@@ -347,6 +360,15 @@ func awayTimeoutValue(n int) string {
 		return "0"
 	}
 	return strconv.Itoa(n)
+}
+
+// notificationTimeoutValue returns the configured notification timeout
+// or the global default (3 seconds) when unset / invalid.
+func notificationTimeoutValue(n int) int {
+	if n <= 0 {
+		return 3
+	}
+	return n
 }
 
 func pollPriorityVal(n int) int {
@@ -602,6 +624,16 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 		m.cfg.SidebarItemSpacing = n
 		m.message = "Sidebar item spacing updated"
 
+	case "message_item_spacing":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 2 {
+			m.message = "Message item spacing must be 0-2"
+			m.fields[m.selected].value = strconv.Itoa(m.cfg.MessageItemSpacing)
+			return nil
+		}
+		m.cfg.MessageItemSpacing = n
+		m.message = "Message item spacing updated"
+
 	case "timestamp_format":
 		m.cfg.TimestampFormat = value
 		m.message = "Timestamp format updated"
@@ -649,6 +681,16 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 		} else {
 			m.message = fmt.Sprintf("Away after %ds of inactivity", n)
 		}
+
+	case "notification_timeout":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 {
+			m.message = "Must be a positive number of seconds"
+			m.fields[m.selected].value = strconv.Itoa(notificationTimeoutValue(m.cfg.NotificationTimeout))
+			return nil
+		}
+		m.cfg.NotificationTimeout = n
+		m.message = fmt.Sprintf("Notifications clear after %ds", n)
 
 	case "mouse_enabled":
 		v := strings.ToLower(strings.TrimSpace(value))
@@ -786,18 +828,40 @@ func (m SettingsModel) View() string {
 	if verPad < 1 {
 		verPad = 1
 	}
-	b.WriteString(titleStyle.Render("Settings") + strings.Repeat(" ", verPad) + verStyle.Render(verText))
-	b.WriteString("\n\n")
+	// Build the header (title row + blank) into a separate buffer so we can
+	// reserve room for it and the footer when computing the field window.
+	var headerBuf strings.Builder
+	headerBuf.WriteString(titleStyle.Render("Settings") + strings.Repeat(" ", verPad) + verStyle.Render(verText))
+	headerBuf.WriteString("\n\n")
 
-	// Calculate visible field window.
-	// Box overhead: 2 border + 2 padding + 3 header + 4 footer = 11 lines.
-	// Each field = 1 line, the selected field takes 2 (includes description).
-	// So available = boxHeight - overhead, minus 1 for the selected field's extra line.
-	available := m.height - 4 - 11 - 1
-	visibleFields := available
-	if visibleFields < 3 {
-		visibleFields = 3
+	// Height is inner content height; lipgloss adds 4 (border + padding),
+	// so the rendered box is m.height - 1 (one row of breathing room at the
+	// top). MaxHeight pins it so navigation can't grow the box past this.
+	boxHeightCalc := m.height - 5
+	if boxHeightCalc < 6 {
+		boxHeightCalc = 6
 	}
+	innerH := boxHeightCalc - 4
+	if innerH < 1 {
+		innerH = 1
+	}
+	headerLineCount := strings.Count(headerBuf.String(), "\n")
+	// Footer reserves: blank line + footer hint + optional message line.
+	footerLineCount := 2
+	if m.message != "" {
+		footerLineCount += 2
+	}
+	// Calculate visible field window. Each field is normally 1 line, the
+	// selected field takes 2 (includes description), and group headers
+	// can add a leading blank line. Reserve 4 extra rows so navigating
+	// through the list (which changes which row has the description and
+	// how many headers are visible) can never push the body past the
+	// inner box height and grow the box.
+	available := innerH - headerLineCount - footerLineCount - 4
+	if available < 3 {
+		available = 3
+	}
+	visibleFields := available
 	if visibleFields > len(m.fields) {
 		visibleFields = len(m.fields)
 	}
@@ -822,6 +886,11 @@ func (m SettingsModel) View() string {
 		Bold(true).
 		Foreground(ColorPageHeader).
 		Underline(true)
+
+	// Build the field list into its own buffer so we can clip just the body
+	// without losing the footer.
+	bodyBuf := &b
+	bodyBuf.Reset()
 
 	for i := m.scrollOffset; i < end; i++ {
 		f := m.fields[i]
@@ -874,36 +943,34 @@ func (m SettingsModel) View() string {
 		}
 	}
 
+	// bodyBuf currently holds the rendered field list. Append the footer
+	// directly: blank line + optional message + blank line + hint.
 	if m.message != "" {
-		b.WriteString("\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.message))
+		bodyBuf.WriteString("\n")
+		bodyBuf.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.message))
 	}
-
-	b.WriteString("\n\n")
+	bodyBuf.WriteString("\n\n")
 	if m.editing {
-		b.WriteString(dimStyle.Render("  Enter: save | Esc: cancel"))
+		bodyBuf.WriteString(dimStyle.Render("  Enter: save | Esc: cancel"))
 	} else {
 		f := m.fields[m.selected]
 		if len(f.options) > 0 {
-			b.WriteString(dimStyle.Render("  Enter/Tab: cycle | Esc/Ctrl-S: close"))
+			bodyBuf.WriteString(dimStyle.Render("  Enter/Tab: cycle | Esc/Ctrl-S: close"))
 		} else {
-			b.WriteString(dimStyle.Render("  Enter: edit | Esc/Ctrl-S: close"))
+			bodyBuf.WriteString(dimStyle.Render("  Enter: edit | Esc/Ctrl-S: close"))
 		}
 	}
 
-	content := b.String()
-
-	boxHeight := m.height - 4
-	if boxHeight < 10 {
-		boxHeight = 10
-	}
+	// Final content = header + body. Lipgloss pads to Height for us.
+	content := headerBuf.String() + bodyBuf.String()
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
 		Width(min(85, m.width-4)).
-		Height(boxHeight)
+		Height(boxHeightCalc).
+		MaxHeight(boxHeightCalc + 4)
 
 	box := boxStyle.Render(content)
 

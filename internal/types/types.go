@@ -24,6 +24,12 @@ type FileInfo struct {
 	ChannelName string // channel where the file was shared
 	UserName    string // who uploaded it
 	Timestamp   time.Time
+	// LocalPath is set on the sender side for files that haven't been
+	// uploaded/served yet. Used by the cancel/upload tracker.
+	LocalPath string `json:"local_path,omitempty"`
+	// Uploading is true while the file is being uploaded (Slack) or
+	// pending pickup (P2P). Once delivered, this becomes false.
+	Uploading bool `json:"uploading,omitempty"`
 }
 
 // Reaction represents an emoji reaction on a message.
@@ -46,6 +52,12 @@ type Message struct {
 	Replies     []Message  `json:"replies,omitempty"`     // child messages (replies)
 	ReplyTo     string     `json:"reply_to,omitempty"`    // parent message ID if this is a reply
 	IsEncrypted bool       `json:"is_encrypted,omitempty"`
+	// Pending marks a friend (P2P) message that could not be
+	// delivered at send time because the peer was offline. The
+	// sender stores it locally with this flag set; when the peer
+	// comes back online, any Pending messages are re-sent in order
+	// and the flag is cleared on success.
+	Pending bool `json:"pending,omitempty"`
 }
 
 // User represents a Slack workspace member.

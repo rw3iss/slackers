@@ -16,14 +16,20 @@ A lightweight, terminal-based Slack client.
 - **Real-time messages** -- Socket Mode for instant delivery, with smart polling as a fallback
 - **Message search** -- search current or all channels, jump to results with context view
 - **File browser** -- upload, download, browse and search files across all channels
-- **Mouse support** -- click channels, scroll panels, drag sidebar resize, click files
+- **Mouse support** -- click channels, scroll panels, drag sidebar resize, click files, right-click for context menus
 - **Multi-line editor** -- expandable textarea with normal/edit mode toggle
 - **Customizable shortcuts** -- rebind any key in-app, changes take effect immediately
 - **Color themes** -- 11 built-in themes, an in-app editor with a 256-color picker (fg/bg + bold/italic), live preview, and Ctrl-Y to flip between a primary + alternate theme
-- **Reactions on replies, message delete, inline reply selection** -- everything Slack does, in a TUI
-- **Channel management** -- hide, alias, collapse groups, sort by type/name/recent
+- **Reactions on replies, edit / delete own messages, inline reply selection** -- everything Slack does, in a TUI
+- **Notifications view** (`Alt-N`) -- a single panel collects unread messages, reactions on your messages, and pending friend requests, each click jumps straight to the source
+- **Right-click context menus** -- right-click a message for React / Reply / Edit / Delete, or a sidebar channel for Hide / Rename / Invite to Slackers / View Contact Info
+- **Channel management** -- hide, alias (with a filterable Ctrl-G hidden-channels overlay), collapse groups, sort by type/name/recent
 - **E2E encrypted messaging** -- optional P2P secure mode with X25519 key exchange
 - **Friends list** -- private P2P chat with befriended Slackers users, works without a Slack workspace
+- **Friend contact cards in chat** -- type `[FRIEND:me]` / right-click → "Invite to Slackers" to share a compact hash or full JSON profile that renders as a clickable pill on the receiver's side; click to import, merge, or replace
+- **Automatic profile sync** -- connected peers exchange their latest contact card so stale fields (public key, multiaddr, email) get refreshed in place, without overwriting your chosen display name
+- **Pending messages** -- messages sent while a friend was offline are flagged ⏳ pending, auto-resent in original order the moment the peer reconnects (via both a local reconnect detector and a `request_pending` pull from either side)
+- **Backup & restore** -- `slackers export` / `slackers import` (and the Settings → Backup panel) produce a single-file zip of your entire config, with `replace` and `merge` modes
 - **Auto-update** -- new versions downloaded and installed on startup
 - **One-command onboarding** -- `slackers join <url>` for team setup, OAuth browser login
 - **Single binary** -- cross-platform (Linux, macOS, Windows), no dependencies
@@ -119,6 +125,12 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Ctrl-B` | Send friend request to current DM user |
 | `Ctrl-E` | Open emoji picker (insert at cursor) |
 | `Ctrl-J` | Message select mode (or `s`/`↑`/`↓` in chat history) |
+| `e` / `d` (in select mode) | Edit / delete your own selected message |
+| `r` (in select mode) | React to selected message (opens emoji picker) |
+| `Alt-I` | Open friend config for the current friend chat |
+| `Alt-M` | Insert `[FRIEND:me]` (your contact card) into the input |
+| `Alt-N` | Open the notifications view |
+| `Ctrl-Y` | Toggle between primary and alternate theme |
 | `Esc` | Exit current mode → focus chat input → first/second clears input |
 | `Ctrl-H` | Help (shows current bindings) |
 | `Ctrl-S` | Settings |
@@ -131,9 +143,15 @@ All overlay panels (help, settings, search, hidden channels) are scrollable with
 <details>
 <summary>Settings (Ctrl-S)</summary>
 
+Settings are grouped into named sections (Appearance, Behavior, Channels, Files, Friends, Customization, Account, Backup, Info). Fields with fixed options cycle with Enter/Tab.
+
 | Setting | Options | Description |
 |---------|---------|-------------|
+| Theme | theme name | Active color theme (live preview) |
+| Alt Theme | theme name | Alternate theme used by `Ctrl-Y` toggle |
 | Sidebar Width | 10-80 | Sidebar width in characters |
+| Sidebar Item Spacing | 0 / 1 / 2 | Extra blank lines between sidebar items |
+| Message Item Spacing | 0 / 1 / 2 | Extra blank lines between messages |
 | Timestamp Format | Go format | e.g. `15:04`, `3:04 PM` |
 | Auto Update | on / off | Auto-update on startup |
 | Away Timeout | 0+ seconds | Auto-away after idle (0 = disabled) |
@@ -148,25 +166,32 @@ All overlay panels (help, settings, search, hidden channels) are scrollable with
 | Sort Direction | asc / desc | Sort order |
 | Secure Mode | on / off | E2E encrypted P2P messaging (restart required) |
 | P2P Port | 1024-65535 | Local port for P2P connections (default 9900) |
+| Ping Interval | 2+ seconds | Friend online-status / pending-resend poll (default 5) |
+| Share Format | JSON / Hash | How `[FRIEND:me]` is encoded on the wire (JSON = full profile, default; Hash = compact SLF2, fewer fields) |
+| Auto-accept Friend Requests | on / off | Silently accept incoming friend requests |
 | Secure Whitelist | Manage... | Users allowed for encrypted messaging |
 | Keyboard Shortcuts | Customize... | Rebind any key in-app |
+| Export Settings | Button | Write a full backup zip to `~/Downloads` |
 
-Fields with fixed options cycle with Enter/Tab.
 
 </details>
 
 ### CLI
 
 ```
-slackers              Launch the TUI
-slackers --debug      Launch with debug logging enabled
-slackers setup        Interactive setup
-slackers login        OAuth browser login
-slackers join <url>   One-command team onboarding
-slackers update       Check for and install latest version
-slackers config       Show current config
-slackers friends      P2P friends setup guide (platform-specific)
-slackers version      Print version
+slackers                       Launch the TUI
+slackers --debug               Launch with debug logging enabled
+slackers setup                 Interactive setup
+slackers login                 OAuth browser login
+slackers join <url>            One-command team onboarding
+slackers update                Check for and install latest version
+slackers config                Show current config
+slackers friends               P2P friends setup guide (platform-specific)
+slackers import-friend <hash>  Import a contact card (SLF1./SLF2./JSON)
+slackers import-theme <file>   Install a theme JSON into ~/.config/slackers/themes/
+slackers export [path]         Write a full config backup to a zip file
+slackers import <zip>          Restore from a backup zip (--mode replace|merge)
+slackers version               Print version
 ```
 
 ### Debugging
@@ -472,9 +497,9 @@ Designed by Ryan Weiss (https://ryanweiss.net)
 
 Developed by Claude (https://claude.ai)
 
-Project started on 4/5/2026, mostly built in one weekend.
+Project started on 4/5/2026.
 
-If you find Slackers useful, star the repo, or throw me some coin:
+If you find Slackers useful, star the repo, or buy my cats and fish food:
 
 [buymeacoffee.com/ttv1xp6yAj](https://buymeacoffee.com/ttv1xp6yAj)
 

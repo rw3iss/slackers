@@ -215,7 +215,19 @@ func (m FilesListModel) View() string {
 	} else if len(m.files) == 0 {
 		b.WriteString(dimStyle.Render("  No files found"))
 	} else {
-		maxVisible := (m.height - 10) / 2
+		// Reserve rows for the chrome above and below the file list:
+		//   box border + padding   ~4
+		//   title + margin         ~2
+		//   scope toggle row       ~2 (only when channelID is set)
+		//   filter / hint row      ~2
+		//   "N files total" line   ~1
+		//   blank + footer hint    ~2
+		// Each rendered file consumes 2 rows (line + trailing blank).
+		reserved := 4 + 2 + 2 + 1 + 2
+		if m.channelID != "" {
+			reserved += 2
+		}
+		maxVisible := (m.height - reserved) / 2
 		if maxVisible < 3 {
 			maxVisible = 3
 		}
@@ -283,13 +295,16 @@ func (m FilesListModel) View() string {
 
 	boxWidth := m.width - 4
 	boxHeight := m.height - 2
+	if boxHeight < 8 {
+		boxHeight = 8
+	}
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
 		Width(boxWidth).
-		MaxHeight(boxHeight)
+		Height(boxHeight)
 
 	box := boxStyle.Render(content)
 

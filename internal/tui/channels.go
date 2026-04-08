@@ -158,9 +158,14 @@ func (m *ChannelListModel) SetSort(sortBy string, ascending bool) {
 }
 
 // ToggleShowHidden toggles whether hidden channels are shown inline.
+// The scroll position is reset to the top on toggle — otherwise the
+// list can end up scrolled way below the first row when the total
+// row count shrinks (hiding them again), leaving a nearly-blank
+// viewport until the user manually scrolls back up.
 func (m *ChannelListModel) ToggleShowHidden() {
 	m.showHidden = !m.showHidden
 	m.buildRows()
+	m.scrollOff = 0
 }
 
 // ShowingHidden returns whether hidden channels are currently shown.
@@ -420,6 +425,11 @@ func (m *ChannelListModel) NextUnreadChannel() *types.Channel {
 
 func channelSortOrder(ch types.Channel) int {
 	switch {
+	// Friends sit at the end of the list when sort is ascending and at
+	// the beginning when descending — give them a high order index so the
+	// existing asc/desc flip in visibleChannels handles the placement.
+	case ch.IsFriend:
+		return 99
 	case !ch.IsPrivate && !ch.IsDM && !ch.IsGroup:
 		return 0
 	case ch.IsPrivate && !ch.IsDM && !ch.IsGroup:
@@ -591,10 +601,15 @@ func (m ChannelListModel) View() string {
 				arrow = "►"
 			}
 			label := arrow + " " + row.headerLabel
+			// Indent group headers one column less than child rows so
+			// the header text doesn't line up exactly with the channel
+			// names below it. When selected, skip the "> " caret —
+			// the highlight colour is enough — so the label stays in
+			// the same column as when unselected.
 			if rowIdx == m.selected {
-				lines = append(lines, displayLine{text: ChannelSelectedStyle.Render("> " + label)})
+				lines = append(lines, displayLine{text: ChannelSelectedStyle.Render(label)})
 			} else {
-				lines = append(lines, displayLine{text: SectionHeaderStyle.Render("  " + label)})
+				lines = append(lines, displayLine{text: SectionHeaderStyle.Render(label)})
 			}
 		} else if row.channel != nil {
 			ch := *row.channel

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -35,10 +37,17 @@ const (
 	MsgTypeFileOffer     = "file_offer"    // sender offers a file
 	MsgTypeFileRequest   = "file_request"  // receiver requests the file data
 	MsgTypeFileData      = "file_data"     // sender sends file chunk (base64)
+	MsgTypeFileCancel    = "file_cancel"   // sender cancels a previously offered file
+	MsgTypeKeyRotate     = "key_rotate"     // sender proposes a new public key for this friendship
+	MsgTypeKeyRotateAck  = "key_rotate_ack" // receiver accepts and returns its new public key
 	MsgTypeReaction       = "reaction"        // add an emoji reaction
 	MsgTypeReactionRemove = "reaction_remove" // remove an emoji reaction
 	MsgTypeDelete         = "delete"          // request to delete a message authored by sender
 	MsgTypeDeleteAck      = "delete_ack"      // ack from peer that the deletion succeeded
+	MsgTypeEdit           = "edit"            // request to edit a message authored by sender
+	MsgTypeEditAck        = "edit_ack"        // ack from peer that the edit succeeded
+	MsgTypeProfileSync    = "profile_sync"    // sender announces their current contact card JSON
+	MsgTypeRequestPending = "request_pending" // asks the peer to scan its history and resend any pending messages addressed to us
 
 	// Protocol for file transfers (separate from messaging).
 	P2PFileProtocol = protocol.ID("/slackers/file/1.0.0")
@@ -50,6 +59,16 @@ type P2PMessage struct {
 	Text      string `json:"text"`
 	Timestamp int64  `json:"ts"`
 	SenderID  string `json:"sender_id"`
+
+	// MessageID is the sender's locally-generated id for this
+	// message (text messages only). Receivers store messages under
+	// the sender's id so cross-instance replies/reactions/edits/
+	// deletes can target it later.
+	MessageID string `json:"message_id,omitempty"`
+
+	// ReplyToMsgID, when set on a regular text message, marks it as
+	// a reply to the message with that ID in the recipient's store.
+	ReplyToMsgID string `json:"reply_to_msg_id,omitempty"`
 
 	// File transfer fields (only used for file_offer/file_request/file_data).
 	FileName string `json:"file_name,omitempty"`
@@ -63,16 +82,80 @@ type P2PMessage struct {
 
 // P2PNode manages the libp2p host and peer connections.
 type P2PNode struct {
-	host        host.Host
-	port        int
-	address     string
-	ctx         context.Context
-	cancel      context.CancelFunc
-	onMessage   func(peerSlackID string, msg P2PMessage)
-	peerMap     map[string]peer.ID
-	slackMap    map[peer.ID]string
-	sharedFiles map[string]string // fileID -> local file path (files we've offered)
-	mu          sync.RWMutex
+	host          host.Host
+	port          int
+	address       string
+	ctx           context.Context
+	cancel        context.CancelFunc
+	onMessage     func(peerSlackID string, msg P2PMessage)
+	onFileServed  func(fileID string) // called when a peer finishes downloading
+	// peerLookup lets the incoming stream handler resolve an unknown
+	// remote peer ID (one we never dialed ourselves) to a local user
+	// ID by scanning the friend store's multiaddrs. Set by the model
+	// layer. Returns "" when the peer is not a known friend.
+	peerLookup    func(peerIDStr string) string
+	peerMap       map[string]peer.ID
+	slackMap      map[peer.ID]string
+	sharedFiles   map[string]string // fileID -> local file path (files we've offered)
+	mu            sync.RWMutex
+}
+
+// SetPeerLookup wires the friend-store lookup used by the incoming
+// stream handler to identify otherwise-unknown remote peers. Calling
+// with nil disables the fallback.
+func (n *P2PNode) SetPeerLookup(fn func(peerIDStr string) string) {
+	n.mu.Lock()
+	n.peerLookup = fn
+	n.mu.Unlock()
+}
+
+// SetFileServedCallback registers a callback fired after a peer
+// completes downloading one of our shared files. Used by the UI to
+// flip the file's "uploading…" indicator off.
+func (n *P2PNode) SetFileServedCallback(fn func(fileID string)) {
+	n.onFileServed = fn
+}
+
+// hostKeyPath returns the on-disk location of the persisted libp2p
+// host private key. Stored alongside the rest of the slackers config
+// so the peer ID stays stable across restarts (otherwise every share
+// of a multiaddr is invalidated the next time the app starts).
+func hostKeyPath() string {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		base = filepath.Join(os.Getenv("HOME"), ".config")
+	}
+	return filepath.Join(base, "slackers", "p2p_host.key")
+}
+
+// loadOrCreateHostKey returns a persisted Ed25519 libp2p host
+// private key, generating and saving a new one on first use.
+func loadOrCreateHostKey() (crypto.PrivKey, error) {
+	path := hostKeyPath()
+	if data, err := os.ReadFile(path); err == nil {
+		raw, derr := base64.StdEncoding.DecodeString(string(data))
+		if derr == nil {
+			if priv, perr := crypto.UnmarshalPrivateKey(raw); perr == nil {
+				return priv, nil
+			}
+		}
+	}
+	// Generate a fresh Ed25519 keypair and persist it.
+	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generating host key: %w", err)
+	}
+	raw, err := crypto.MarshalPrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling host key: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("creating host key dir: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(raw)), 0o600); err != nil {
+		return nil, fmt.Errorf("saving host key: %w", err)
+	}
+	return priv, nil
 }
 
 // NewP2PNode creates and starts a libp2p host.
@@ -81,9 +164,16 @@ func NewP2PNode(port int, address string, onMessage func(string, P2PMessage)) (*
 
 	listenAddr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)
 
+	priv, err := loadOrCreateHostKey()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
 	h, err := libp2p.New(
+		libp2p.Identity(priv),
 		libp2p.ListenAddrStrings(listenAddr),
-		libp2p.NATPortMap(),        // attempt UPnP port mapping
+		libp2p.NATPortMap(),         // attempt UPnP port mapping
 		libp2p.EnableHolePunching(), // NAT hole punching
 	)
 	if err != nil {
@@ -143,7 +233,12 @@ func (n *P2PNode) PeerID() string {
 	return n.host.ID().String()
 }
 
-// ConnectToPeer connects to a peer using their multiaddress.
+// ConnectToPeer connects to a peer using their multiaddress. The
+// dial is wrapped in a short timeout context so a dead/offline
+// peer never blocks the caller for more than a few seconds —
+// libp2p's default dial ceiling is much longer, which was
+// freezing callers running on the bubbletea Update loop whenever
+// a friend went offline.
 func (n *P2PNode) ConnectToPeer(slackUserID, multiaddr string) error {
 	maddr, err := ma.NewMultiaddr(multiaddr)
 	if err != nil {
@@ -155,7 +250,9 @@ func (n *P2PNode) ConnectToPeer(slackUserID, multiaddr string) error {
 		return fmt.Errorf("extracting peer info: %w", err)
 	}
 
-	if err := n.host.Connect(n.ctx, *peerInfo); err != nil {
+	dialCtx, cancel := context.WithTimeout(n.ctx, 3*time.Second)
+	defer cancel()
+	if err := n.host.Connect(dialCtx, *peerInfo); err != nil {
 		return fmt.Errorf("connecting to peer: %w", err)
 	}
 
@@ -196,6 +293,49 @@ func (n *P2PNode) SendMessage(slackUserID string, msg P2PMessage) error {
 	return nil
 }
 
+// PeerMultiaddr returns a best-effort full multiaddr (/ip4/.../tcp/.../p2p/<id>)
+// for a connected friend, looked up from the host's peerstore. Returns
+// "" if the peer isn't currently mapped or has no usable addresses.
+// Skips loopback addresses; prefers the first non-loopback ip4 address.
+func (n *P2PNode) PeerMultiaddr(slackUserID string) string {
+	n.mu.RLock()
+	pid, ok := n.peerMap[slackUserID]
+	n.mu.RUnlock()
+	if !ok {
+		return ""
+	}
+	addrs := n.host.Peerstore().Addrs(pid)
+	for _, a := range addrs {
+		s := a.String()
+		// Only return ip4/tcp addresses; skip loopback.
+		if len(s) < 5 || s[:5] != "/ip4/" {
+			continue
+		}
+		if len(s) >= 14 && s[:14] == "/ip4/127.0.0.1" {
+			continue
+		}
+		return fmt.Sprintf("%s/p2p/%s", s, pid)
+	}
+	if len(addrs) > 0 {
+		return fmt.Sprintf("%s/p2p/%s", addrs[0].String(), pid)
+	}
+	return ""
+}
+
+// DisconnectPeer drops the libp2p connection to a friend (if any).
+// Used by the per-friend inactivity timeout so we don't hold open
+// permanent connections to every friend in the user's list — only
+// the chats they're actively interacting with.
+func (n *P2PNode) DisconnectPeer(slackUserID string) {
+	n.mu.RLock()
+	pid, ok := n.peerMap[slackUserID]
+	n.mu.RUnlock()
+	if !ok {
+		return
+	}
+	_ = n.host.Network().ClosePeer(pid)
+}
+
 // IsConnected checks if a peer has an active P2P connection.
 func (n *P2PNode) IsConnected(slackUserID string) bool {
 	n.mu.RLock()
@@ -211,11 +351,30 @@ func (n *P2PNode) IsConnected(slackUserID string) bool {
 func (n *P2PNode) handleStream(s network.Stream) {
 	defer s.Close()
 
-	// Look up the Slack user ID for this peer.
+	// Look up the Slack user ID for this peer. If we never dialed
+	// the remote (inbound-only connection), the peer isn't yet in
+	// slackMap — fall back to the friend-store lookup callback,
+	// which matches the peer ID against each friend's multiaddr
+	// and returns the owning friend's UserID. On a hit, also
+	// register both directions of the peer/slack maps so future
+	// SendMessage calls can route directly.
 	remotePeer := s.Conn().RemotePeer()
 	n.mu.RLock()
 	slackID, ok := n.slackMap[remotePeer]
+	lookup := n.peerLookup
 	n.mu.RUnlock()
+	if !ok {
+		if lookup != nil {
+			if resolved := lookup(remotePeer.String()); resolved != "" {
+				slackID = resolved
+				n.mu.Lock()
+				n.slackMap[remotePeer] = resolved
+				n.peerMap[resolved] = remotePeer
+				n.mu.Unlock()
+				ok = true
+			}
+		}
+	}
 	if !ok {
 		slackID = "unknown"
 	}
@@ -309,6 +468,22 @@ func (n *P2PNode) SendFileOffer(slackUserID, fileID, fileName string, fileSize i
 	return n.SendMessage(slackUserID, msg)
 }
 
+// CancelFileOffer revokes a previously offered file: removes it from the
+// local serving table and notifies the peer so they can clean up any
+// in-flight download or pending offer state on their end.
+func (n *P2PNode) CancelFileOffer(slackUserID, fileID string) error {
+	n.mu.Lock()
+	delete(n.sharedFiles, fileID)
+	n.mu.Unlock()
+	msg := P2PMessage{
+		Type:      MsgTypeFileCancel,
+		FileID:    fileID,
+		SenderID:  slackUserID,
+		Timestamp: time.Now().Unix(),
+	}
+	return n.SendMessage(slackUserID, msg)
+}
+
 // DownloadFileFromPeer requests and downloads a file from a connected peer.
 func (n *P2PNode) DownloadFileFromPeer(ctx context.Context, slackUserID, fileID, destPath string) error {
 	n.mu.RLock()
@@ -388,7 +563,9 @@ func (n *P2PNode) handleFileRequest(s network.Stream) {
 	defer f.Close()
 
 	// Stream file data directly.
-	io.Copy(s, f)
+	if _, err := io.Copy(s, f); err == nil && n.onFileServed != nil {
+		n.onFileServed(req.FileID)
+	}
 }
 
 // BroadcastDisconnect sends a disconnect message to all connected peers.

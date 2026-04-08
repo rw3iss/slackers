@@ -26,6 +26,8 @@ type Friend struct {
 }
 
 // ContactCard is the shareable JSON format for exchanging friend info.
+// The multiaddr already encodes the IP and port — separate Endpoint /
+// Port fields are no longer included.
 type ContactCard struct {
 	Version   int    `json:"version"`
 	SlackerID string `json:"slacker_id"`
@@ -33,8 +35,6 @@ type ContactCard struct {
 	Email     string `json:"email,omitempty"`
 	PublicKey string `json:"public_key"`
 	Multiaddr string `json:"multiaddr"`
-	Endpoint  string `json:"endpoint,omitempty"`
-	Port      int    `json:"port,omitempty"`
 }
 
 // ToContactCard converts a Friend to a shareable ContactCard.
@@ -46,12 +46,12 @@ func (f Friend) ToContactCard() ContactCard {
 		Email:     f.Email,
 		PublicKey: f.PublicKey,
 		Multiaddr: f.Multiaddr,
-		Endpoint:  f.Endpoint,
-		Port:      f.Port,
 	}
 }
 
-// FriendFromCard creates a Friend from a ContactCard.
+// FriendFromCard creates a Friend from a ContactCard. The Endpoint /
+// Port fields on Friend (kept for legacy in-memory state only) are
+// left empty — every consumer should rely on Multiaddr.
 func FriendFromCard(card ContactCard) Friend {
 	return Friend{
 		SlackerID: card.SlackerID,
@@ -59,13 +59,11 @@ func FriendFromCard(card ContactCard) Friend {
 		Email:     card.Email,
 		PublicKey: card.PublicKey,
 		Multiaddr: card.Multiaddr,
-		Endpoint:  card.Endpoint,
-		Port:      card.Port,
 	}
 }
 
 // MyContactCard builds a contact card for the local user.
-func MyContactCard(slackerID, name, email, publicKey, multiaddr, endpoint string, port int) ContactCard {
+func MyContactCard(slackerID, name, email, publicKey, multiaddr string) ContactCard {
 	return ContactCard{
 		Version:   1,
 		SlackerID: slackerID,
@@ -73,8 +71,6 @@ func MyContactCard(slackerID, name, email, publicKey, multiaddr, endpoint string
 		Email:     email,
 		PublicKey: publicKey,
 		Multiaddr: multiaddr,
-		Endpoint:  endpoint,
-		Port:      port,
 	}
 }
 
@@ -229,6 +225,9 @@ func (s *FriendStore) UpdateLastOnline(userID string) {
 
 // FindConflict checks if a friend conflicts with existing entries.
 // Returns the conflicting friend's UserID, or "" if no conflict.
+// Conflict is detected by any of: UserID, SlackerID, Email, PublicKey,
+// or Multiaddr — so re-imports of the same person under a slightly
+// different identifier still resolve to the existing record.
 func (s *FriendStore) FindConflict(f Friend) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -242,12 +241,51 @@ func (s *FriendStore) FindConflict(f Friend) string {
 		if f.Email != "" && existing.Email == f.Email {
 			return existing.UserID
 		}
-		if f.Endpoint != "" && f.Port > 0 &&
-			existing.Endpoint == f.Endpoint && existing.Port == f.Port {
+		if f.PublicKey != "" && existing.PublicKey == f.PublicKey {
+			return existing.UserID
+		}
+		if f.Multiaddr != "" && existing.Multiaddr == f.Multiaddr {
 			return existing.UserID
 		}
 	}
 	return ""
+}
+
+// FindByCard locates an existing friend that matches the given contact
+// card by SlackerID, PublicKey, or Multiaddr (in that priority order).
+// Returns a copy of the matched friend, or nil if no match is found.
+// This is the canonical lookup used by the inbound friend-card import
+// flow so a re-shared profile resolves to the same record even when
+// the SlackerID changed.
+func (s *FriendStore) FindByCard(card ContactCard) *Friend {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	matchOn := func(f Friend) bool {
+		if card.SlackerID != "" && f.SlackerID == card.SlackerID {
+			return true
+		}
+		if card.PublicKey != "" && f.PublicKey == card.PublicKey {
+			return true
+		}
+		if card.Multiaddr != "" && f.Multiaddr == card.Multiaddr {
+			return true
+		}
+		uid := card.SlackerID
+		if uid != "" {
+			uid = "slacker:" + uid
+		}
+		if uid != "" && f.UserID == uid {
+			return true
+		}
+		return false
+	}
+	for i, f := range s.friends {
+		if matchOn(f) {
+			cp := s.friends[i]
+			return &cp
+		}
+	}
+	return nil
 }
 
 // Import merges friends from a list, using conflict resolution.

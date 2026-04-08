@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rw3iss/slackers/internal/auth"
@@ -51,7 +52,7 @@ func resetTerminal() {
 	}
 }
 
-var version = "0.19.0"
+var version = "0.20.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "slackers",
@@ -95,6 +96,34 @@ var rootCmd = &cobra.Command{
 			fmt.Println()
 			if setupErr := runSetupFlow(cfg); setupErr != nil {
 				return setupErr
+			}
+		}
+
+		// Friends-only safety net: if the user previously chose
+		// "Skip" but never had SecureMode flipped on, do it now —
+		// otherwise the P2P node won't start and Test Connection
+		// reports "P2P not available". Also seed P2PAddress + name
+		// best-effort.
+		if cfg.SetupSkipped && cfg.BotToken == "" {
+			dirty := false
+			if !cfg.SecureMode {
+				cfg.SecureMode = true
+				dirty = true
+			}
+			if cfg.MyName == "" {
+				if h, hErr := os.Hostname(); hErr == nil && h != "" {
+					cfg.MyName = h
+					dirty = true
+				}
+			}
+			if cfg.P2PAddress == "" {
+				if ip, ipErr := detectPublicIPCLI(); ipErr == nil && ip != "" {
+					cfg.P2PAddress = ip
+					dirty = true
+				}
+			}
+			if dirty {
+				_ = config.Save(cfg)
 			}
 		}
 
@@ -157,8 +186,20 @@ var rootCmd = &cobra.Command{
 			friendHistory.Prune(cfg.FriendHistoryDays)
 		}
 
-		slackSvc := slack.NewSlackClient(cfg.BotToken, cfg.UserToken)
-		socketSvc := slack.NewSocketClient(cfg.BotToken, cfg.AppToken)
+		// Friends-only mode: when no Slack tokens are configured we
+		// pass nil for both services so the model skips channel
+		// polling, socket connect, etc. The moment tokens get
+		// added (via 'slackers setup' or by editing the config),
+		// the next launch detects them here and Slack features
+		// turn back on automatically.
+		var slackSvc slack.SlackService
+		var socketSvc slack.SocketService
+		if cfg.BotToken != "" {
+			slackSvc = slack.NewSlackClient(cfg.BotToken, cfg.UserToken)
+		}
+		if cfg.BotToken != "" && cfg.AppToken != "" {
+			socketSvc = slack.NewSocketClient(cfg.BotToken, cfg.AppToken)
+		}
 
 		model := tui.NewModel(slackSvc, socketSvc, cfg, version, friendStore, friendHistory)
 		opts := []tea.ProgramOption{tea.WithAltScreen()}
@@ -572,35 +613,51 @@ SLACKERS FRIENDS — Private P2P Chat Guide
 ==========================================
 
 The Friends feature lets you chat directly with other Slackers users
-over encrypted peer-to-peer connections. Messages never pass through
-Slack's servers.
+over end-to-end encrypted libp2p peer-to-peer connections. Messages
+never pass through Slack's servers.
 
-QUICK START
+QUICK START — over Slack
+-------------------------
+1. Both users install Slackers and turn ON Secure Mode in
+   Friends Config > Edit My Info.
+2. User A opens a Slack DM with User B and presses Ctrl+B (Befriend)
+   to send a friend request over P2P.
+3. User B sees a popup (or auto-accepts, see below) and confirms.
+4. Both users now have each other in the "Friends" sidebar section.
+5. Click a friend's name to open a private P2P chat.
+
+QUICK START — manual share (works across workspaces / strangers)
+----------------------------------------------------------------
+1. Open Friends Config (Ctrl+F or via Settings) > Edit My Info.
+   - Set your Name (optional Email).
+   - Press 'r' on the P2P Endpoint row to auto-detect your public IP.
+   - Make sure Secure Mode is ON.
+2. Friends Config > Share My Info shows four ways to share:
+   * The full JSON contact card (Enter to copy)
+   * [ Export to file ] — writes the JSON to ~/Downloads
+   * One-line CLI import command (Enter to copy):
+       slackers import-friend SLF2.<short hash>
+   * Hash only — the bare SLF2.<...> token (Enter to copy)
+3. Send any one of these to your friend by any channel — chat,
+   email, paper. The hash is the smallest (~109 chars) and the
+   easiest to paste.
+4. Your friend either:
+   a) Runs the one-line CLI command in their terminal, OR
+   b) Opens Friends Config > Add a Friend and presses Ctrl-J to
+      paste either the JSON or the SLF2.<hash> from clipboard,
+      then Ctrl-S to save.
+5. Saving in Add a Friend automatically dials the new peer and
+   sends a friend-request handshake. If they're online, the
+   handshake completes and the connection is live immediately.
+6. Repeat in the other direction so both sides know each other.
+
+AUTO-ACCEPT
 -----------
-1. Both users install Slackers and enable Secure Mode in Settings
-2. User A opens a DM with User B and presses Ctrl+B to send a friend request
-3. User B sees a popup and accepts
-4. Both users now have each other in the "Friends" sidebar section
-5. Click a friend's name to open a private P2P chat
-
-MANUAL SETUP (without Slack)
-----------------------------
-If you and your friend aren't in the same Slack workspace:
-
-1. Go to Settings > Friends Config > Edit My Info
-   - Set your Name and optionally Email
-   - Note your P2P Port (default 9900)
-
-2. Go to Settings > Friends Config > Share My Info
-   - Copy the JSON contact card shown
-
-3. Send the JSON to your friend (email, signal, etc.)
-
-4. Your friend goes to Settings > Friends Config > Add a Friend
-   - Press Ctrl+J to paste your JSON contact card
-   - Press Ctrl+S to save
-
-5. Repeat in the other direction so both have each other's info`)
+Friends Config > Edit My Info > Auto-accept = ON
+   Incoming friend requests are accepted silently in the background;
+   the new friend appears in your sidebar and a status message
+   confirms it. With Auto-accept OFF, requests show a notification
+   and a confirmation modal you can accept or reject.`)
 
 		fmt.Println(`
 NETWORK SETUP
@@ -650,26 +707,65 @@ may not always be required — but it increases reliability.
 
 CONFIGURATION
 -------------
-  P2P Port:       Settings > P2P Port (or Friends Config > Edit My Info)
-  P2P Endpoint:   Settings > P2P Address (your public IP/hostname)
-  Secure Mode:    Must be "on" for P2P features
-  Befriend key:   Ctrl+B (customizable in Settings > Keyboard Shortcuts)
+  Friends Config > Edit My Info:
+    Name              Display name in friends' sidebars
+    Email             Optional, for uniqueness checks
+    P2P Endpoint      Your public IP/hostname (press 'r' to auto-detect)
+    P2P Port          Default 9900
+    Secure Mode       Must be ON for any P2P feature
+    Auto-accept       Auto-accept incoming friend requests
+
+  Keyboard shortcuts (rebindable in Settings > Shortcuts):
+    Ctrl+B            Befriend the current Slack DM user
+    Alt+I             Open friend details for the current friend chat
+    Alt+N             Notifications view (unread / reactions / requests)
+    Ctrl+F            Friends Config
 
 IMPORT / EXPORT
 ---------------
-  Export: Settings > Friends Config > Export Friends List
-         Saves all friends as JSON to your Downloads folder
+  Single friend (CLI):
+    slackers import-friend <file>          (JSON file path)
+    slackers import-friend SLF2.<hash>     (hash from Share My Info)
+    slackers import-friend SLF1.<hash>     (legacy gzip+JSON hash, still supported)
+    slackers import-friend ... --yes       (overwrite existing match)
 
-  Import: Settings > Friends Config > Import Friends List
-         Load a JSON file, with optional conflict overwrite
+  Single friend (UI):
+    Friends Config > Add a Friend > Ctrl-J
+      Pastes JSON or SLF2/SLF1 hash from clipboard.
+    Friends Config > Edit Friend > Ctrl-J
+      Pastes JSON or hash and merges any non-empty fields into
+      blank slots on the existing friend (existing values are
+      never overwritten).
+
+  Bulk friends list:
+    Friends Config > Export Friends List   → all friends as JSON
+    Friends Config > Import Friends List   → with conflict overwrite
 
 SECURITY
 --------
-  - Connections use X25519 key exchange + ChaCha20-Poly1305 encryption
-  - Each friend pair derives a unique encryption key
-  - Keys are stored locally in ~/.config/slackers/friends.json
-  - Messages are never sent through Slack or any third party
-  - A unique SlackerID is generated on first run for identification`)
+  - libp2p TCP transport with NAT hole punching enabled
+  - X25519 key exchange + ChaCha20-Poly1305 message encryption
+  - Each friendship derives its own per-pair key (rotatable from
+    Edit Friend > Public Key > Enter)
+  - Friend records and per-pair keys live in ~/.config/slackers/friends.json
+  - Chat history is encrypted on disk per-friend
+  - Messages are never relayed through Slack or any third party
+
+CONTACT CARD FORMATS
+--------------------
+  SLF2 (current, ~109 chars)
+    Compact binary format. Includes only what's needed to dial:
+    public key, peer ID, IPv4, port. Display name is filled in
+    automatically as "Friend <last 8 chars of peer ID>" on
+    import — you can rename later.
+
+  SLF1 (legacy)
+    gzip+base64url(JSON). Larger (~280 chars) but still accepted
+    by every import path for backward compatibility.
+
+  JSON
+    Full contact card with name/email/etc. Verbose but
+    human-readable. Can be saved to a file or pasted directly.`)
 	},
 }
 
@@ -705,6 +801,86 @@ func init() {
 	rootCmd.AddCommand(exportCmd)
 	rootCmd.AddCommand(importCmd)
 	rootCmd.AddCommand(importThemeCmd)
+	rootCmd.AddCommand(importFriendCmd)
+}
+
+var importFriendCmd = &cobra.Command{
+	Use:   "import-friend <file or hash>",
+	Short: "Add a friend from a contact-card JSON file or a SLF1.<hash> string",
+	Long: `Imports a single friend's contact card into your local friends list.
+
+The argument can be either:
+  • A path to a JSON contact card file (relative or absolute), or
+  • An SLF1.<...> hash string copied from another user's
+    Friends → Share My Info screen.
+
+If a friend with the same Slacker ID, email, or endpoint already exists,
+the command prompts to skip, abort, or overwrite the existing entry.
+Use --yes to overwrite without prompting.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		input := args[0]
+		yes, _ := cmd.Flags().GetBool("yes")
+
+		var card friends.ContactCard
+		// 1) Try as a file path first.
+		if info, err := os.Stat(input); err == nil && !info.IsDir() {
+			data, rerr := os.ReadFile(input)
+			if rerr != nil {
+				return fmt.Errorf("reading %s: %w", input, rerr)
+			}
+			parsed, perr := friends.ParseAnyContactCard(string(data))
+			if perr != nil {
+				return fmt.Errorf("parsing %s: %w", input, perr)
+			}
+			card = parsed
+		} else {
+			// 2) Otherwise treat the argument as a literal contact
+			//    string (hash or inline JSON).
+			parsed, perr := friends.ParseAnyContactCard(input)
+			if perr != nil {
+				return fmt.Errorf("input is neither a readable file nor a valid contact card or hash: %w", perr)
+			}
+			card = parsed
+		}
+
+		if card.Name == "" && card.SlackerID == "" {
+			return fmt.Errorf("contact card has no name or slacker_id")
+		}
+
+		// Open the local friend store and check for conflicts.
+		store := friends.NewFriendStore(friends.DefaultPath())
+		if err := store.Load(); err != nil {
+			return fmt.Errorf("loading friends: %w", err)
+		}
+		incoming := friends.FriendFromCard(card)
+		conflict := store.FindConflict(incoming)
+		if conflict != "" {
+			if !yes {
+				fmt.Printf("A friend already exists matching this contact (id=%s).\n", conflict)
+				fmt.Print("Overwrite? [y/N]: ")
+				var resp string
+				fmt.Scanln(&resp)
+				if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp)), "y") {
+					fmt.Println("Aborted.")
+					return nil
+				}
+			}
+			store.Remove(conflict)
+		}
+		if err := store.Add(incoming); err != nil {
+			return fmt.Errorf("adding friend: %w", err)
+		}
+		if err := store.Save(); err != nil {
+			return fmt.Errorf("saving friends: %w", err)
+		}
+		fmt.Printf("✓ Imported friend %q (slacker_id=%s)\n", card.Name, card.SlackerID)
+		return nil
+	},
+}
+
+func init() {
+	importFriendCmd.Flags().Bool("yes", false, "Overwrite existing matching friend without prompting")
 }
 
 var importThemeCmd = &cobra.Command{
@@ -869,8 +1045,13 @@ func runSetupFlow(cfg *config.Config) error {
 	fmt.Println()
 	fmt.Println("  1) Manual  - paste tokens directly")
 	fmt.Println("  2) OAuth   - authorize via browser (recommended)")
+	fmt.Println("  3) Skip    - no Slack workspace; use friends + P2P only")
 	fmt.Println()
-	fmt.Print("Choose [1/2]: ")
+	fmt.Println("     (You can add Slack tokens later via 'slackers setup' or by")
+	fmt.Println("      editing ~/.config/slackers/config.json — Slack features turn")
+	fmt.Println("      on automatically once a valid bot+app token pair is detected.)")
+	fmt.Println()
+	fmt.Print("Choose [1/2/3]: ")
 
 	var choice string
 	fmt.Scanln(&choice)
@@ -879,9 +1060,71 @@ func runSetupFlow(cfg *config.Config) error {
 	switch strings.TrimSpace(choice) {
 	case "2":
 		return runOAuthFlow(cfg)
+	case "3":
+		return runSkipFlow(cfg)
 	default:
 		return runManualFlow(cfg)
 	}
+}
+
+// detectPublicIPCLI does a best-effort HTTP lookup to api.ipify.org
+// to grab the user's public IPv4. Used by the friends-only setup
+// path to seed cfg.P2PAddress on a fresh install.
+func detectPublicIPCLI() (string, error) {
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get("https://api.ipify.org")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(body)), nil
+}
+
+// runSkipFlow saves an empty config (no tokens) so the user can launch
+// the TUI in friends-only mode and add Slack tokens later. This makes
+// the app usable for pure P2P friend chat without requiring a Slack
+// workspace at all.
+func runSkipFlow(cfg *config.Config) error {
+	cfg.SetupSkipped = true
+	// Friends-only mode is useless without P2P, so flip Secure Mode
+	// on by default. Users can still toggle it later from
+	// Friends Config → Edit My Info.
+	cfg.SecureMode = true
+	// Default the display name to the OS user/hostname so the user
+	// doesn't end up with an empty card on the very first launch.
+	if cfg.MyName == "" {
+		if h, err := os.Hostname(); err == nil && h != "" {
+			cfg.MyName = h
+		} else if u := os.Getenv("USER"); u != "" {
+			cfg.MyName = u
+		}
+	}
+	// Best-effort public IP detection so the multiaddr in the
+	// initial contact card is non-empty.
+	if cfg.P2PAddress == "" {
+		if ip, err := detectPublicIPCLI(); err == nil && ip != "" {
+			cfg.P2PAddress = ip
+		}
+	}
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	fmt.Println("Setup complete — Slack features are disabled.")
+	fmt.Println()
+	fmt.Println("You can:")
+	fmt.Println("  • Run 'slackers' to launch the TUI (Friends-only mode).")
+	fmt.Println("  • Open Friends Config from Settings to set your name and add friends.")
+	fmt.Println("  • Add Slack tokens later by re-running 'slackers setup' or editing")
+	fmt.Println("    ~/.config/slackers/config.json — Slack features will activate")
+	fmt.Println("    automatically on the next launch once a valid token pair is found.")
+	return nil
 }
 
 // runManualFlow prompts for tokens via stdin.

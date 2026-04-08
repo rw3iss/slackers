@@ -40,6 +40,11 @@ type EmojiPickerModel struct {
 	// extraRightPad adds N additional columns of horizontal padding to the right
 	// of each emoji (without affecting vertical spacing).
 	extraRightPad int
+	// mouseEnabled mirrors cfg.MouseEnabled so the picker's help
+	// footer can show mouse-specific hints (left-click to select,
+	// right-click to toggle favorite) when the user has mouse
+	// mode on.
+	mouseEnabled bool
 	width      int
 	height     int
 
@@ -98,6 +103,13 @@ func NewEmojiPicker(favorites []string, purpose EmojiPickerPurpose) EmojiPickerM
 	}
 }
 
+// SetMouseEnabled toggles the mouse-specific help line in the
+// picker's footer. Call this right after SetSize so the first
+// render already shows the hint.
+func (m *EmojiPickerModel) SetMouseEnabled(enabled bool) {
+	m.mouseEnabled = enabled
+}
+
 func (m *EmojiPickerModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
@@ -114,8 +126,46 @@ func (m *EmojiPickerModel) SetSize(w, h int) {
 	}
 	m.gridCols = maxCols
 
+	// Figure out how many tab rows we'll end up with so we can
+	// reserve enough vertical space for them up front. Without
+	// this, the grid row count is always computed as if tabs
+	// occupy a single row — so tabs that wrap to 2+ rows push
+	// the grid (and the footer) past the bottom of the box and
+	// the whole modal overflows the screen, which in turn
+	// shifts the tab-row positions by one line and breaks
+	// click hit-testing.
+	boxInner := m.gridCols*cellW + m.padding/2
+	const tabCellInnerW = 5
+	tabItemWidth := tabCellInnerW + 1
+	tabsPerRow := boxInner / tabItemWidth
+	if tabsPerRow < 3 {
+		tabsPerRow = 3
+	}
+	tabRowsUsed := (len(m.categories) + tabsPerRow - 1) / tabsPerRow
+	if tabRowsUsed < 1 {
+		tabRowsUsed = 1
+	}
+
+	// Reserved vertical space inside the box:
+	//   title(1) + blank(1)                                        = 2
+	//   tab block(tabRowsUsed*3) — above / icons / below per row
+	//   blank(1) + separator(1) + blank(1)                         = 3
+	//   selected-emoji info line                                  = 1
+	//   blank(1) + help line(1)                                    = 2
+	//   extra help line when mouseEnabled                         = 1 (optional)
+	//
+	// Plus the box border/padding itself: border(2) + padding(2)  = 4.
+	// SetSize operates in "screen rows" so we start from h-4.
+	reserved := 2 + (tabRowsUsed * 3) + 3 + 1 + 2
+	if m.mouseEnabled {
+		reserved++
+	}
 	rowH := 1 + m.padding
-	availH := min(h-4, 40) - 9
+	// Never use more than the terminal height (-4 for the outer
+	// box border/padding); also cap at 40 to avoid an absurdly
+	// tall picker on huge terminals.
+	maxBoxInner := min(h-4, 40) - 4
+	availH := maxBoxInner - reserved
 	maxRows := availH / rowH
 	if maxRows < 3 {
 		maxRows = 3
@@ -461,6 +511,33 @@ func (m EmojiPickerModel) Update(msg tea.Msg) (EmojiPickerModel, tea.Cmd) {
 		case tea.MouseButtonWheelDown:
 			m.scrollOff++
 			m.clampCursor()
+		case tea.MouseButtonRight:
+			// Right-click on a grid cell toggles that emoji as
+			// a favorite without selecting it / inserting it.
+			if msg.Action != tea.MouseActionPress {
+				return m, nil
+			}
+			if msg.Y >= m.gridStartY && msg.X >= m.gridStartX {
+				cellW := 2 + m.padding + m.extraRightPad
+				rowH := 1 + m.padding
+				dx := msg.X - m.gridStartX
+				dy := msg.Y - m.gridStartY
+				col := dx / cellW
+				row := dy / rowH
+				if col >= 0 && col < m.gridCols && row >= 0 && row < m.gridRows {
+					items := m.currentItems()
+					idx := (m.scrollOff+row)*m.gridCols + col
+					if idx >= 0 && idx < len(items) {
+						// Point the cursor at the clicked
+						// cell so toggleFavorite operates
+						// on it, then fire the toggle.
+						m.cursorR = row
+						m.cursorC = col
+						m.toggleFavorite()
+					}
+				}
+			}
+			return m, nil
 		case tea.MouseButtonLeft:
 			if msg.Action != tea.MouseActionPress {
 				return m, nil
@@ -729,6 +806,10 @@ func (m *EmojiPickerModel) View() string {
 	} else {
 		b.WriteString(dimStyle.Render("  Arrows: move | Tab: next cat | Enter: select | f: fav | Esc: close"))
 	}
+	if m.mouseEnabled {
+		b.WriteString("\n")
+		b.WriteString(dimStyle.Render("  Mouse: left-click an emoji to select it, right-click to toggle it as a favorite."))
+	}
 
 	content := b.String()
 
@@ -745,16 +826,22 @@ func (m *EmojiPickerModel) View() string {
 		boxHeight = 12
 	}
 
-	// Pad the content to the full inner height with explicit space-filled
-	// lines so the terminal actually clears any leftover glyphs from the
-	// previous tab/frame. Lipgloss .Height() otherwise just appends bare
-	// newlines, which leave wide-emoji artifacts behind on switch.
+	// Pad/truncate the content to EXACTLY the inner height.
+	// Padding fills with explicit space-filled lines so the
+	// terminal clears any leftover glyphs from the previous tab
+	// or frame. Truncation is a safety net — if SetSize's row
+	// math is off by a line for any reason, the box would
+	// otherwise grow beyond the terminal and push the header
+	// past the top edge (which also shifts click hit areas).
 	innerH := boxHeight - 4 // top/bottom borders + top/bottom padding
 	innerW := boxWidth - 6  // left/right borders + left/right padding
 	if innerW < 1 {
 		innerW = 1
 	}
 	contentLines := strings.Split(content, "\n")
+	if len(contentLines) > innerH {
+		contentLines = contentLines[:innerH]
+	}
 	for len(contentLines) < innerH {
 		contentLines = append(contentLines, strings.Repeat(" ", innerW))
 	}

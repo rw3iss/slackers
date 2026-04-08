@@ -40,6 +40,20 @@ type InputModel struct {
 	maxHist    int
 	escSeqPart  bool // true if we just saw alt+O (first half of Shift+Enter)
 	escapedOnce bool // true after first escape (next escape clears)
+
+	// friendResolver, if set, is called on every paste with the
+	// pasted text. It should return a non-empty replacement string
+	// when the paste is recognised as a friend contact card (JSON
+	// blob or SLF1./SLF2. hash); the input rewrites the paste in
+	// place. Empty return = leave the paste alone.
+	friendResolver func(string) string
+}
+
+// SetFriendResolver wires a callback used to detect pasted friend
+// contact cards and rewrite them to compact [FRIEND:me] / [FRIEND:id]
+// markers in the textarea.
+func (m *InputModel) SetFriendResolver(fn func(string) string) {
+	m.friendResolver = fn
 }
 
 // NewInput creates a new input model.
@@ -91,9 +105,21 @@ func (m *InputModel) InsertAtCursor(s string) {
 	m.autoResize()
 }
 
-// CursorToStart moves the cursor to the start of the input.
+// CursorToStart moves the cursor to the very beginning of the input
+// (row 0, column 0), regardless of the current line.
 func (m *InputModel) CursorToStart() {
+	// CursorStart only moves to the start of the current line; walk up to
+	// row 0 then jump to column 0 so the cursor lands at the very top-left.
+	for m.textarea.Line() > 0 {
+		m.textarea.CursorUp()
+	}
 	m.textarea.CursorStart()
+}
+
+// CursorAtStart returns true when the cursor is on the first row at the
+// first column.
+func (m *InputModel) CursorAtStart() bool {
+	return m.textarea.Line() == 0
 }
 
 // AtStart returns true if escape was already pressed once (ready to clear).
@@ -156,21 +182,28 @@ func (m *InputModel) DisplayHeight() int {
 	return m.height + 2
 }
 
-// autoResize adjusts the visible textarea height to fit content, capped at max.
+// autoResize lets the underlying textarea grow to fit its full content
+// without a hard cap so it never has to scroll internally — bubbles'
+// viewport-based scrolling has a stale-content bug. Our View() then clips
+// the rendered output to inputMaxHeight rows around the cursor.
+//
+// m.height is the visible (post-clip) row count used for layout.
 func (m *InputModel) autoResize() {
 	val := m.textarea.Value()
-	lines := strings.Count(val, "\n") + 1
+	contentLines := strings.Count(val, "\n") + 1
 	if val == "" {
-		lines = inputMinHeight
+		contentLines = inputMinHeight
 	}
-	if lines < inputMinHeight {
-		lines = inputMinHeight
+	if contentLines < inputMinHeight {
+		contentLines = inputMinHeight
 	}
-	if lines > inputMaxHeight {
-		lines = inputMaxHeight
+	visible := contentLines
+	if visible > inputMaxHeight {
+		visible = inputMaxHeight
 	}
-	m.height = lines
-	m.textarea.SetHeight(lines)
+	m.height = visible
+	// Tell bubbles textarea to render every content row — no scrolling.
+	m.textarea.SetHeight(contentLines)
 }
 
 func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
@@ -190,14 +223,6 @@ func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 			m.escSeqPart = false
 			if str == "M" {
 				// Shift+Enter detected — insert newline.
-				newLines := strings.Count(m.textarea.Value(), "\n") + 2
-				if newLines > inputMaxHeight {
-					newLines = inputMaxHeight
-				}
-				if newLines > m.height {
-					m.height = newLines
-					m.textarea.SetHeight(newLines)
-				}
 				m.textarea.InsertString("\n")
 				m.autoResize()
 				return m, nil
@@ -253,18 +278,7 @@ func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 
 		case tea.KeyEnter:
 			if keyMsg.Alt {
-				// Alt+Enter: alternate action.
-				if m.mode == InputModeNormal {
-					// Normal: Alt+Enter = new line. Pre-expand.
-					newLines := strings.Count(m.textarea.Value(), "\n") + 2
-					if newLines > inputMaxHeight {
-						newLines = inputMaxHeight
-					}
-					if newLines > m.height {
-						m.height = newLines
-						m.textarea.SetHeight(newLines)
-					}
-				} else {
+				if m.mode == InputModeEdit {
 					// Edit: Alt+Enter = send.
 					text := m.textarea.Value()
 					if strings.TrimSpace(text) != "" {
@@ -272,28 +286,26 @@ func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 					}
 					return m, nil
 				}
-			} else {
-				// Plain Enter.
-				if m.mode == InputModeNormal {
-					// Normal: Enter = send.
-					text := m.textarea.Value()
-					if strings.TrimSpace(text) != "" {
-						return m, func() tea.Msg { return InputSendMsg{Text: text} }
-					}
-					return m, nil
-				}
-				// Edit: Enter = new line.
-				// Pre-expand height so the textarea doesn't scroll when adding the line.
-				newLines := strings.Count(m.textarea.Value(), "\n") + 2
-				if newLines > inputMaxHeight {
-					newLines = inputMaxHeight
-				}
-				if newLines > m.height {
-					m.height = newLines
-					m.textarea.SetHeight(newLines)
-				}
-				// Fall through to textarea to insert the newline.
+				// Normal: Alt+Enter = new line. Insert manually so the same
+				// path is used as Shift+Enter.
+				m.textarea.InsertString("\n")
+				m.autoResize()
+				return m, nil
 			}
+			if m.mode == InputModeNormal {
+				// Normal: Enter = send.
+				text := m.textarea.Value()
+				if strings.TrimSpace(text) != "" {
+					return m, func() tea.Msg { return InputSendMsg{Text: text} }
+				}
+				return m, nil
+			}
+			// Edit: plain Enter = new line. Insert via the same explicit
+			// path as Shift+Enter to avoid the textarea's KeyEnter handler
+			// adding a phantom row.
+			m.textarea.InsertString("\n")
+			m.autoResize()
+			return m, nil
 		}
 	}
 
@@ -307,15 +319,26 @@ func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 		m.escapedOnce = false
 	}
 
-	// Detect pasted file paths and wrap them in [FILE:path].
+	// Detect pasted file paths and wrap them in [FILE:path], plus
+	// pasted friend contact cards (JSON / SLF hash) and wrap them in
+	// [FRIEND:me] or [FRIEND:<id>].
 	newVal := m.textarea.Value()
 	if newVal != prevVal {
 		diff := extractNewText(prevVal, newVal)
 		if diff != "" {
 			wrapped := wrapFilePaths(diff)
 			if wrapped != diff {
-				// Replace the pasted text with the wrapped version.
 				m.textarea.SetValue(strings.Replace(newVal, diff, wrapped, 1))
+				m.autoResize()
+			} else if m.friendResolver != nil {
+				if marker := m.friendResolver(strings.TrimSpace(diff)); marker != "" {
+					m.textarea.SetValue(strings.Replace(newVal, diff, marker, 1))
+					// Re-run autoResize so the textarea shrinks
+					// back to fit the (much shorter) marker —
+					// otherwise it stays expanded to whatever
+					// the original multi-line paste needed.
+					m.autoResize()
+				}
 			}
 		}
 	}
@@ -424,7 +447,48 @@ func (m InputModel) View() string {
 		style = style.BorderForeground(ColorHighlight)
 	}
 
+	rendered := m.textarea.View()
+	lines := strings.Split(rendered, "\n")
+
+	// Defensive: clip to the textarea's own logical line count so any
+	// trailing phantom row from bubbles textarea's render padding is
+	// dropped before our visible-window math runs.
+	expected := m.textarea.LineCount()
+	if expected < inputMinHeight {
+		expected = inputMinHeight
+	}
+	if len(lines) > expected {
+		lines = lines[:expected]
+	}
+
+	visible := m.height
+	if visible < inputMinHeight {
+		visible = inputMinHeight
+	}
+
+	// If the content already fits, just pad to the visible height so the
+	// box doesn't shrink mid-frame.
+	if len(lines) <= visible {
+		for len(lines) < visible {
+			lines = append(lines, "")
+		}
+	} else {
+		// Scroll the window so the cursor row is always inside it.
+		cursorRow := m.textarea.Line()
+		scrollOff := 0
+		if cursorRow >= visible {
+			scrollOff = cursorRow - visible + 1
+		}
+		if scrollOff+visible > len(lines) {
+			scrollOff = len(lines) - visible
+		}
+		if scrollOff < 0 {
+			scrollOff = 0
+		}
+		lines = lines[scrollOff : scrollOff+visible]
+	}
+
 	return style.
 		Width(m.width).
-		Render(m.textarea.View())
+		Render(strings.Join(lines, "\n"))
 }

@@ -44,6 +44,9 @@ type KeyMap struct {
 	EmojiPicker      key.Binding
 	SelectMessage    key.Binding
 	ToggleTheme      key.Binding
+	FriendDetails    key.Binding
+	Notifications    key.Binding
+	ShareMyInfo      key.Binding
 }
 
 // binding creates a key.Binding from a ShortcutMap action name.
@@ -98,6 +101,9 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		EmojiPicker:     binding(sm, "emoji_picker", "ctrl+e", "emoji picker"),
 		SelectMessage:   binding(sm, "select_message", "ctrl+j", "select message"),
 		ToggleTheme:     binding(sm, "toggle_theme", "ctrl+y", "toggle theme"),
+		FriendDetails:   binding(sm, "friend_details", "alt+i", "friend details"),
+		Notifications:   binding(sm, "notifications", "alt+n", "notifications view"),
+		ShareMyInfo:     binding(sm, "share_my_info", "alt+m", "insert [FRIEND:me]"),
 	}
 }
 

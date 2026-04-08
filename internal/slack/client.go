@@ -47,6 +47,8 @@ type SlackService interface {
 	RemoveReaction(channelID, timestamp, emoji string) error
 	// DeleteMessage removes a message authored by the calling user.
 	DeleteMessage(channelID, timestamp string) error
+	// UpdateMessage edits a message authored by the calling user.
+	UpdateMessage(channelID, timestamp, newText string) error
 	// Warnings returns and clears any accumulated fallback warnings.
 	Warnings() []string
 }
@@ -112,6 +114,14 @@ func (c *slackClient) DeleteMessage(channelID, timestamp string) error {
 	debug.Log("[api] DeleteMessage channel=%s ts=%s", channelID, timestamp)
 	return c.tryWithFallback("delete message", func(api *slack.Client) error {
 		_, _, err := api.DeleteMessage(channelID, timestamp)
+		return err
+	})
+}
+
+func (c *slackClient) UpdateMessage(channelID, timestamp, newText string) error {
+	debug.Log("[api] UpdateMessage channel=%s ts=%s", channelID, timestamp)
+	return c.tryWithFallback("update message", func(api *slack.Client) error {
+		_, _, _, err := api.UpdateMessage(channelID, timestamp, slack.MsgOptionText(newText, false))
 		return err
 	})
 }

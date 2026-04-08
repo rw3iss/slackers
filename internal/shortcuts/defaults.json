@@ -35,5 +35,8 @@
   "befriend": ["ctrl+b"],
   "emoji_picker": ["ctrl+e"],
   "select_message": ["ctrl+j"],
-  "toggle_theme": ["ctrl+y"]
+  "toggle_theme": ["ctrl+y"],
+  "friend_details": ["alt+i"],
+  "notifications": ["alt+n"],
+  "share_my_info": ["alt+m"]
 }
