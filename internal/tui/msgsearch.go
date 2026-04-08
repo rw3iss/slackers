@@ -445,19 +445,29 @@ func (m MsgSearchModel) View() string {
 
 	content := b.String()
 
-	// Use nearly the full terminal size.
+	// Use the full terminal size. Height (not MaxHeight) pins the
+	// box to a fixed vertical span regardless of how many results
+	// currently fit, so the popup no longer shrinks toward the
+	// centre of the screen when the results list is short or
+	// empty. Lipgloss default alignment is top-left, which is
+	// exactly what we want — title, input and results all flow
+	// from the top and any remaining space is blank below.
 	boxWidth := m.width - 4
 	if boxWidth > m.width {
 		boxWidth = m.width
 	}
 	boxHeight := m.height - 2
+	if boxHeight < 10 {
+		boxHeight = 10
+	}
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
 		Padding(1, 3).
 		Width(boxWidth).
-		MaxHeight(boxHeight)
+		Height(boxHeight).
+		AlignVertical(lipgloss.Top)
 
 	box := boxStyle.Render(content)
 
