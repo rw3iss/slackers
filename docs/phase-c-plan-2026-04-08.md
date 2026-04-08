@@ -165,6 +165,15 @@ Task 2 `handlers_p2p.go` extraction and Task 3 (OverlayScaffold) are left as fol
 - Dropped the now-unused `io` and `net/http` imports from `model.go`.
 - Line count: `model.go` went from ~6,200 → 5,849 lines. `cmds.go` is a fresh 373-line file. The remaining `handlers_p2p.go` / `handlers_slack.go` / `handlers_ui.go` extractions would continue to shrink `model.go` further.
 
+### Task 2 (continued) — handlers_p2p.go extraction — ✅ complete
+
+- Created `internal/tui/handlers_p2p.go` (610 lines) holding the friend/P2P subsystem methods and helpers that used to live in `model.go`.
+- Package-level helpers moved: `deleteFriendMessage`, `findFriendMsgPtr`, `hostPortFromMultiaddr`, `friendCardLabel`, `buildSlackInviteMessage`, `sendFriendMessageCmd`, `friendIdleCheckCmd`, plus the `FriendIdleTimeout` constant and `friendIdleCheckMsg` type.
+- Methods on `*Model` moved: `addLocalReaction`, `appendFriendMessage`, `loadFriendHistory`, `buildFriendChannels`, `recordFriendRequest`, `touchFriendActivity`, `connectFriend`, `sendRequestPending`, `sendProfileSync`, `mergeFriendProfile`, `resendPendingFriendMessagesCmd`, `applyFriendCard`.
+- Left behind in `model.go` on purpose: `friendPingTickCmd` (reads `m.cfg.FriendPingSeconds`, cheap to keep co-located with other model-owned ticks), `startDownload` / `startP2PDownload` (wire `m.downloadCancel` / `m.downloading` and share code with the Slack download path), and `toggleReaction` (dispatches to both Slack and P2P subsystems).
+- `model.go` shrank from 5,849 → 5,261 lines (−588). Combined with the `cmds.go` extraction earlier this session, `model.go` is down from ~6,200 → 5,261 lines total, a ~15% reduction.
+- Verification: `go build ./...`, `go vet ./...`, `make build` all clean.
+
 ### Task 3 — OverlayScaffold — deferred
 
 Not attempted in this pass. Reason: after Task 1 + Task 2 landed I was at a good stopping point and the `OverlayScaffold` migration would have touched another 3+ files with visual risk. Picking it up fresh in a dedicated session is safer than rushing the tail of this one. The `OverlayBox` helper added during Phase A remains available as the foundation for that future refactor.
