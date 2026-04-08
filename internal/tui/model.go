@@ -261,6 +261,11 @@ type Model struct {
 	// confirms deleting that message; any other key cancels.
 	pendingDeleteMsgID string
 
+	// Pending copy-to-clipboard confirmation for a large file. When
+	// non-nil, the next y/Enter kicks off the actual copy; any other
+	// key cancels. See file_clipboard.go for the full flow.
+	pendingCopyFile *types.FileInfo
+
 	// Friends
 	friendStore    *friends.FriendStore
 	friendHistory  *friends.ChatHistoryStore
@@ -813,6 +818,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.warning = "Friend card prompt cancelled"
 				return m, nil
 			}
+		}
+
+		// Pending large-file copy confirmation: y/Enter confirm,
+		// any other key cancels. See FileCopyRequestMsg below.
+		if m.pendingCopyFile != nil {
+			s := msg.String()
+			if s == "y" || s == "Y" || s == "enter" {
+				f := *m.pendingCopyFile
+				m.pendingCopyFile = nil
+				m.warning = fmt.Sprintf("Copying %s to clipboard...", f.Name)
+				return m, copyFileToClipboardCmd(m.slackSvc, m.p2pNode, f)
+			}
+			m.pendingCopyFile = nil
+			m.warning = "Copy cancelled"
+			return m, nil
 		}
 
 		// Pending file-upload-cancel confirmation: y/Enter confirm.
@@ -2575,6 +2595,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.warning = fmt.Sprintf("Cancel upload of %s? [y/N]", msg.File.Name)
 		}
 		return m, nil
+
+	case FileCopyRequestMsg:
+		// Validate the file looks like text we can safely copy.
+		if ok, reason := isCopyableTextFile(msg.File); !ok {
+			m.warning = reason
+			return m, clearWarningCmd()
+		}
+		// Large-file guard: prompt the user before loading it into
+		// memory + clipboard. The pending-copy handler above picks
+		// this up on the next keystroke.
+		if msg.File.Size > copyFileSizeLimit {
+			f := msg.File
+			m.pendingCopyFile = &f
+			m.warning = fmt.Sprintf(
+				"%s is %s — copy to clipboard? [y/N]",
+				msg.File.Name, formatCopyFileSize(msg.File),
+			)
+			return m, nil
+		}
+		m.warning = fmt.Sprintf("Copying %s to clipboard...", msg.File.Name)
+		return m, copyFileToClipboardCmd(m.slackSvc, m.p2pNode, msg.File)
+
+	case FileCopyCompleteMsg:
+		if msg.Err != nil {
+			m.warning = fmt.Sprintf("Copy failed: %s", msg.Err.Error())
+		} else {
+			m.warning = fmt.Sprintf("Copied %s to clipboard", msg.Name)
+		}
+		return m, clearWarningCmd()
 
 	case FileDownloadMsg:
 		downloadPath := m.cfg.DownloadPath

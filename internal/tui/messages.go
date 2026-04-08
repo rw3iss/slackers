@@ -1340,13 +1340,19 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					}
 				}
 			case "c", "C":
-				// Cancel an in-flight upload while in file-select mode.
+				// 'c' in file-select mode serves two purposes:
+				//   * Uploading file → request upload cancellation.
+				//   * Completed file → copy its contents to the
+				//     clipboard (if it looks like text).
 				if m.selectIdx >= 0 && m.selectIdx < len(m.selectables) {
 					f := m.selectables[m.selectIdx].file
 					if f.Uploading {
 						return m, func() tea.Msg {
 							return CancelUploadRequestMsg{File: f}
 						}
+					}
+					return m, func() tea.Msg {
+						return FileCopyRequestMsg{File: f}
 					}
 				}
 				return m, nil
@@ -1664,7 +1670,7 @@ func (m MessageViewModel) View() string {
 	}
 
 	if m.selectMode {
-		headerParts = append(headerParts, MessageHeaderHighlight.Render("  [FILE SELECT: ↑↓ navigate | Enter: download | f/Esc: exit]"))
+		headerParts = append(headerParts, MessageHeaderHighlight.Render("  [FILE SELECT: ↑↓ navigate | Enter: download | c: copy | f/Esc: exit]"))
 	} else if m.contextMode {
 		headerParts = append(headerParts, MessageHeaderHighlight.Render("  [Context - PgUp: load more | scroll bottom: exit]"))
 	} else if len(m.selectables) > 0 {
