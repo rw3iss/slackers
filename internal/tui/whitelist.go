@@ -141,24 +141,15 @@ func (m WhitelistModel) updateAdding(msg tea.Msg) (WhitelistModel, tea.Cmd) {
 
 // View renders the whitelist management overlay.
 func (m WhitelistModel) View() string {
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorPrimary).
-		MarginBottom(1)
-
-	dimStyle := lipgloss.NewStyle().
-		Foreground(ColorMuted).
-		Italic(true)
-
-	secureStyle := lipgloss.NewStyle().
-		Foreground(ColorStatusOn)
+	secureStyle := lipgloss.NewStyle().Foreground(ColorStatusOn)
 
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("Secure Whitelist"))
-	b.WriteString("\n\n")
-
 	if len(m.whitelist) == 0 {
+		// EmptyMessage is handled by the scaffold, but we want to
+		// keep the "No whitelisted users" wording distinct from the
+		// default, so we emit it here as part of the body.
+		dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 		b.WriteString(dimStyle.Render("  No whitelisted users"))
 		b.WriteString("\n")
 	} else {
@@ -186,31 +177,24 @@ func (m WhitelistModel) View() string {
 		}
 	}
 
-	b.WriteString("\n")
 	if m.adding {
-		b.WriteString("  Add user: ")
+		b.WriteString("\n  Add user: ")
 		b.WriteString(m.addInput.View())
-		b.WriteString("\n\n")
 	}
-	b.WriteString(dimStyle.Render("  a: add | d: remove | Esc: close"))
-
-	content := b.String()
 
 	boxHeight := m.height - 4
 	if boxHeight < 10 {
 		boxHeight = 10
 	}
 
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorPrimary).
-		Padding(1, 3).
-		Width(min(55, m.width-4)).
-		Height(boxHeight)
-
-	box := boxStyle.Render(content)
-
-	return lipgloss.Place(m.width, m.height,
-		lipgloss.Center, lipgloss.Center,
-		box)
+	scaffold := OverlayScaffold{
+		Title:       "Secure Whitelist",
+		Footer:      "a: add | d: remove | Esc: close",
+		Width:       m.width,
+		Height:      m.height,
+		MaxBoxWidth: 55,
+		BoxHeight:   boxHeight,
+		BorderColor: ColorPrimary,
+	}
+	return scaffold.Render(b.String())
 }

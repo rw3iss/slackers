@@ -207,9 +207,15 @@ Task 2 `handlers_p2p.go` extraction and Task 3 (OverlayScaffold) are left as fol
   ```
 - Verification: `go build ./...`, `go vet ./...`, `make build` all clean; binary installed.
 
-### Task 3 — OverlayScaffold — deferred
+### Task 3 — OverlayScaffold — ✅ complete
 
-Not attempted in this pass. Reason: after Task 1 + Task 2 landed I was at a good stopping point and the `OverlayScaffold` migration would have touched another 3+ files with visual risk. Picking it up fresh in a dedicated session is safer than rushing the tail of this one. The `OverlayBox` helper added during Phase A remains available as the foundation for that future refactor.
+- Created `internal/tui/overlayscaffold.go` (137 lines). `OverlayScaffold` is a small value type (`Title`, `Footer`, `EmptyMessage`, `Width`, `Height`, `BoxWidth`, `BoxHeight`, `MaxBoxWidth`, `BorderColor`) with a single `Render(body string) string` method. Overlays that adopt it can replace the ~40-line "titleStyle + dimStyle + boxStyle + lipgloss.Place" tail with a single scaffold literal.
+- Migrated three simple overlays as proof-of-concept:
+  - **`about.go`** — keeps its own per-line centring (the only overlay that centres each content line individually) and hands the pre-centred string to the scaffold purely for the box + place.
+  - **`rename.go`** — the text-input case. Title/Footer/MaxBoxWidth covered by the scaffold, the body just holds the label rows and the text input view.
+  - **`whitelist.go`** — the list case. BoxHeight is passed explicitly to match the overlay's "fill the screen" behaviour.
+- The remaining ~15 overlays are deferred: each has its own custom tuning (sub-pages, filter input, multi-column layouts, reactive sizing) that needs per-overlay review. The scaffold is designed to accept them incrementally — each migration is a self-contained View rewrite that doesn't touch state or Update logic.
+- Verification: `go build ./...`, `go vet ./...`, `make build` all clean; binary installed.
 
 ## Verification
 

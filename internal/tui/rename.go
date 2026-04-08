@@ -73,41 +73,22 @@ func (m RenameModel) Update(msg tea.Msg) (RenameModel, tea.Cmd) {
 
 // View renders the rename overlay.
 func (m RenameModel) View() string {
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorPrimary).
-		MarginBottom(1)
-
-	labelStyle := lipgloss.NewStyle().
-		Foreground(ColorMuted)
-
-	dimStyle := lipgloss.NewStyle().
-		Foreground(ColorMuted).
-		Italic(true)
+	labelStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 
 	var b strings.Builder
-
-	b.WriteString(titleStyle.Render("Rename Channel"))
-	b.WriteString("\n\n")
 	b.WriteString(labelStyle.Render("  Current: "))
 	b.WriteString(m.channelName)
 	b.WriteString("\n\n")
 	b.WriteString(labelStyle.Render("  Alias:   "))
 	b.WriteString(m.input.View())
-	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("  Enter: save | Esc: cancel | Clear to remove alias"))
 
-	content := b.String()
-
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorPrimary).
-		Padding(1, 3).
-		Width(min(55, m.width-4))
-
-	box := boxStyle.Render(content)
-
-	return lipgloss.Place(m.width, m.height,
-		lipgloss.Center, lipgloss.Center,
-		box)
+	scaffold := OverlayScaffold{
+		Title:       "Rename Channel",
+		Footer:      "Enter: save | Esc: cancel | Clear to remove alias",
+		Width:       m.width,
+		Height:      m.height,
+		MaxBoxWidth: 55,
+		BorderColor: ColorPrimary,
+	}
+	return scaffold.Render(b.String())
 }

@@ -81,13 +81,13 @@ func (m AboutModel) View() string {
 		centered[i] = strings.Repeat(" ", pad) + line
 	}
 
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorPrimary).
-		Padding(1, 4).
-		Render(strings.Join(centered, "\n"))
-
-	return lipgloss.Place(m.width, m.height,
-		lipgloss.Center, lipgloss.Center,
-		box)
+	// About uses its own per-line centring above, so we hand the
+	// fully pre-laid-out content to the scaffold without title /
+	// footer — the scaffold only provides the box + place.
+	scaffold := OverlayScaffold{
+		Width:       m.width,
+		Height:      m.height,
+		BorderColor: ColorPrimary,
+	}
+	return scaffold.Render(strings.Join(centered, "\n"))
 }
