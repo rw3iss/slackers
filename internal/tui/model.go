@@ -1501,6 +1501,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.loadFriendHistory(friendUID)
+			// loadFriendHistory runs SetMessages → rebuildContent,
+			// so lineToMsgID is populated. Jump to the exact line
+			// the selected message starts on.
+			if msg.MessageID != "" {
+				m.messages.ScrollToMessage(msg.MessageID)
+			}
 			m.focus = types.FocusMessages
 			m.updateFocus()
 			return m, nil

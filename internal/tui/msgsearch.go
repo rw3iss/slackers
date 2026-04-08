@@ -17,6 +17,7 @@ import (
 // MsgSearchSelectMsg is sent when the user selects a search result.
 type MsgSearchSelectMsg struct {
 	ChannelID string
+	MessageID string
 	Timestamp time.Time
 }
 
@@ -121,6 +122,7 @@ func (m MsgSearchModel) Update(msg tea.Msg) (MsgSearchModel, tea.Cmd) {
 				return m, func() tea.Msg {
 					return MsgSearchSelectMsg{
 						ChannelID: r.ChannelID,
+						MessageID: r.Message.MessageID,
 						Timestamp: r.Message.Timestamp,
 					}
 				}
@@ -330,6 +332,10 @@ func (m MsgSearchModel) View() string {
 		Foreground(ColorPrimary).
 		Bold(true)
 
+	matchHighlightStyle := lipgloss.NewStyle().
+		Foreground(ColorAccent).
+		Bold(true)
+
 	var b strings.Builder
 
 	b.WriteString(titleStyle.Render("Search Messages"))
@@ -391,13 +397,27 @@ func (m MsgSearchModel) View() string {
 				nameStyle = selectedStyle
 			}
 
-			text := strings.ReplaceAll(r.Message.Text, "\n", " ")
+			// Build a windowed preview centred on the earliest
+			// query match so the user can see the actual matching
+			// context rather than the message's opening few words.
+			// Highlight the match itself so it stands out.
 			maxTextLen := m.width - 16
 			if maxTextLen < 20 {
 				maxTextLen = 20
 			}
-			if len(text) > maxTextLen {
-				text = text[:maxTextLen-3] + "..."
+			preview := buildSearchPreview(r.Message.Text, m.input.Value(), maxTextLen)
+			text := preview.Text
+			if preview.MatchStart >= 0 && preview.MatchLen > 0 {
+				pr := []rune(text)
+				endRune := preview.MatchStart + preview.MatchLen
+				if endRune > len(pr) {
+					endRune = len(pr)
+				}
+				if preview.MatchStart < len(pr) {
+					text = string(pr[:preview.MatchStart]) +
+						matchHighlightStyle.Render(string(pr[preview.MatchStart:endRune])) +
+						string(pr[endRune:])
+				}
 			}
 
 			timeStr := r.Message.Timestamp.Format("Jan 2 15:04")

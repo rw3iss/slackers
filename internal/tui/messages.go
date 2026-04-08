@@ -305,9 +305,14 @@ func (m *MessageViewModel) SetContextMessages(msgs []types.Message, targetIdx in
 	}
 	m.rebuildContent()
 
-	// Scroll to the target message. Estimate ~4 lines per message (header + date possible + text + blank).
-	approxLine := targetIdx * 4
-	m.viewport.SetYOffset(approxLine)
+	// Scroll to the target message using the EXACT line index
+	// populated by rebuildContent. The previous approximation
+	// (targetIdx * 4) ignored wrapped text, reactions, replies,
+	// date separators, and item spacing, so the target landed a
+	// page or more off from where it should have.
+	if targetIdx >= 0 && targetIdx < len(msgs) {
+		m.ScrollToMessage(msgs[targetIdx].MessageID)
+	}
 }
 
 // PrependContextMessages adds older messages to the context view.
@@ -317,11 +322,58 @@ func (m *MessageViewModel) PrependContextMessages(msgs []types.Message) {
 	}
 	m.contextTarget += len(msgs)
 	m.contextMessages = append(msgs, m.contextMessages...)
-	prevOffset := m.viewport.YOffset
 	m.rebuildContent()
-	// Adjust scroll to keep the same messages visible (new lines added above).
-	newLines := len(msgs) * 4 // approximate
-	m.viewport.SetYOffset(prevOffset + newLines)
+	// Re-anchor to the original target message after the rebuild.
+	// The message ID is stable across rebuilds; its line index
+	// (from lineToMsgID) is now recomputed for the expanded list,
+	// so the viewport stays locked to the user's original anchor.
+	if m.contextTarget >= 0 && m.contextTarget < len(m.contextMessages) {
+		m.ScrollToMessage(m.contextMessages[m.contextTarget].MessageID)
+	}
+}
+
+// ScrollToMessage positions the viewport so the message identified
+// by messageID is visible, roughly one-quarter from the top of the
+// visible area (leaving context above and below).
+//
+// This is the single source of truth for "scroll to a specific
+// message" across every chat mode: normal Slack channel view,
+// friend chat view, search-result context view, and the react-cursor
+// helper all route through the same line map (lineToMsgID, populated
+// by rebuildContent). The map stores the exact line index each
+// message starts at, so this helper works correctly regardless of:
+//   - wrapped long messages (multi-line body)
+//   - reactions rendered under messages
+//   - thread reply counts / inline reply expansion
+//   - file attachments
+//   - date separators between days
+//   - the user's item-spacing config (compact / relaxed / comfortable)
+//
+// Callers should invoke rebuildContent (or a SetMessages variant
+// that does it internally) before calling ScrollToMessage so the
+// line map reflects current state.
+func (m *MessageViewModel) ScrollToMessage(messageID string) {
+	if messageID == "" {
+		return
+	}
+	targetLine := -1
+	for line, id := range m.lineToMsgID {
+		if id == messageID {
+			targetLine = line
+			break
+		}
+	}
+	if targetLine < 0 {
+		return
+	}
+	// Place the message roughly 1/4 from the top of the viewport
+	// so surrounding context is visible above and below without
+	// the selected row sitting right at the edge.
+	offset := targetLine - m.viewport.Height/4
+	if offset < 0 {
+		offset = 0
+	}
+	m.viewport.SetYOffset(offset)
 }
 
 func (m *MessageViewModel) ExitContextMode() {
