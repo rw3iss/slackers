@@ -75,16 +75,11 @@ func (m *Model) editMessage(messageID, newText string) {
 }
 
 // isMyMessage returns true if the given message was authored by the local user.
-// Friend messages stored locally use UserID == "me"; Slack messages use the
-// real user ID, cached as m.myUserID.
+// Delegates to MessageViewModel.IsMyUserID so the same three-way check
+// (Slack UID, slacker ID, legacy "me") is used everywhere — this is
+// the single source of truth for "is this me" across all contexts.
 func (m *Model) isMyMessage(msg types.Message) bool {
-	if msg.UserID == "me" {
-		return true
-	}
-	if m.myUserID != "" && msg.UserID == m.myUserID {
-		return true
-	}
-	return false
+	return m.messages.IsMyUserID(msg.UserID)
 }
 
 // requestMessageDelete handles a user-initiated delete: validates authorship,
@@ -210,64 +205,71 @@ func (m *Model) confirmMessageDelete() tea.Cmd {
 }
 
 // toggleReaction adds or removes the user's reaction on a message.
+//
+// The detection step uses MessageViewModel.RemoveMyReactionsFromEmoji,
+// which walks every reaction group for the given emoji and strips
+// entries whose user ID matches any of the three identities the local
+// user is known by (Slack UID, slacker ID, legacy "me"). Its return
+// value tells us whether the user had already reacted — and, if so,
+// the actual stored alias(es) we removed, which the persistence layer
+// needs to mirror the same cleanup.
+//
+// The add path uses a canonical storeID derived from the strongest
+// identity currently available: Slack workspace UID if authed,
+// otherwise the slacker ID, otherwise the legacy "me" fallback.
+// Writing new reactions with a canonical ID (instead of whichever
+// was set at the moment) means future toggles will find them via
+// IsMyUserID regardless of whether the Slack auth state has changed
+// between sessions.
 func (m *Model) toggleReaction(messageID, emoji string) {
-	// Build the set of identifiers that count as "me".
-	myIDs := []string{"me"}
-	if m.myUserID != "" {
-		myIDs = append(myIDs, m.myUserID)
-	}
-
-	// Check if any of my IDs is already in the reaction's user list.
-	hasReacted := false
-	var matchedID string
-	for _, r := range m.messages.MessageReactions(messageID) {
-		if r.Emoji != emoji {
-			continue
-		}
-		for _, uid := range r.UserIDs {
-			for _, myID := range myIDs {
-				if uid == myID {
-					hasReacted = true
-					matchedID = uid
-					break
-				}
-			}
-			if hasReacted {
-				break
-			}
-		}
-		break
-	}
-
 	if m.currentCh == nil {
 		return
 	}
 
-	// Use the real user ID for storage if known, else "me".
+	// Collapse any existing reaction groups for this emoji that
+	// contain one of my identities. If anything was removed, this
+	// is an "unreact" — otherwise it's a fresh add.
+	removedIDs := m.messages.RemoveMyReactionsFromEmoji(messageID, emoji)
+	hasReacted := len(removedIDs) > 0
+
+	// Pick the canonical storeID for a new reaction. Prefer the Slack
+	// workspace UID (matches what Slack returns in API responses, so
+	// a subsequent history reload keeps the reaction owned by us),
+	// fall back to the slacker ID (stable across friend-only installs),
+	// then to the legacy "me" alias.
 	storeID := "me"
 	if m.myUserID != "" {
 		storeID = m.myUserID
+	} else if m.cfg != nil && m.cfg.SlackerID != "" {
+		storeID = m.cfg.SlackerID
 	}
 
 	if m.currentCh.IsFriend && m.p2pNode != nil {
 		peerUID := m.currentCh.UserID
-		msgType := secure.MsgTypeReaction
 		if hasReacted {
-			msgType = secure.MsgTypeReactionRemove
-			m.messages.RemoveReactionLocal(messageID, emoji, matchedID)
 			if m.friendHistory != nil {
-				m.friendHistory.RemoveReaction(peerUID, messageID, emoji, matchedID)
+				// Mirror the view-level cleanup into the persisted
+				// cache. One call strips every matching alias in one
+				// pass so historical duplicates collapse correctly.
+				m.friendHistory.RemoveAllReactionAliases(peerUID, messageID, emoji, removedIDs)
 				go m.friendHistory.Save(peerUID)
 			}
-		} else {
-			m.messages.AddReactionLocal(messageID, emoji, storeID)
-			if m.friendHistory != nil {
-				m.friendHistory.UpdateReaction(peerUID, messageID, emoji, storeID)
-				go m.friendHistory.Save(peerUID)
-			}
+			go m.p2pNode.SendMessage(peerUID, secure.P2PMessage{
+				Type:          secure.MsgTypeReactionRemove,
+				TargetMsgID:   messageID,
+				ReactionEmoji: emoji,
+				SenderID:      peerUID,
+				Timestamp:     time.Now().Unix(),
+			})
+			return
+		}
+		m.messages.AddReactionLocal(messageID, emoji, storeID)
+		if m.friendHistory != nil {
+			m.friendHistory.UpdateReaction(peerUID, messageID, emoji, storeID)
+			go m.friendHistory.Save(peerUID)
 		}
 		go m.p2pNode.SendMessage(peerUID, secure.P2PMessage{
-			Type:          msgType,
+			Type:          secure.MsgTypeReaction,
 			TargetMsgID:   messageID,
 			ReactionEmoji: emoji,
 			SenderID:      peerUID,
@@ -279,12 +281,14 @@ func (m *Model) toggleReaction(messageID, emoji string) {
 	if m.slackSvc != nil {
 		channelID := m.currentCh.ID
 		if hasReacted {
-			m.messages.RemoveReactionLocal(messageID, emoji, matchedID)
+			// The view has already been cleaned up above; just tell
+			// Slack to drop its server-side copy. Slack dedupes by
+			// (channel, ts, emoji, user) so we only need the one call.
 			go m.slackSvc.RemoveReaction(channelID, messageID, emoji)
-		} else {
-			m.messages.AddReactionLocal(messageID, emoji, storeID)
-			go m.slackSvc.AddReaction(channelID, messageID, emoji)
+			return
 		}
+		m.messages.AddReactionLocal(messageID, emoji, storeID)
+		go m.slackSvc.AddReaction(channelID, messageID, emoji)
 	}
 }
 

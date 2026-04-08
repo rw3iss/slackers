@@ -430,6 +430,58 @@ func (s *ChatHistoryStore) RemoveReaction(userID, messageID, emoji, reactUserID 
 	}
 }
 
+// RemoveAllReactionAliases strips every entry in `aliases` from all
+// reaction groups on the given message that match `emoji`. Empty
+// groups are collapsed. Used by toggleReaction to clean up multiple
+// stored identities (e.g. legacy "me" + canonical slacker ID) in a
+// single pass, so the persisted cache agrees with the in-memory view.
+func (s *ChatHistoryStore) RemoveAllReactionAliases(userID, messageID, emoji string, aliases []string) {
+	if len(aliases) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target := findMsgPtr(s.cache[userID], messageID)
+	if target == nil {
+		return
+	}
+	aliasSet := make(map[string]struct{}, len(aliases))
+	for _, a := range aliases {
+		aliasSet[a] = struct{}{}
+	}
+	out := target.Reactions[:0]
+	changed := false
+	for _, r := range target.Reactions {
+		if r.Emoji != emoji {
+			out = append(out, r)
+			continue
+		}
+		kept := make([]string, 0, len(r.UserIDs))
+		for _, uid := range r.UserIDs {
+			if _, drop := aliasSet[uid]; drop {
+				changed = true
+				continue
+			}
+			kept = append(kept, uid)
+		}
+		if len(kept) == 0 {
+			changed = true
+			continue
+		}
+		if len(kept) != len(r.UserIDs) {
+			changed = true
+		}
+		r.UserIDs = kept
+		r.Count = len(kept)
+		out = append(out, r)
+	}
+	target.Reactions = out
+	if changed {
+		s.dirty[userID] = true
+	}
+}
+
 // UpdateReaction adds or updates a reaction on a message in the cache.
 // Searches both top-level messages and nested replies.
 func (s *ChatHistoryStore) UpdateReaction(userID, messageID, emoji, reactUserID string) {

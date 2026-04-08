@@ -413,16 +413,84 @@ func (m *MessageViewModel) SetLocalIdentity(slackUserID, slackerID string) {
 // messages use UserID=="me"; Slack messages use the workspace id;
 // outgoing P2P friend messages may also carry the slacker id.
 func (m *MessageViewModel) isMyMessage(msg types.Message) bool {
-	if msg.UserID == "me" {
+	return m.IsMyUserID(msg.UserID)
+}
+
+// IsMyUserID reports whether uid matches any of the identities the
+// local user is known by across both Slack and friend chats:
+//   - the literal legacy alias "me"
+//   - the Slack workspace user ID (from AuthTest)
+//   - the friend-system slacker ID (stable across sessions, works
+//     even without Slack auth)
+//
+// This is the single source of truth for "is this me?" questions
+// about reactions, messages, and any other user-keyed state. The
+// reaction toggle logic consults this helper so that a reaction
+// the user added in a previous session is still recognised as theirs
+// on return, regardless of which of the three identity spaces was
+// active when the reaction was first stored.
+func (m *MessageViewModel) IsMyUserID(uid string) bool {
+	if uid == "" {
+		return false
+	}
+	if uid == "me" {
 		return true
 	}
-	if m.localSlackUserID != "" && msg.UserID == m.localSlackUserID {
+	if m.localSlackUserID != "" && uid == m.localSlackUserID {
 		return true
 	}
-	if m.localSlackerID != "" && msg.UserID == m.localSlackerID {
+	if m.localSlackerID != "" && uid == m.localSlackerID {
 		return true
 	}
 	return false
+}
+
+// RemoveMyReactionsFromEmoji walks every reaction group on the given
+// message matching emoji and removes every entry whose user ID
+// matches IsMyUserID. Returns the list of user IDs that were actually
+// removed, in the order they were encountered — the caller may need
+// to echo these to the persistence layer (friendHistory) or the
+// remote backend to keep state consistent.
+//
+// Empty groups are dropped entirely. This is the operation toggleReaction
+// uses for the "unreact" path: it collapses any duplicate groups that
+// might exist for the same emoji (from legacy storage bugs or race
+// conditions between optimistic local adds and Slack reaction_added
+// events) down to a single canonical state.
+func (m *MessageViewModel) RemoveMyReactionsFromEmoji(messageID, emoji string) []string {
+	target := m.findMessage(messageID)
+	if target == nil {
+		return nil
+	}
+	var removed []string
+	out := target.Reactions[:0]
+	for _, r := range target.Reactions {
+		if r.Emoji != emoji {
+			out = append(out, r)
+			continue
+		}
+		kept := make([]string, 0, len(r.UserIDs))
+		for _, uid := range r.UserIDs {
+			if m.IsMyUserID(uid) {
+				removed = append(removed, uid)
+				continue
+			}
+			kept = append(kept, uid)
+		}
+		if len(kept) == 0 {
+			// Drop the group entirely so the UI no longer shows a
+			// chip for this emoji.
+			continue
+		}
+		r.UserIDs = kept
+		r.Count = len(kept)
+		out = append(out, r)
+	}
+	target.Reactions = out
+	if len(removed) > 0 {
+		m.rebuildContent()
+	}
+	return removed
 }
 
 // SetFriendDetailsHint sets a short string (e.g. "Alt+I") that the
