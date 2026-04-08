@@ -516,7 +516,9 @@ func (m MessageViewModel) FriendCogPaneClickArea() (int, int) {
 	if !m.isFriendCh {
 		return 0, 0
 	}
-	contentW := m.width - 4
+	// Match rebuildContent / header layout: m.width - 5 leaves one
+	// column of right-side gutter between content and the border.
+	contentW := m.width - 5
 	if contentW <= 0 {
 		return 0, 0
 	}
@@ -1757,7 +1759,10 @@ func (m MessageViewModel) View() string {
 	// position from the same content-width math used here.
 	header := headerLeft
 	if m.isFriendCh {
-		contentW := m.width - 4 // pane width minus 2 borders minus 2 padding
+		// Reserve 1 extra col on the right as a visual gutter so
+		// header text / cog don't butt up against the border.
+		// Matches rebuildContent's maxWidth calculation below.
+		contentW := m.width - 5
 		if contentW < 0 {
 			contentW = 0
 		}
@@ -1931,7 +1936,9 @@ func (m *MessageViewModel) renderContextMessages() string {
 		return lipgloss.NewStyle().Foreground(ColorMuted).Render("  No context messages.")
 	}
 
-	divider := lipgloss.NewStyle().Foreground(ColorMuted).Render(strings.Repeat("─", m.width-6))
+	// One col narrower than the message content width (m.width - 5)
+	// so the divider lines up with the same right-side gutter.
+	divider := lipgloss.NewStyle().Foreground(ColorMuted).Render(strings.Repeat("─", m.width-7))
 	loadMore := lipgloss.NewStyle().Foreground(ColorAccent).Render("  ▲ Press PgUp or Ctrl-U at top to load earlier messages")
 
 	var b strings.Builder
@@ -1954,7 +1961,12 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 	m.friendCards = make(map[string]friends.ContactCard)
 
 	var lines []string
-	maxWidth := m.width - 4
+	// m.width - 5 = pane width minus 2 borders, 2 cells of
+	// Padding(0,1), and 1 extra column reserved as a right-side
+	// visual gutter so message text never butts up against the
+	// border. Lipgloss then pads the slot (which is m.width - 4
+	// wide) with one trailing space on every line.
+	maxWidth := m.width - 5
 	if maxWidth < 20 {
 		maxWidth = 20
 	}
