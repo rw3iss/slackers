@@ -189,6 +189,10 @@ type FriendSendResultMsg struct {
 	PeerUID   string
 	MessageID string
 	Success   bool
+	// Err carries the underlying send failure reason, if any.
+	// Surfaced in the status bar so the user can distinguish
+	// "peer offline" from "write error" etc. Empty on success.
+	Err string
 }
 
 // channelInfo stores the name and alias for a channel.
@@ -1986,6 +1990,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.warning = s
 			m.friendsConfig.message = s
 		}
+		// Full state snapshot for the debug log — gives the reader
+		// a single place to see peerMap / slackMap / libp2p
+		// connectedness at the exact moment of the test, without
+		// having to scroll through per-tick ping logs.
+		if m.p2pNode != nil {
+			debug.Log("[test-connection] uid=%s — dumping P2P state BEFORE:\n%s",
+				msg.FriendUserID, m.p2pNode.DumpState())
+		}
 		if m.friendStore == nil || m.p2pNode == nil || m.secureMgr == nil {
 			setBoth("P2P not available")
 			return m, nil
@@ -2028,6 +2040,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		online := m.p2pNode.IsConnected(f.UserID)
+		debug.Log("[test-connection] uid=%s online=%v AFTER connect\n%s",
+			f.UserID, online, m.p2pNode.DumpState())
 		m.friendStore.SetOnline(f.UserID, online)
 		if online {
 			m.friendStore.UpdateLastOnline(f.UserID)
@@ -3807,6 +3821,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Flip the history entry's Pending flag based on the
 		// outcome of the attempted wire send. Refresh the active
 		// chat view so the pending indicator appears/disappears.
+		// On failure, surface the underlying reason in the status
+		// bar so the user can distinguish "peer offline" from
+		// deeper errors instead of seeing an opaque "pending".
+		if !msg.Success && msg.Err != "" {
+			m.warning = "Send failed: " + msg.Err
+		}
 		if m.friendHistory == nil || msg.MessageID == "" {
 			return m, nil
 		}

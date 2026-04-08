@@ -2,6 +2,7 @@ package secure
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -21,7 +22,16 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr"
+
+	"github.com/rw3iss/slackers/internal/debug"
 )
+
+// debugLog is a thin wrapper around the slackers debug package so
+// the rest of this file can log with a short call. When --debug is
+// off the wrapper is a no-op (Log() itself checks the enabled flag).
+func debugLog(format string, args ...interface{}) {
+	debug.Log(format, args...)
+}
 
 const (
 	P2PProtocol = protocol.ID("/slackers/msg/1.0.0")
@@ -242,26 +252,62 @@ func (n *P2PNode) PeerID() string {
 func (n *P2PNode) ConnectToPeer(slackUserID, multiaddr string) error {
 	maddr, err := ma.NewMultiaddr(multiaddr)
 	if err != nil {
+		debugLog("[p2p] ConnectToPeer parse error uid=%s maddr=%q err=%v", slackUserID, multiaddr, err)
 		return fmt.Errorf("parsing multiaddr: %w", err)
 	}
 
 	peerInfo, err := peer.AddrInfoFromP2pAddr(maddr)
 	if err != nil {
+		debugLog("[p2p] ConnectToPeer addrinfo error uid=%s err=%v", slackUserID, err)
 		return fmt.Errorf("extracting peer info: %w", err)
 	}
 
-	dialCtx, cancel := context.WithTimeout(n.ctx, 3*time.Second)
-	defer cancel()
-	if err := n.host.Connect(dialCtx, *peerInfo); err != nil {
-		return fmt.Errorf("connecting to peer: %w", err)
+	// Asymmetric-connection recovery: if libp2p already has a live
+	// connection to this peer (e.g. the peer dialed US first while
+	// we were offline, or a previous dial succeeded but we lost the
+	// peerMap entry across a restart), short-circuit the dial and
+	// just populate peerMap. Without this check, a failing re-dial
+	// (NAT eviction, hairpin routing, transient timeout) would leave
+	// peerMap empty and messages would fail with "peer not connected"
+	// even though a perfectly usable connection exists.
+	if n.host.Network().Connectedness(peerInfo.ID) == network.Connected {
+		n.mu.Lock()
+		n.peerMap[slackUserID] = peerInfo.ID
+		n.slackMap[peerInfo.ID] = slackUserID
+		n.mu.Unlock()
+		debugLog("[p2p] ConnectToPeer short-circuit uid=%s pid=%s (already connected)", slackUserID, peerInfo.ID)
+		return nil
 	}
 
-	n.mu.Lock()
-	n.peerMap[slackUserID] = peerInfo.ID
-	n.slackMap[peerInfo.ID] = slackUserID
-	n.mu.Unlock()
+	debugLog("[p2p] ConnectToPeer dialing uid=%s pid=%s maddr=%s", slackUserID, peerInfo.ID, multiaddr)
+	dialCtx, cancel := context.WithTimeout(n.ctx, 3*time.Second)
+	defer cancel()
+	dialErr := n.host.Connect(dialCtx, *peerInfo)
 
-	return nil
+	// Re-check connectedness AFTER the dial attempt. Even if Connect
+	// returned an error, libp2p may have picked up or retained a
+	// connection via another address (e.g. an inbound stream from
+	// the same peer raced the dial). Treat a successful connection
+	// as authoritative regardless of the Connect() return value.
+	if n.host.Network().Connectedness(peerInfo.ID) == network.Connected {
+		n.mu.Lock()
+		n.peerMap[slackUserID] = peerInfo.ID
+		n.slackMap[peerInfo.ID] = slackUserID
+		n.mu.Unlock()
+		if dialErr != nil {
+			debugLog("[p2p] ConnectToPeer dial err=%v but connected via existing link uid=%s", dialErr, slackUserID)
+		} else {
+			debugLog("[p2p] ConnectToPeer dial ok uid=%s pid=%s", slackUserID, peerInfo.ID)
+		}
+		return nil
+	}
+
+	if dialErr != nil {
+		debugLog("[p2p] ConnectToPeer dial failed uid=%s pid=%s err=%v", slackUserID, peerInfo.ID, dialErr)
+		return fmt.Errorf("connecting to peer: %w", dialErr)
+	}
+	debugLog("[p2p] ConnectToPeer dial returned nil but not connected uid=%s pid=%s", slackUserID, peerInfo.ID)
+	return fmt.Errorf("dial returned but peer not connected")
 }
 
 // SendMessage sends a message to a connected peer.
@@ -270,26 +316,36 @@ func (n *P2PNode) SendMessage(slackUserID string, msg P2PMessage) error {
 	peerID, ok := n.peerMap[slackUserID]
 	n.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("peer %s not connected", slackUserID)
+		debugLog("[p2p] SendMessage uid=%s type=%s FAIL peerMap miss", slackUserID, msg.Type)
+		return fmt.Errorf("peer %s not connected (peerMap miss)", slackUserID)
+	}
+
+	if n.host.Network().Connectedness(peerID) != network.Connected {
+		debugLog("[p2p] SendMessage uid=%s type=%s FAIL libp2p not connected pid=%s", slackUserID, msg.Type, peerID)
+		return fmt.Errorf("peer %s not connected (libp2p disconnected)", slackUserID)
 	}
 
 	stream, err := n.host.NewStream(n.ctx, peerID, P2PProtocol)
 	if err != nil {
+		debugLog("[p2p] SendMessage uid=%s type=%s FAIL stream err=%v", slackUserID, msg.Type, err)
 		return fmt.Errorf("opening stream: %w", err)
 	}
 	defer stream.Close()
 
 	data, err := json.Marshal(msg)
 	if err != nil {
+		debugLog("[p2p] SendMessage uid=%s type=%s FAIL marshal err=%v", slackUserID, msg.Type, err)
 		return fmt.Errorf("marshaling message: %w", err)
 	}
 
 	// Write length-prefixed message.
 	data = append(data, '\n')
 	if _, err := stream.Write(data); err != nil {
+		debugLog("[p2p] SendMessage uid=%s type=%s FAIL write err=%v", slackUserID, msg.Type, err)
 		return fmt.Errorf("writing message: %w", err)
 	}
 
+	debugLog("[p2p] SendMessage uid=%s type=%s ok bytes=%d", slackUserID, msg.Type, len(data))
 	return nil
 }
 
@@ -372,11 +428,15 @@ func (n *P2PNode) handleStream(s network.Stream) {
 				n.peerMap[resolved] = remotePeer
 				n.mu.Unlock()
 				ok = true
+				debugLog("[p2p] handleStream fallback hit pid=%s -> uid=%s (peerMap populated)", remotePeer, resolved)
+			} else {
+				debugLog("[p2p] handleStream lookup miss pid=%s (no matching friend multiaddr)", remotePeer)
 			}
 		}
 	}
 	if !ok {
 		slackID = "unknown"
+		debugLog("[p2p] handleStream pid=%s → slackID=unknown (message will be dropped)", remotePeer)
 	}
 
 	reader := bufio.NewReader(s)
@@ -384,20 +444,74 @@ func (n *P2PNode) handleStream(s network.Stream) {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			if err != io.EOF {
-				// Connection closed or error.
+				debugLog("[p2p] handleStream read err uid=%s pid=%s err=%v", slackID, remotePeer, err)
 			}
 			return
 		}
 
 		var msg P2PMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
+			debugLog("[p2p] handleStream unmarshal err uid=%s pid=%s err=%v raw=%q", slackID, remotePeer, err, string(line))
 			continue
 		}
 
+		debugLog("[p2p] handleStream recv uid=%s type=%s msgID=%s", slackID, msg.Type, msg.MessageID)
 		if n.onMessage != nil {
 			n.onMessage(slackID, msg)
 		}
 	}
+}
+
+// DumpState returns a multi-line snapshot of the P2P node's current
+// routing state: the peerMap and slackMap plus libp2p host-level
+// connectedness for every registered peer. Used by the "Test
+// Connection" friend-config action and by --debug instrumentation
+// to diagnose asymmetric-connection bugs without having to add
+// more ad-hoc print statements.
+func (n *P2PNode) DumpState() string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "P2P node state @ %s\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "  host ID:     %s\n", n.host.ID())
+	fmt.Fprintf(&b, "  listening:   %s\n", n.address)
+	fmt.Fprintf(&b, "  peerMap (%d entries):\n", len(n.peerMap))
+	for slackID, pid := range n.peerMap {
+		conn := n.host.Network().Connectedness(pid)
+		addrs := n.host.Peerstore().Addrs(pid)
+		fmt.Fprintf(&b, "    %s → %s  [libp2p=%s addrs=%d]\n", slackID, pid, conn, len(addrs))
+		for _, a := range addrs {
+			fmt.Fprintf(&b, "      - %s\n", a)
+		}
+	}
+	fmt.Fprintf(&b, "  slackMap (%d entries):\n", len(n.slackMap))
+	for pid, slackID := range n.slackMap {
+		fmt.Fprintf(&b, "    %s → %s\n", pid, slackID)
+	}
+	// Also include any libp2p peers that are connected but NOT in
+	// our map — these are the "orphan connections" that point to
+	// the asymmetric-connection bug when they're from known friends.
+	connected := n.host.Network().Peers()
+	orphans := 0
+	for _, pid := range connected {
+		if _, ok := n.slackMap[pid]; !ok {
+			orphans++
+		}
+	}
+	if orphans > 0 {
+		fmt.Fprintf(&b, "  orphan connections (libp2p connected but not in slackMap): %d\n", orphans)
+		for _, pid := range connected {
+			if _, ok := n.slackMap[pid]; ok {
+				continue
+			}
+			addrs := n.host.Peerstore().Addrs(pid)
+			fmt.Fprintf(&b, "    %s  addrs=%d\n", pid, len(addrs))
+			for _, a := range addrs {
+				fmt.Fprintf(&b, "      - %s\n", a)
+			}
+		}
+	}
+	return b.String()
 }
 
 // RegisterPeer maps a Slack user ID to a libp2p peer ID without connecting.

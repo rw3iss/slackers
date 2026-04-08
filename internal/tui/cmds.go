@@ -21,6 +21,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/secure"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
@@ -452,12 +453,20 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, c
 			if f.Multiaddr == "" {
 				continue
 			}
+			before := p2p.IsConnected(f.UserID)
 			// Active chat: re-dial if the underlying libp2p
-			// connection dropped (e.g. NAT eviction).
-			if currentFriend != "" && f.UserID == currentFriend && !p2p.IsConnected(f.UserID) {
-				_ = p2p.ConnectToPeer(f.UserID, f.Multiaddr)
+			// connection dropped (e.g. NAT eviction). Log the
+			// result regardless of current-friend status so the
+			// debug trace shows each friend's state per tick.
+			if currentFriend != "" && f.UserID == currentFriend && !before {
+				if err := p2p.ConnectToPeer(f.UserID, f.Multiaddr); err != nil {
+					debug.Log("[friend-ping] re-dial failed uid=%s err=%v", f.UserID, err)
+				}
 			}
 			on := p2p.IsConnected(f.UserID)
+			if on != before {
+				debug.Log("[friend-ping] uid=%s state %v → %v", f.UserID, before, on)
+			}
 			online[f.UserID] = on
 			store.SetOnline(f.UserID, on)
 			if on {

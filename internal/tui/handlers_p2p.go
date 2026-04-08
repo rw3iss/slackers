@@ -17,6 +17,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/notifications"
 	"github.com/rw3iss/slackers/internal/secure"
@@ -139,25 +140,41 @@ func buildSlackInviteMessage(m Model) string {
 // returned no error.
 func sendFriendMessageCmd(node *secure.P2PNode, store *friends.FriendStore, peerUID string, fm secure.P2PMessage) tea.Cmd {
 	return func() tea.Msg {
+		debug.Log("[friend-send] start uid=%s type=%s msgID=%s", peerUID, fm.Type, fm.MessageID)
 		if f := store.Get(peerUID); f != nil && f.Multiaddr != "" {
-			_ = node.ConnectToPeer(peerUID, f.Multiaddr)
+			if dialErr := node.ConnectToPeer(peerUID, f.Multiaddr); dialErr != nil {
+				debug.Log("[friend-send] pre-dial failed uid=%s err=%v", peerUID, dialErr)
+			}
 		}
 		err := node.SendMessage(peerUID, fm)
 		if err != nil {
+			debug.Log("[friend-send] first attempt failed uid=%s err=%v — retrying", peerUID, err)
 			// Brief pause before retry — lets any in-flight
 			// dial / handshake finish if the first send raced
 			// the new connection.
 			time.Sleep(150 * time.Millisecond)
 			if f := store.Get(peerUID); f != nil && f.Multiaddr != "" {
-				_ = node.ConnectToPeer(peerUID, f.Multiaddr)
+				if dialErr := node.ConnectToPeer(peerUID, f.Multiaddr); dialErr != nil {
+					debug.Log("[friend-send] retry-dial failed uid=%s err=%v", peerUID, dialErr)
+				}
 			}
 			err = node.SendMessage(peerUID, fm)
+			if err != nil {
+				debug.Log("[friend-send] retry attempt failed uid=%s err=%v — giving up", peerUID, err)
+			}
 		}
-		return FriendSendResultMsg{
+		if err == nil {
+			debug.Log("[friend-send] ok uid=%s type=%s msgID=%s", peerUID, fm.Type, fm.MessageID)
+		}
+		result := FriendSendResultMsg{
 			PeerUID:   peerUID,
 			MessageID: fm.MessageID,
 			Success:   err == nil,
 		}
+		if err != nil {
+			result.Err = err.Error()
+		}
+		return result
 	}
 }
 
@@ -306,18 +323,22 @@ func (m *Model) touchFriendActivity(friendUID string) {
 // the async dial here is purely opportunistic.
 func (m *Model) connectFriend(friendUID string) {
 	if m.p2pNode == nil || m.friendStore == nil || friendUID == "" {
+		debug.Log("[connect-friend] skip uid=%q (p2p=%v store=%v)", friendUID, m.p2pNode != nil, m.friendStore != nil)
 		return
 	}
 	f := m.friendStore.Get(friendUID)
 	if f == nil || f.Multiaddr == "" {
+		debug.Log("[connect-friend] skip uid=%s (friend=%v maddr=%q)", friendUID, f != nil, "")
 		return
 	}
 	m.touchFriendActivity(friendUID)
 	if m.p2pNode.IsConnected(friendUID) {
+		debug.Log("[connect-friend] already connected uid=%s", friendUID)
 		m.friendStore.SetOnline(friendUID, true)
 		m.friendStore.UpdateLastOnline(friendUID)
 		return
 	}
+	debug.Log("[connect-friend] dispatching dial uid=%s maddr=%s", friendUID, f.Multiaddr)
 	// Fire the dial in the background — never block Update.
 	// Capture everything we need by value so the goroutine is
 	// fully detached from the main model state.
@@ -328,8 +349,11 @@ func (m *Model) connectFriend(friendUID string) {
 	sendProfile := m.sendProfileSync
 	sendRequest := m.sendRequestPending
 	go func() {
-		_ = node.ConnectToPeer(uid, multiaddr)
+		if err := node.ConnectToPeer(uid, multiaddr); err != nil {
+			debug.Log("[connect-friend] dial failed uid=%s err=%v", uid, err)
+		}
 		if node.IsConnected(uid) {
+			debug.Log("[connect-friend] online uid=%s", uid)
 			store.SetOnline(uid, true)
 			store.UpdateLastOnline(uid)
 			// These already ship as independent goroutines,
@@ -339,6 +363,7 @@ func (m *Model) connectFriend(friendUID string) {
 			sendProfile(uid)
 			sendRequest(uid)
 		} else {
+			debug.Log("[connect-friend] still offline uid=%s", uid)
 			store.SetOnline(uid, false)
 		}
 	}()
