@@ -15,9 +15,9 @@ type Friend struct {
 	Name           string `json:"name"`
 	Email          string `json:"email,omitempty"`
 	PublicKey      string `json:"public_key"`
-	PairKey        string `json:"pair_key,omitempty"`      // per-pair encryption key (base64)
+	PairKey        string `json:"pair_key,omitempty"` // per-pair encryption key (base64)
 	Multiaddr      string `json:"multiaddr"`
-	Endpoint       string `json:"endpoint,omitempty"`      // IP/hostname
+	Endpoint       string `json:"endpoint,omitempty"` // IP/hostname
 	Port           int    `json:"port,omitempty"`
 	AddedAt        int64  `json:"added_at"`
 	LastOnline     int64  `json:"last_online,omitempty"`

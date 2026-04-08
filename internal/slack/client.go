@@ -55,14 +55,14 @@ type SlackService interface {
 
 // slackClient implements SlackService using the slack-go library.
 type slackClient struct {
-	primary   *slack.Client // user token (preferred) or bot token
-	fallback  *slack.Client // bot token (fallback), nil if no user token
-	hasUser   bool
-	userID    string // cached after AuthTest
-	mu        sync.RWMutex
-	users     map[string]types.User
-	warnMu    sync.Mutex
-	warnings  []string
+	primary  *slack.Client // user token (preferred) or bot token
+	fallback *slack.Client // bot token (fallback), nil if no user token
+	hasUser  bool
+	userID   string // cached after AuthTest
+	mu       sync.RWMutex
+	users    map[string]types.User
+	warnMu   sync.Mutex
+	warnings []string
 }
 
 // NewSlackClient creates a new SlackService backed by the Slack Web API.

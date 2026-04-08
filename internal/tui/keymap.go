@@ -47,6 +47,7 @@ type KeyMap struct {
 	FriendDetails    key.Binding
 	Notifications    key.Binding
 	ShareMyInfo      key.Binding
+	ShortcutsEditor  key.Binding
 }
 
 // binding creates a key.Binding from a ShortcutMap action name.
@@ -96,14 +97,15 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		EnterFileSelect:  binding(sm, "enter_file_select", "ctrl+up", "file select"),
 		ToggleFileSelect: binding(sm, "toggle_file_select", "f", "file select"),
 		SidebarCollapse:  binding(sm, "sidebar_collapse", "space", "collapse group"),
-		ToggleInputMode: binding(sm, "toggle_input_mode", "ctrl+\\", "input mode"),
-		Befriend:        binding(sm, "befriend", "ctrl+b", "befriend user"),
-		EmojiPicker:     binding(sm, "emoji_picker", "ctrl+e", "emoji picker"),
-		SelectMessage:   binding(sm, "select_message", "ctrl+j", "select message"),
-		ToggleTheme:     binding(sm, "toggle_theme", "ctrl+y", "toggle theme"),
-		FriendDetails:   binding(sm, "friend_details", "alt+i", "friend details"),
-		Notifications:   binding(sm, "notifications", "alt+n", "notifications view"),
-		ShareMyInfo:     binding(sm, "share_my_info", "alt+m", "insert [FRIEND:me]"),
+		ToggleInputMode:  binding(sm, "toggle_input_mode", "ctrl+\\", "input mode"),
+		Befriend:         binding(sm, "befriend", "ctrl+b", "befriend user"),
+		EmojiPicker:      binding(sm, "emoji_picker", "ctrl+e", "emoji picker"),
+		SelectMessage:    binding(sm, "select_message", "ctrl+j", "select message"),
+		ToggleTheme:      binding(sm, "toggle_theme", "ctrl+y", "toggle theme"),
+		FriendDetails:    binding(sm, "friend_details", "alt+i", "friend details"),
+		Notifications:    binding(sm, "notifications", "alt+n", "notifications view"),
+		ShareMyInfo:      binding(sm, "share_my_info", "alt+m", "insert [FRIEND:me]"),
+		ShortcutsEditor:  binding(sm, "shortcuts_editor", "alt+k", "edit keyboard shortcuts"),
 	}
 }
 

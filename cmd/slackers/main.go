@@ -18,10 +18,10 @@ import (
 	"github.com/rw3iss/slackers/internal/auth"
 	"github.com/rw3iss/slackers/internal/backup"
 	"github.com/rw3iss/slackers/internal/config"
-	themepkg "github.com/rw3iss/slackers/internal/theme"
 	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/slack"
+	themepkg "github.com/rw3iss/slackers/internal/theme"
 	"github.com/rw3iss/slackers/internal/tui"
 	"github.com/spf13/cobra"
 )

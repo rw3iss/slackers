@@ -100,4 +100,3 @@ func (pd *PeerDiscovery) ClearCache(userID string) {
 	delete(pd.cache, userID)
 	pd.mu.Unlock()
 }
-

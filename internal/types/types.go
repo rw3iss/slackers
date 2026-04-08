@@ -34,9 +34,9 @@ type FileInfo struct {
 
 // Reaction represents an emoji reaction on a message.
 type Reaction struct {
-	Emoji    string   `json:"emoji"`     // shortcode (e.g. "thumbsup")
-	UserIDs  []string `json:"user_ids"`
-	Count    int      `json:"count"`
+	Emoji   string   `json:"emoji"` // shortcode (e.g. "thumbsup")
+	UserIDs []string `json:"user_ids"`
+	Count   int      `json:"count"`
 }
 
 // Message represents a single Slack or P2P message.
@@ -49,8 +49,8 @@ type Message struct {
 	ChannelID   string     `json:"channel_id,omitempty"`
 	Files       []FileInfo `json:"files,omitempty"`
 	Reactions   []Reaction `json:"reactions,omitempty"`
-	Replies     []Message  `json:"replies,omitempty"`     // child messages (replies)
-	ReplyTo     string     `json:"reply_to,omitempty"`    // parent message ID if this is a reply
+	Replies     []Message  `json:"replies,omitempty"`  // child messages (replies)
+	ReplyTo     string     `json:"reply_to,omitempty"` // parent message ID if this is a reply
 	IsEncrypted bool       `json:"is_encrypted,omitempty"`
 	// Pending marks a friend (P2P) message that could not be
 	// delivered at send time because the peer was offline. The

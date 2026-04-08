@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/theme"
 )
@@ -91,9 +91,9 @@ type ThemePickerModel struct {
 	forAlt        bool // true when picking the alternate theme
 
 	// Import conflict prompt state.
-	importPending      *theme.Theme // parsed but not yet saved
-	importPendingPath  string       // source path of the pending import
-	importHasConflict  bool         // true while waiting for o/a/n response
+	importPending     *theme.Theme // parsed but not yet saved
+	importPendingPath string       // source path of the pending import
+	importHasConflict bool         // true while waiting for o/a/n response
 }
 
 // NewThemePicker constructs a fresh picker, restoring the position of

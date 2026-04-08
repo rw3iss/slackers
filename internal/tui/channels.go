@@ -13,9 +13,9 @@ import (
 
 // Sort modes for channels.
 const (
-	SortByType    = "type"    // default: group by type (public, private, DM, group)
-	SortByName    = "name"    // alphabetical by display name
-	SortByRecent  = "recent"  // most recent message first (falls back to type)
+	SortByType   = "type"   // default: group by type (public, private, DM, group)
+	SortByName   = "name"   // alphabetical by display name
+	SortByRecent = "recent" // most recent message first (falls back to type)
 )
 
 // sidebarRow represents either a section header or a channel in the sidebar.

@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
+	"crypto/sha256"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
-	"crypto/sha256"
 	"io"
 )
 

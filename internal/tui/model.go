@@ -61,10 +61,10 @@ type fileBrowserPurpose int
 
 const (
 	fbPurposeAttach        fileBrowserPurpose = iota // selecting a file to send
-	fbPurposeSettings                                 // selecting a download folder
-	fbPurposeImportTheme                              // selecting a theme JSON to import
-	fbPurposeFriendImport                             // selecting a friend contact card JSON
-	fbPurposeFriendsImport                            // selecting a friends list JSON
+	fbPurposeSettings                                // selecting a download folder
+	fbPurposeImportTheme                             // selecting a theme JSON to import
+	fbPurposeFriendImport                            // selecting a friend contact card JSON
+	fbPurposeFriendsImport                           // selecting a friends list JSON
 )
 
 // Custom message types for the TUI update loop.
@@ -231,30 +231,30 @@ type UnreadChannelsMsg struct {
 // Model is the root TUI model composing all sub-components.
 type Model struct {
 	// Sub-models
-	channels ChannelListModel
-	messages MessageViewModel
-	input    InputModel
-	keymap   KeyMap
-	settings SettingsModel
-	search   SearchModel
-	hidden   HiddenChannelsModel
-	rename      RenameModel
-	msgSearch   MsgSearchModel
-	fileBrowser FileBrowserModel
-	fbPurpose   fileBrowserPurpose
-	filesList       FilesListModel
-	shortcutsEditor ShortcutsEditorModel
-	whitelist       WhitelistModel
-	help            HelpModel
-	friendRequest   FriendRequestModel
+	channels         ChannelListModel
+	messages         MessageViewModel
+	input            InputModel
+	keymap           KeyMap
+	settings         SettingsModel
+	search           SearchModel
+	hidden           HiddenChannelsModel
+	rename           RenameModel
+	msgSearch        MsgSearchModel
+	fileBrowser      FileBrowserModel
+	fbPurpose        fileBrowserPurpose
+	filesList        FilesListModel
+	shortcutsEditor  ShortcutsEditorModel
+	whitelist        WhitelistModel
+	help             HelpModel
+	friendRequest    FriendRequestModel
 	friendsConfig    FriendsConfigModel
 	about            AboutModel
 	themePicker      ThemePickerModel
 	themeEditor      ThemeEditorModel
 	themeColorPicker ThemeColorPickerModel
-	emojiPicker     EmojiPickerModel
-	msgOptions      MsgOptionsModel
-	sidebarOptions  SidebarOptionsModel
+	emojiPicker      EmojiPickerModel
+	msgOptions       MsgOptionsModel
+	sidebarOptions   SidebarOptionsModel
 
 	// Reactions
 	reactMsgID string // message ID for pending reaction
@@ -297,22 +297,22 @@ type Model struct {
 	warning    string
 
 	// Secure messaging
-	secureMgr  *secure.SessionManager
-	p2pNode    *secure.P2PNode
-	p2pChan    chan P2PReceivedMsg
+	secureMgr *secure.SessionManager
+	p2pNode   *secure.P2PNode
+	p2pChan   chan P2PReceivedMsg
 
 	// Shortcuts
-	shortcutMap shortcuts.ShortcutMap
+	shortcutMap       shortcuts.ShortcutMap
 	shortcutOverrides shortcuts.ShortcutMap
 
 	// Channel index: ID -> {name, alias}
 	channelIndex map[string]channelInfo
 
 	// Polling
-	lastSeen      map[string]string
-	lastChecked   map[string]time.Time // when each channel was last polled
-	pollChannels  []string             // ordered list for round-robin polling
-	pollOffset    int
+	lastSeen     map[string]string
+	lastChecked  map[string]time.Time // when each channel was last polled
+	pollChannels []string             // ordered list for round-robin polling
+	pollOffset   int
 
 	// Config
 	cfg *config.Config
@@ -323,8 +323,8 @@ type Model struct {
 	eventChan chan slackpkg.SocketEvent
 
 	// Activity tracking
-	lastActivity   time.Time
-	isAway         bool
+	lastActivity time.Time
+	isAway       bool
 
 	// Notification watchdog: tracks when the current m.warning was
 	// first set so the watchdog ticker can clear it after the
@@ -504,9 +504,9 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 				}
 			case secure.MsgTypeFileOffer:
 				p2pChan <- P2PReceivedMsg{
-					SenderID: peerSlackID,
-					Text:     "__file_offer__",
-					PubKey:   msg.FileID,                              // reuse field for fileID
+					SenderID:  peerSlackID,
+					Text:      "__file_offer__",
+					PubKey:    msg.FileID,                                       // reuse field for fileID
 					Multiaddr: fmt.Sprintf("%s|%d", msg.FileName, msg.FileSize), // reuse for name|size
 				}
 			case secure.MsgTypeFileCancel:
@@ -609,42 +609,42 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	mv.SetItemSpacing(cfg.MessageItemSpacing)
 
 	return Model{
-		channels:          ch,
-		messages:          mv,
-		input:             inp,
-		keymap:            km,
-		secureMgr:         secureMgr,
-		p2pNode:           p2pNode,
-		p2pChan:           p2pChan,
-		shortcutMap:       merged,
-		shortcutOverrides: overrides,
-		settings:          NewSettingsModel(cfg, version),
-		help:              NewHelpModel(version),
-		focus:     types.FocusSidebar,
-		users:     make(map[string]types.User),
-		channelIndex: make(map[string]channelInfo),
-		lastSeen:     loadLastSeen(cfg),
-		lastChecked:  make(map[string]time.Time),
-		cfg:       cfg,
-		lastActivity: time.Now(),
-		splash:       true,
-		initialLoad:  true,
-		version:      version,
-		friendStore:    friendStore,
-		friendHistory:  friendHistory,
+		channels:           ch,
+		messages:           mv,
+		input:              inp,
+		keymap:             km,
+		secureMgr:          secureMgr,
+		p2pNode:            p2pNode,
+		p2pChan:            p2pChan,
+		shortcutMap:        merged,
+		shortcutOverrides:  overrides,
+		settings:           NewSettingsModel(cfg, version),
+		help:               NewHelpModel(version),
+		focus:              types.FocusSidebar,
+		users:              make(map[string]types.User),
+		channelIndex:       make(map[string]channelInfo),
+		lastSeen:           loadLastSeen(cfg),
+		lastChecked:        make(map[string]time.Time),
+		cfg:                cfg,
+		lastActivity:       time.Now(),
+		splash:             true,
+		initialLoad:        true,
+		version:            version,
+		friendStore:        friendStore,
+		friendHistory:      friendHistory,
 		friendMessages:     make(map[string][]types.Message),
 		uploadCancels:      make(map[string]context.CancelFunc),
 		pendingKeyRotation: make(map[string][32]byte),
 		friendActivity:     make(map[string]time.Time),
 		friendPrevOnline:   make(map[string]bool),
-		notifStore:         func() *notifications.Store {
+		notifStore: func() *notifications.Store {
 			ns := notifications.NewStore(notifications.DefaultPath())
 			_ = ns.Load()
 			return ns
 		}(),
-		slackSvc:       slackSvc,
-		socketSvc:      socketSvc,
-		eventChan:      make(chan slackpkg.SocketEvent, 100),
+		slackSvc:  slackSvc,
+		socketSvc: socketSvc,
+		eventChan: make(chan slackpkg.SocketEvent, 100),
 	}
 }
 
@@ -863,6 +863,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.overlay = overlayNotifications
 			}
 			return m, nil
+
+		case key.Matches(msg, m.keymap.ShortcutsEditor):
+			// Open the keyboard shortcuts editor directly — same
+			// path the Settings overlay uses for its "Keyboard
+			// Shortcuts" row.
+			return m, func() tea.Msg {
+				return ShortcutsEditorOpenMsg{}
+			}
 
 		case key.Matches(msg, m.keymap.Settings):
 			if m.overlay == overlaySettings {
@@ -1090,8 +1098,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.shortcutOverrides = m.shortcutsEditor.Overrides()
 				return m, nil
 			}
+			// The editor has a filter textinput — route the
+			// un-normalized key so capital letters reach it
+			// as typed (same fix as FriendsConfig / Hidden /
+			// Rename / MsgSearch).
 			var cmd tea.Cmd
-			m.shortcutsEditor, cmd = m.shortcutsEditor.Update(msg)
+			m.shortcutsEditor, cmd = m.shortcutsEditor.Update(origMsg)
 			return m, cmd
 		}
 		if m.overlay == overlayWhitelist {
@@ -1297,7 +1309,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.messages.ExitThreadMode()
 				}
 				m.currentCh = ch
-				m.channels.ClearUnread(ch.ID); m.clearChannelNotifs(ch.ID)
+				m.channels.ClearUnread(ch.ID)
+				m.clearChannelNotifs(ch.ID)
 				m.setChannelHeader()
 				m.saveLastChannel(ch.ID)
 				// Friend channels load from local P2P history;
@@ -1366,7 +1379,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.messages.ExitThreadMode()
 					}
 					m.currentCh = ch
-					m.channels.ClearUnread(ch.ID); m.clearChannelNotifs(ch.ID)
+					m.channels.ClearUnread(ch.ID)
+					m.clearChannelNotifs(ch.ID)
 					m.setChannelHeader()
 					m.saveLastChannel(ch.ID)
 					// Move focus to the input so the user can
@@ -1433,7 +1447,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if ch.ID == msg.ChannelID {
 					m.currentCh = &ch
 					m.channels.SelectByID(ch.ID)
-					m.channels.ClearUnread(ch.ID); m.clearChannelNotifs(ch.ID)
+					m.channels.ClearUnread(ch.ID)
+					m.clearChannelNotifs(ch.ID)
 					channelName = "#" + m.channels.displayName(ch)
 					m.saveLastChannel(ch.ID)
 					break
@@ -1474,7 +1489,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if ch.ID == msg.ChannelID {
 				m.currentCh = &ch
 				m.channels.SelectByID(ch.ID)
-				m.channels.ClearUnread(ch.ID); m.clearChannelNotifs(ch.ID)
+				m.channels.ClearUnread(ch.ID)
+				m.clearChannelNotifs(ch.ID)
 				m.channels.UnhideChannel(ch.ID)
 				m.setChannelHeader()
 				m.saveLastChannel(ch.ID)
@@ -1760,7 +1776,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		batch := make(map[string]string)
 
 		if len(m.pollChannels) > 0 {
-			type chCheck struct{ id string; checked time.Time }
+			type chCheck struct {
+				id      string
+				checked time.Time
+			}
 			unchecked := make([]chCheck, 0)
 			for _, id := range m.pollChannels {
 				// Skip current channel (handled by primary poll).
@@ -3609,7 +3628,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err := m.p2pNode.SendMessage(msg.UserID, req); err != nil {
 					// Fallback: send invite via Slack DM.
 					if m.slackSvc != nil && m.currentCh != nil {
-						inviteText := fmt.Sprintf("Hey! I'd like to chat privately using Slackers TUI. "+
+						inviteText := fmt.Sprintf("Hey! I'd like to chat privately using Slackers TUI. " +
 							"Check it out: https://github.com/rw3iss/slackers")
 						_ = m.slackSvc.SendMessage(m.currentCh.ID, inviteText)
 					}
@@ -3932,6 +3951,10 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.hidden, cmd = m.hidden.Update(msg)
 		return m, cmd
+	case overlayShortcuts:
+		var cmd tea.Cmd
+		m.shortcutsEditor, cmd = m.shortcutsEditor.Update(msg)
+		return m, cmd
 	case overlayWhitelist:
 		var cmd tea.Cmd
 		m.whitelist, cmd = m.whitelist.Update(msg)
@@ -4100,7 +4123,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 						m.messages.ExitThreadMode()
 					}
 					m.currentCh = ch
-					m.channels.ClearUnread(ch.ID); m.clearChannelNotifs(ch.ID)
+					m.channels.ClearUnread(ch.ID)
+					m.clearChannelNotifs(ch.ID)
 					m.setChannelHeader()
 					m.saveLastChannel(ch.ID)
 					// Move focus to the input so the user can
@@ -5418,7 +5442,8 @@ func (m *Model) activateNotification(n notifications.Notification) tea.Cmd {
 		}
 		m.currentCh = ch
 		m.channels.SelectByID(ch.ID)
-		m.channels.ClearUnread(ch.ID); m.clearChannelNotifs(ch.ID)
+		m.channels.ClearUnread(ch.ID)
+		m.clearChannelNotifs(ch.ID)
 		m.setChannelHeader()
 		m.saveLastChannel(ch.ID)
 		if ch.IsFriend {

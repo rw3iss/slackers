@@ -23,7 +23,7 @@ type FriendRequestRespondMsg struct {
 	UserID    string
 	Name      string
 	Accepted  bool
-	PublicKey  string
+	PublicKey string
 	Multiaddr string
 }
 
@@ -31,7 +31,7 @@ type FriendRequestModel struct {
 	userID    string
 	userName  string
 	incoming  bool
-	selected  int    // 0 = accept/send, 1 = cancel/reject
+	selected  int // 0 = accept/send, 1 = cancel/reject
 	width     int
 	height    int
 	publicKey string

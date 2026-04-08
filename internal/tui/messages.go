@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/format"
 	"github.com/rw3iss/slackers/internal/friends"
@@ -61,22 +61,22 @@ func init() {
 // slackEmojiAliases maps Slack-specific reaction shortcodes that don't match
 // the canonical names in our emoji database to a canonical equivalent.
 var slackEmojiAliases = map[string]string{
-	"+1":             "thumbsup",
-	"-1":             "thumbsdown",
-	"100":            "100",
-	"raised_hands":   "raised_hands",
-	"clap":           "clap",
-	"tada":           "tada",
-	"fire":           "fire",
-	"heart":          "heart",
-	"smile":          "smile",
-	"smiley":         "smiley",
-	"joy":            "joy",
-	"sob":            "sob",
-	"thinking_face":  "thinking",
+	"+1":               "thumbsup",
+	"-1":               "thumbsdown",
+	"100":              "100",
+	"raised_hands":     "raised_hands",
+	"clap":             "clap",
+	"tada":             "tada",
+	"fire":             "fire",
+	"heart":            "heart",
+	"smile":            "smile",
+	"smiley":           "smiley",
+	"joy":              "joy",
+	"sob":              "sob",
+	"thinking_face":    "thinking",
 	"white_check_mark": "white_check_mark",
 	"heavy_check_mark": "heavy_check_mark",
-	"x":              "x",
+	"x":                "x",
 }
 
 // resolveEmoji turns a Slack reaction shortcode into a renderable string.
@@ -162,9 +162,9 @@ type reactionHit struct {
 
 // MessageViewModel displays messages in a scrollable viewport.
 type MessageViewModel struct {
-	viewport    viewport.Model
-	messages    []types.Message
-	users       map[string]string
+	viewport          viewport.Model
+	messages          []types.Message
+	users             map[string]string
 	channelName       string
 	secureLabel       string
 	isFriendCh        bool
@@ -178,10 +178,10 @@ type MessageViewModel struct {
 	// AuthTest completes).
 	localSlackUserID string // Slack workspace user id (xUxx...)
 	localSlackerID   string // friend-system slacker id
-	focused     bool
-	autoScroll  bool
-	width       int
-	height      int
+	focused          bool
+	autoScroll       bool
+	width            int
+	height           int
 
 	// File selection mode
 	selectMode  bool
@@ -189,9 +189,9 @@ type MessageViewModel struct {
 	selectIdx   int
 
 	// React mode — select a message to react to
-	reactMode       bool
-	reactIdx        int // index into messages
-	reactionSelIdx  int // -1 = none. 0..len(reactions)-1 = a reaction. len(reactions) = "reply list" virtual element (when parent has replies in inline mode)
+	reactMode      bool
+	reactIdx       int // index into messages
+	reactionSelIdx int // -1 = none. 0..len(reactions)-1 = a reaction. len(reactions) = "reply list" virtual element (when parent has replies in inline mode)
 	// Inline-mode reply list navigation: when reactionSelIdx == len(reactions),
 	// the user is targeting the reply list. replyIdx selects an individual reply.
 	replyIdx            int // -1 = none, otherwise index into selected parent's Replies
@@ -240,9 +240,9 @@ type MessageViewModel struct {
 func NewMessageView() MessageViewModel {
 	vp := viewport.New(0, 0)
 	return MessageViewModel{
-		viewport:         vp,
-		users:            make(map[string]string),
-		autoScroll:       true,
+		viewport:        vp,
+		users:           make(map[string]string),
+		autoScroll:      true,
 		expandedReplies: make(map[string]bool),
 	}
 }
@@ -1790,8 +1790,8 @@ func (m *MessageViewModel) renderThreadView() string {
 	thread := []types.Message{*m.threadParent}
 	thread = append(thread, m.threadParent.Replies...)
 	m.messages = thread
-	m.replyFormat = ""        // don't recursively render replies inside thread
-	m.boxFirstMessage = true  // visually box the parent message
+	m.replyFormat = ""       // don't recursively render replies inside thread
+	m.boxFirstMessage = true // visually box the parent message
 	rendered := m.renderMessages()
 	m.messages = saved
 	m.replyFormat = saveReplyFmt

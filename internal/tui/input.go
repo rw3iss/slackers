@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-
 const (
 	inputMinHeight = 1
 	inputMaxHeight = 10
@@ -29,15 +28,15 @@ type InputSendMsg struct{ Text string }
 
 // InputModel represents the multi-line text input bar.
 type InputModel struct {
-	textarea   textarea.Model
-	focused    bool
-	width      int
-	height     int
-	mode       InputMode
-	history    []string
-	histIdx    int
-	draft      string
-	maxHist    int
+	textarea    textarea.Model
+	focused     bool
+	width       int
+	height      int
+	mode        InputMode
+	history     []string
+	histIdx     int
+	draft       string
+	maxHist     int
 	escSeqPart  bool // true if we just saw alt+O (first half of Shift+Enter)
 	escapedOnce bool // true after first escape (next escape clears)
 
@@ -160,9 +159,14 @@ func (m *InputModel) ToggleMode() {
 	}
 }
 
-func (m *InputModel) SetHistory(history []string)  { m.history = history }
-func (m *InputModel) SetMaxHistory(n int)           { if n < 1 { n = 1 }; m.maxHist = n }
-func (m *InputModel) History() []string             { return m.history }
+func (m *InputModel) SetHistory(history []string) { m.history = history }
+func (m *InputModel) SetMaxHistory(n int) {
+	if n < 1 {
+		n = 1
+	}
+	m.maxHist = n
+}
+func (m *InputModel) History() []string { return m.history }
 
 func (m *InputModel) PushHistory(msg string) {
 	if msg == "" {

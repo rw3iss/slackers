@@ -54,9 +54,9 @@ const (
 // rowOffset is the line offset relative to the inner content area
 // (top-left of the box minus border + padding).
 type fbHit struct {
-	kind   fbHitKind
-	index  int // index into m.favorites or m.entries depending on kind
-	row    int // 0-based row inside the inner content area
+	kind  fbHitKind
+	index int // index into m.favorites or m.entries depending on kind
+	row   int // 0-based row inside the inner content area
 }
 
 // fbPane identifies which inner list is currently active.
@@ -875,8 +875,8 @@ func (m FileBrowserModel) UpdateMouse(msg tea.MouseMsg) (FileBrowserModel, tea.C
 // formatFileSize returns a human-readable file size string.
 func formatFileSize(size int64) string {
 	const (
-		_         = iota
-		kB  int64 = 1 << (10 * iota)
+		_        = iota
+		kB int64 = 1 << (10 * iota)
 		mB
 		gB
 	)

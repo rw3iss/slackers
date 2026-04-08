@@ -32,11 +32,11 @@ type NotificationDeleteMsg struct {
 // the search-results page. The user can navigate with up/down,
 // activate with Enter, or delete with x.
 type NotificationsOverlayModel struct {
-	items    []notifications.Notification
-	selected int
+	items     []notifications.Notification
+	selected  int
 	scrollOff int
-	width    int
-	height   int
+	width     int
+	height    int
 }
 
 // NewNotificationsOverlay constructs the overlay from a snapshot of

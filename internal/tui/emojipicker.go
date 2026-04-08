@@ -14,13 +14,13 @@ type EmojiPickerPurpose int
 
 const (
 	EmojiPurposeInsert   EmojiPickerPurpose = iota // insert into text input
-	EmojiPurposeReaction                            // react to a message
+	EmojiPurposeReaction                           // react to a message
 )
 
 // EmojiSelectedMsg is sent when the user picks an emoji.
 type EmojiSelectedMsg struct {
-	Code    string             // shortcode (e.g. "thumbsup")
-	Emoji   string             // unicode (e.g. "👍")
+	Code    string // shortcode (e.g. "thumbsup")
+	Emoji   string // unicode (e.g. "👍")
 	Purpose EmojiPickerPurpose
 }
 
@@ -29,10 +29,10 @@ type EmojiPickerModel struct {
 	categories []emojiTab
 	activeTab  int
 	gridCols   int
-	gridRows   int // visible rows
-	cursorR    int // row within visible grid
-	cursorC    int // column
-	scrollOff  int // scroll offset (rows)
+	gridRows   int      // visible rows
+	cursorR    int      // row within visible grid
+	cursorC    int      // column
+	scrollOff  int      // scroll offset (rows)
 	favorites  []string // shortcodes in order
 	favDirty   bool
 	purpose    EmojiPickerPurpose
@@ -45,16 +45,16 @@ type EmojiPickerModel struct {
 	// right-click to toggle favorite) when the user has mouse
 	// mode on.
 	mouseEnabled bool
-	width      int
-	height     int
+	width        int
+	height       int
 
 	// Render layout (computed in View, used by mouse hit-testing).
-	boxX, boxY  int // top-left of the rendered box
-	boxW, boxH  int
-	tabRowY     int // screen Y of the tab row
-	tabsPerRow  int // wrapping limit for tabs
-	gridStartY  int // screen Y of the first grid row
-	gridStartX  int // screen X of the first grid cell
+	boxX, boxY    int // top-left of the rendered box
+	boxW, boxH    int
+	tabRowY       int      // screen Y of the tab row
+	tabsPerRow    int      // wrapping limit for tabs
+	gridStartY    int      // screen Y of the first grid row
+	gridStartX    int      // screen X of the first grid cell
 	tabsPositions []tabPos // (cat index, x, y) for click hit-testing
 }
 

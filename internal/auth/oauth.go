@@ -248,11 +248,11 @@ func exchangeCode(clientID, clientSecret, code, redirectURI, expectedTeamID stri
 	}
 
 	return &OAuthResult{
-		BotToken: oauthResp.AccessToken,
+		BotToken:  oauthResp.AccessToken,
 		UserToken: oauthResp.AuthedUser.AccessToken,
-		TeamName: oauthResp.Team.Name,
-		TeamID:   oauthResp.Team.ID,
-		AppID:    oauthResp.AppID,
+		TeamName:  oauthResp.Team.Name,
+		TeamID:    oauthResp.Team.ID,
+		AppID:     oauthResp.AppID,
 	}, nil
 }
 

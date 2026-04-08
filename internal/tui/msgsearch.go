@@ -25,16 +25,16 @@ type MsgSearchResultsMsg struct {
 
 // MsgSearchModel provides a message search overlay.
 type MsgSearchModel struct {
-	input     textinput.Model
-	results   []types.SearchResult
-	selected  int
-	scopeAll  bool // false = current channel, true = all channels
-	channelID string
-	loading   bool
-	noResults bool
-	slackSvc  slackpkg.SlackService
-	width     int
-	height    int
+	input          textinput.Model
+	results        []types.SearchResult
+	selected       int
+	scopeAll       bool // false = current channel, true = all channels
+	channelID      string
+	loading        bool
+	noResults      bool
+	slackSvc       slackpkg.SlackService
+	width          int
+	height         int
 	debounce       time.Time
 	channelResolve func(string) string
 }

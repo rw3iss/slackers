@@ -50,11 +50,15 @@ var ActionDescriptions = map[string]string{
 	"enter_file_select":  "Enter file select mode",
 	"toggle_file_select": "Toggle file select in messages",
 	"sidebar_collapse":   "Collapse/expand channel group",
-	"toggle_input_mode": "Toggle input mode (normal/edit)",
-	"toggle_theme":      "Toggle between primary and alternate themes",
-	"friend_details":    "Open friend details for current friend chat",
-	"notifications":     "Open the notifications view",
-	"share_my_info":     "Insert [FRIEND:me] into the chat input — expands to your full contact card on send",
+	"toggle_input_mode":  "Toggle input mode (normal/edit)",
+	"toggle_theme":       "Toggle between primary and alternate themes",
+	"friend_details":     "Open friend details for current friend chat",
+	"notifications":      "Open the notifications view",
+	"share_my_info":      "Insert [FRIEND:me] into the chat input — expands to your full contact card on send",
+	"befriend":           "Send friend request to the current DM user",
+	"emoji_picker":       "Open emoji picker (insert at cursor)",
+	"select_message":     "Enter message select mode (react / reply / edit / delete)",
+	"shortcuts_editor":   "Open the keyboard shortcuts editor",
 }
 
 // ActionOrder defines the display order for the shortcuts editor.
@@ -68,7 +72,10 @@ var ActionOrder = []string{
 	"enter_file_select", "focus_input_global", "cancel_download",
 	"hide_channel", "show_hidden", "toggle_hidden",
 	"rename_group", "sidebar_collapse",
-	"toggle_input_mode", "toggle_full_mode", "toggle_theme", "friend_details", "notifications", "share_my_info", "help", "settings",
+	"toggle_input_mode", "toggle_full_mode", "toggle_theme",
+	"befriend", "emoji_picker", "select_message",
+	"friend_details", "notifications", "share_my_info",
+	"help", "settings", "shortcuts_editor",
 }
 
 // DefaultShortcuts returns the built-in default shortcut mappings.

@@ -38,5 +38,6 @@
   "toggle_theme": ["ctrl+y"],
   "friend_details": ["alt+i"],
   "notifications": ["alt+n"],
-  "share_my_info": ["alt+m"]
+  "share_my_info": ["alt+m"],
+  "shortcuts_editor": ["alt+k"]
 }

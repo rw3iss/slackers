@@ -112,22 +112,22 @@ const (
 
 // FriendsConfigModel manages the friends configuration overlay.
 type FriendsConfigModel struct {
-	page         fcPage
-	store        *friends.FriendStore
-	cfg          *config.Config
-	selected     int
-	editFriend   *friends.Friend    // friend being edited
-	editFields   []settingsField    // reuse settings field pattern
-	editSelected int
-	editing      bool
-	input        textinput.Model
-	importPath   string
+	page            fcPage
+	store           *friends.FriendStore
+	cfg             *config.Config
+	selected        int
+	editFriend      *friends.Friend // friend being edited
+	editFields      []settingsField // reuse settings field pattern
+	editSelected    int
+	editing         bool
+	input           textinput.Model
+	importPath      string
 	importOverwrite bool
-	message      string
-	messageID    int64 // increments on every status message; timer matches against this
-	jsonInput    textinput.Model    // for paste JSON
-	width        int
-	height       int
+	message         string
+	messageID       int64           // increments on every status message; timer matches against this
+	jsonInput       textinput.Model // for paste JSON
+	width           int
+	height          int
 
 	// My info fields
 	myFields   []settingsField
@@ -170,8 +170,8 @@ type FriendsConfigModel struct {
 	// Local identity / endpoint info populated from the parent model so
 	// the Share My Info card includes the actual public key and a
 	// connectable multiaddr instead of empty placeholders.
-	myPublicKey  string
-	myMultiaddr  string
+	myPublicKey string
+	myMultiaddr string
 
 	// peerMultiaddrLookup looks up a connected friend's current
 	// multiaddr from the live P2P node. Set by the parent model.
@@ -248,10 +248,10 @@ func NewFriendsConfigModel(store *friends.FriendStore, cfg *config.Config) Frien
 	ji.CharLimit = 2048
 
 	return FriendsConfigModel{
-		page:  fcPageMenu,
-		store: store,
-		cfg:   cfg,
-		input: ti,
+		page:      fcPageMenu,
+		store:     store,
+		cfg:       cfg,
+		input:     ti,
 		jsonInput: ji,
 	}
 }
@@ -351,27 +351,43 @@ func (m FriendsConfigModel) Update(msg tea.Msg) (FriendsConfigModel, tea.Cmd) {
 func (m *FriendsConfigModel) scrollUp() {
 	switch m.page {
 	case fcPageMenu:
-		if m.selected > 0 { m.selected-- }
+		if m.selected > 0 {
+			m.selected--
+		}
 	case fcPageList:
-		if m.selected > 0 { m.selected-- }
+		if m.selected > 0 {
+			m.selected--
+		}
 	case fcPageEditMyInfo:
-		if m.mySelected > 0 { m.mySelected-- }
+		if m.mySelected > 0 {
+			m.mySelected--
+		}
 	case fcPageEditFriend:
-		if m.editSelected > 0 { m.editSelected-- }
+		if m.editSelected > 0 {
+			m.editSelected--
+		}
 	}
 }
 
 func (m *FriendsConfigModel) scrollDown() {
 	switch m.page {
 	case fcPageMenu:
-		if m.selected < len(menuItems)-1 { m.selected++ }
+		if m.selected < len(menuItems)-1 {
+			m.selected++
+		}
 	case fcPageList:
 		count := m.store.Count()
-		if m.selected < count-1 { m.selected++ }
+		if m.selected < count-1 {
+			m.selected++
+		}
 	case fcPageEditMyInfo:
-		if m.mySelected < len(m.myFields)-1 { m.mySelected++ }
+		if m.mySelected < len(m.myFields)-1 {
+			m.mySelected++
+		}
 	case fcPageEditFriend:
-		if m.editSelected < len(m.editFields)-1 { m.editSelected++ }
+		if m.editSelected < len(m.editFields)-1 {
+			m.editSelected++
+		}
 	}
 }
 
@@ -541,10 +557,14 @@ func (m FriendsConfigModel) handleListKey(msg tea.KeyMsg) (FriendsConfigModel, t
 		}
 	case "pgup":
 		m.selected -= 5
-		if m.selected < 0 { m.selected = 0 }
+		if m.selected < 0 {
+			m.selected = 0
+		}
 	case "pgdown":
 		m.selected += 5
-		if m.selected >= len(all) { m.selected = len(all) - 1 }
+		if m.selected >= len(all) {
+			m.selected = len(all) - 1
+		}
 	case "enter":
 		if m.selected < len(all) {
 			f := all[m.selected]
@@ -591,12 +611,16 @@ func friendPingSeconds(v int) int {
 }
 
 func p2pPort(p int) int {
-	if p <= 0 { return 9900 }
+	if p <= 0 {
+		return 9900
+	}
 	return p
 }
 
 func boolStr(b bool) string {
-	if b { return "on" }
+	if b {
+		return "on"
+	}
 	return "off"
 }
 
@@ -1146,15 +1170,25 @@ func (m *FriendsConfigModel) fillFieldsFromCard(card friends.ContactCard) {
 	for i, f := range m.editFields {
 		switch f.key {
 		case "name":
-			if card.Name != "" { m.editFields[i].value = card.Name }
+			if card.Name != "" {
+				m.editFields[i].value = card.Name
+			}
 		case "slacker_id":
-			if card.SlackerID != "" { m.editFields[i].value = card.SlackerID }
+			if card.SlackerID != "" {
+				m.editFields[i].value = card.SlackerID
+			}
 		case "email":
-			if card.Email != "" { m.editFields[i].value = card.Email }
+			if card.Email != "" {
+				m.editFields[i].value = card.Email
+			}
 		case "public_key":
-			if card.PublicKey != "" { m.editFields[i].value = card.PublicKey }
+			if card.PublicKey != "" {
+				m.editFields[i].value = card.PublicKey
+			}
 		case "multiaddr":
-			if card.Multiaddr != "" { m.editFields[i].value = card.Multiaddr }
+			if card.Multiaddr != "" {
+				m.editFields[i].value = card.Multiaddr
+			}
 		}
 	}
 }
@@ -1269,7 +1303,9 @@ func (m FriendsConfigModel) doImport() (FriendsConfigModel, tea.Cmd) {
 // --- Edit Friend page ---
 
 func (m *FriendsConfigModel) buildEditFriendFields() {
-	if m.editFriend == nil { return }
+	if m.editFriend == nil {
+		return
+	}
 	f := m.editFriend
 	m.editFields = []settingsField{
 		{label: "Name", key: "name", value: f.Name, description: "Display name shown in your sidebar"},
@@ -1285,7 +1321,9 @@ func (m *FriendsConfigModel) buildEditFriendFields() {
 }
 
 func formatLastOnline(ts int64) string {
-	if ts == 0 { return "never" }
+	if ts == 0 {
+		return "never"
+	}
 	t := time.Unix(ts, 0)
 	dur := time.Since(t)
 	switch {
@@ -1301,7 +1339,9 @@ func formatLastOnline(ts int64) string {
 }
 
 func onlineLabel(on bool) string {
-	if on { return "online" }
+	if on {
+		return "online"
+	}
 	return "offline"
 }
 
@@ -1558,7 +1598,9 @@ func (m *FriendsConfigModel) cycleEditOption() {
 }
 
 func (m FriendsConfigModel) saveFriendEdit() (FriendsConfigModel, tea.Cmd) {
-	if m.editFriend == nil { return m, nil }
+	if m.editFriend == nil {
+		return m, nil
+	}
 	// Snapshot the original (pre-edit) values for the
 	// connection-affecting fields so we can detect changes and
 	// trigger a re-handshake when needed.
@@ -1627,7 +1669,9 @@ func (m FriendsConfigModel) View() string {
 		return m.viewImport()
 	case fcPageEditFriend:
 		title := "Friend Config Edit"
-		if m.editFriend != nil { title = "Friend Config Edit: " + m.editFriend.Name }
+		if m.editFriend != nil {
+			title = "Friend Config Edit: " + m.editFriend.Name
+		}
 		// Both modes use the same renderer; the "Friends Config
 		// Menu" virtual row only appears in standalone mode.
 		return m.viewEditFriendStandalone(title)
@@ -1650,9 +1694,13 @@ func (m FriendsConfigModel) viewMenu() string {
 			item = shareFormatLabel(m.cfg)
 		}
 		cursor := "  "
-		if i == m.selected { cursor = "> " }
+		if i == m.selected {
+			cursor = "> "
+		}
 		style := ChannelItemStyle
-		if i == m.selected { style = ChannelSelectedStyle }
+		if i == m.selected {
+			style = ChannelSelectedStyle
+		}
 		b.WriteString(style.Render(cursor + item))
 		b.WriteString("\n")
 	}
@@ -1687,17 +1735,27 @@ func (m FriendsConfigModel) viewList() string {
 		b.WriteString(dimStyle.Render("  No friends yet. Use 'Add a Friend' to get started."))
 	} else {
 		maxVisible := m.height - 14
-		if maxVisible < 3 { maxVisible = 3 }
-		if maxVisible > len(all) { maxVisible = len(all) }
+		if maxVisible < 3 {
+			maxVisible = 3
+		}
+		if maxVisible > len(all) {
+			maxVisible = len(all)
+		}
 		start := 0
-		if m.selected >= maxVisible { start = m.selected - maxVisible + 1 }
+		if m.selected >= maxVisible {
+			start = m.selected - maxVisible + 1
+		}
 		end := start + maxVisible
-		if end > len(all) { end = len(all) }
+		if end > len(all) {
+			end = len(all)
+		}
 
 		for i := start; i < end; i++ {
 			f := all[i]
 			cursor := "  "
-			if i == m.selected { cursor = "> " }
+			if i == m.selected {
+				cursor = "> "
+			}
 
 			status := offStyle.Render("  offline")
 			if f.Online {
@@ -1707,9 +1765,13 @@ func (m FriendsConfigModel) viewList() string {
 			}
 
 			name := f.Name
-			if name == "" { name = f.UserID }
+			if name == "" {
+				name = f.UserID
+			}
 			style := ChannelItemStyle
-			if i == m.selected { style = ChannelSelectedStyle }
+			if i == m.selected {
+				style = ChannelSelectedStyle
+			}
 			b.WriteString(style.Render(cursor + name))
 			b.WriteString(status)
 			b.WriteString("\n")
@@ -1739,12 +1801,20 @@ func (m FriendsConfigModel) viewEditFields(title string, fields []settingsField,
 	b.WriteString("\n\n")
 
 	maxVisible := m.height - 14
-	if maxVisible < 3 { maxVisible = 3 }
-	if maxVisible > len(fields) { maxVisible = len(fields) }
+	if maxVisible < 3 {
+		maxVisible = 3
+	}
+	if maxVisible > len(fields) {
+		maxVisible = len(fields)
+	}
 	scrollOff := 0
-	if selected >= maxVisible { scrollOff = selected - maxVisible + 1 }
+	if selected >= maxVisible {
+		scrollOff = selected - maxVisible + 1
+	}
 	end := scrollOff + maxVisible
-	if end > len(fields) { end = len(fields) }
+	if end > len(fields) {
+		end = len(fields)
+	}
 
 	for i := scrollOff; i < end; i++ {
 		f := fields[i]
@@ -1766,7 +1836,9 @@ func (m FriendsConfigModel) viewEditFields(title string, fields []settingsField,
 			b.WriteString(m.input.View())
 		} else {
 			val := f.value
-			if val == "" { val = "(empty)" }
+			if val == "" {
+				val = "(empty)"
+			}
 			b.WriteString(valueStyle.Render(val))
 		}
 		b.WriteString("\n")
@@ -2043,7 +2115,9 @@ func (m FriendsConfigModel) viewImport() string {
 
 func (m FriendsConfigModel) renderBox(content string) string {
 	boxHeight := m.height - 4
-	if boxHeight < 10 { boxHeight = 10 }
+	if boxHeight < 10 {
+		boxHeight = 10
+	}
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

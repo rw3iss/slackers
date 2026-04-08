@@ -27,19 +27,19 @@ const (
 	P2PProtocol = protocol.ID("/slackers/msg/1.0.0")
 
 	// P2P message types.
-	MsgTypeMessage       = "message"
-	MsgTypePing          = "ping"
-	MsgTypePong          = "pong"
-	MsgTypeFriendRequest = "friend_request"
-	MsgTypeFriendAccept  = "friend_accept"
-	MsgTypeFriendReject  = "friend_reject"
-	MsgTypeDisconnect    = "disconnect"
-	MsgTypeFileOffer     = "file_offer"    // sender offers a file
-	MsgTypeFileRequest   = "file_request"  // receiver requests the file data
-	MsgTypeFileData      = "file_data"     // sender sends file chunk (base64)
-	MsgTypeFileCancel    = "file_cancel"   // sender cancels a previously offered file
-	MsgTypeKeyRotate     = "key_rotate"     // sender proposes a new public key for this friendship
-	MsgTypeKeyRotateAck  = "key_rotate_ack" // receiver accepts and returns its new public key
+	MsgTypeMessage        = "message"
+	MsgTypePing           = "ping"
+	MsgTypePong           = "pong"
+	MsgTypeFriendRequest  = "friend_request"
+	MsgTypeFriendAccept   = "friend_accept"
+	MsgTypeFriendReject   = "friend_reject"
+	MsgTypeDisconnect     = "disconnect"
+	MsgTypeFileOffer      = "file_offer"      // sender offers a file
+	MsgTypeFileRequest    = "file_request"    // receiver requests the file data
+	MsgTypeFileData       = "file_data"       // sender sends file chunk (base64)
+	MsgTypeFileCancel     = "file_cancel"     // sender cancels a previously offered file
+	MsgTypeKeyRotate      = "key_rotate"      // sender proposes a new public key for this friendship
+	MsgTypeKeyRotateAck   = "key_rotate_ack"  // receiver accepts and returns its new public key
 	MsgTypeReaction       = "reaction"        // add an emoji reaction
 	MsgTypeReactionRemove = "reaction_remove" // remove an emoji reaction
 	MsgTypeDelete         = "delete"          // request to delete a message authored by sender
@@ -82,22 +82,22 @@ type P2PMessage struct {
 
 // P2PNode manages the libp2p host and peer connections.
 type P2PNode struct {
-	host          host.Host
-	port          int
-	address       string
-	ctx           context.Context
-	cancel        context.CancelFunc
-	onMessage     func(peerSlackID string, msg P2PMessage)
-	onFileServed  func(fileID string) // called when a peer finishes downloading
+	host         host.Host
+	port         int
+	address      string
+	ctx          context.Context
+	cancel       context.CancelFunc
+	onMessage    func(peerSlackID string, msg P2PMessage)
+	onFileServed func(fileID string) // called when a peer finishes downloading
 	// peerLookup lets the incoming stream handler resolve an unknown
 	// remote peer ID (one we never dialed ourselves) to a local user
 	// ID by scanning the friend store's multiaddrs. Set by the model
 	// layer. Returns "" when the peer is not a known friend.
-	peerLookup    func(peerIDStr string) string
-	peerMap       map[string]peer.ID
-	slackMap      map[peer.ID]string
-	sharedFiles   map[string]string // fileID -> local file path (files we've offered)
-	mu            sync.RWMutex
+	peerLookup  func(peerIDStr string) string
+	peerMap     map[string]peer.ID
+	slackMap    map[peer.ID]string
+	sharedFiles map[string]string // fileID -> local file path (files we've offered)
+	mu          sync.RWMutex
 }
 
 // SetPeerLookup wires the friend-store lookup used by the incoming
