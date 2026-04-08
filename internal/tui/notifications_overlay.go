@@ -30,10 +30,12 @@ type NotificationDeleteMsg struct {
 
 // NotificationsOverlayModel renders a list of notifications similar to
 // the search-results page. The user can navigate with up/down,
-// activate with Enter, or delete with x.
+// activate with Enter, or delete with x. Cursor + navigation state
+// is managed by SelectableList so the overlay only owns the
+// activation / dismiss key bindings.
 type NotificationsOverlayModel struct {
 	items     []notifications.Notification
-	selected  int
+	list      SelectableList
 	scrollOff int
 	width     int
 	height    int
@@ -43,7 +45,10 @@ type NotificationsOverlayModel struct {
 // notifications. The caller should pass a fresh snapshot each open so
 // the list reflects current state.
 func NewNotificationsOverlay(items []notifications.Notification) NotificationsOverlayModel {
-	return NotificationsOverlayModel{items: items}
+	return NotificationsOverlayModel{
+		items: items,
+		list:  SelectableList{WrapAround: true, PageSize: 0 /* derived from visibleEntries */},
+	}
 }
 
 // SetSize sets the available render area.
@@ -55,53 +60,25 @@ func (m *NotificationsOverlayModel) SetSize(w, h int) {
 // SelectedNotification returns the currently highlighted notification
 // or a zero value if the list is empty.
 func (m NotificationsOverlayModel) SelectedNotification() notifications.Notification {
-	if m.selected < 0 || m.selected >= len(m.items) {
+	idx := m.list.Current()
+	if idx < 0 || idx >= len(m.items) {
 		return notifications.Notification{}
 	}
-	return m.items[m.selected]
+	return m.items[idx]
 }
 
 // Update handles key events for the overlay.
 func (m NotificationsOverlayModel) Update(msg tea.Msg) (NotificationsOverlayModel, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// Page size follows the visible row estimate so PgUp/PgDn
+		// jump one visible page at a time.
+		m.list.PageSize = m.visibleEntries()
+		m.list.SetCount(len(m.items))
+		if m.list.HandleKey(keyMsg) {
+			m.ensureVisible()
+			return m, nil
+		}
 		switch keyMsg.String() {
-		case "up", "k":
-			if m.selected > 0 {
-				m.selected--
-			} else if len(m.items) > 0 {
-				m.selected = len(m.items) - 1
-			}
-			m.ensureVisible()
-		case "down", "j":
-			if m.selected < len(m.items)-1 {
-				m.selected++
-			} else {
-				m.selected = 0
-			}
-			m.ensureVisible()
-		case "pgup":
-			vis := m.visibleEntries()
-			m.selected -= vis
-			if m.selected < 0 {
-				m.selected = 0
-			}
-			m.ensureVisible()
-		case "pgdown":
-			vis := m.visibleEntries()
-			m.selected += vis
-			if m.selected >= len(m.items) {
-				m.selected = len(m.items) - 1
-			}
-			m.ensureVisible()
-		case "home":
-			m.selected = 0
-			m.ensureVisible()
-		case "end":
-			m.selected = len(m.items) - 1
-			if m.selected < 0 {
-				m.selected = 0
-			}
-			m.ensureVisible()
 		case "enter":
 			n := m.SelectedNotification()
 			if n.ID == "" {
@@ -125,12 +102,7 @@ func (m NotificationsOverlayModel) Update(msg tea.Msg) (NotificationsOverlayMode
 // SetItems replaces the list (used after a deletion to refresh in place).
 func (m *NotificationsOverlayModel) SetItems(items []notifications.Notification) {
 	m.items = items
-	if m.selected >= len(items) {
-		m.selected = len(items) - 1
-	}
-	if m.selected < 0 {
-		m.selected = 0
-	}
+	m.list.SetCount(len(items))
 }
 
 // visibleEntries estimates how many entries fit in the box. Each
@@ -146,11 +118,15 @@ func (m NotificationsOverlayModel) visibleEntries() int {
 
 func (m *NotificationsOverlayModel) ensureVisible() {
 	vis := m.visibleEntries()
-	if m.selected < m.scrollOff {
-		m.scrollOff = m.selected
+	sel := m.list.Current()
+	if sel < 0 {
+		return
 	}
-	if m.selected >= m.scrollOff+vis {
-		m.scrollOff = m.selected - vis + 1
+	if sel < m.scrollOff {
+		m.scrollOff = sel
+	}
+	if sel >= m.scrollOff+vis {
+		m.scrollOff = sel - vis + 1
 	}
 	if m.scrollOff < 0 {
 		m.scrollOff = 0
@@ -176,8 +152,9 @@ func (m NotificationsOverlayModel) View() string {
 		if end > len(m.items) {
 			end = len(m.items)
 		}
+		sel := m.list.Current()
 		for i := m.scrollOff; i < end; i++ {
-			b.WriteString(m.renderEntry(m.items[i], i == m.selected))
+			b.WriteString(m.renderEntry(m.items[i], i == sel))
 			b.WriteString("\n")
 		}
 		if m.scrollOff > 0 {

@@ -14,11 +14,13 @@ import (
 type UnhideChannelMsg struct{ ChannelID string }
 
 // HiddenChannelsModel provides an overlay to view and unhide hidden channels.
+// Cursor / navigation is managed by a SelectableList value so the model only
+// has to own the channel data, filter input, and unhide action.
 type HiddenChannelsModel struct {
 	channels []types.Channel
 	aliases  map[string]string
 	filter   textinput.Model
-	selected int // index into the filtered slice
+	list     SelectableList // cursor + navigation over the filtered view
 	width    int
 	height   int
 }
@@ -43,6 +45,7 @@ func NewHiddenChannelsModel(channels []types.Channel, aliases map[string]string)
 		channels: channels,
 		aliases:  aliases,
 		filter:   ti,
+		list:     SelectableList{WrapAround: false, PageSize: 5},
 	}
 }
 
@@ -114,89 +117,47 @@ func (m HiddenChannelsModel) Update(msg tea.Msg) (HiddenChannelsModel, tea.Cmd) 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		list := m.filtered()
+		m.list.SetCount(len(list))
+		// Standard navigation keys go through the shared primitive.
+		if m.list.HandleKey(msg) {
+			return m, nil
+		}
 		switch msg.String() {
-		case "up":
-			if m.selected > 0 {
-				m.selected--
-			}
-			return m, nil
-		case "down":
-			if m.selected < len(list)-1 {
-				m.selected++
-			}
-			return m, nil
-		case "pgup":
-			m.selected -= 5
-			if m.selected < 0 {
-				m.selected = 0
-			}
-			return m, nil
-		case "pgdown":
-			m.selected += 5
-			if m.selected >= len(list) {
-				m.selected = len(list) - 1
-			}
-			if m.selected < 0 {
-				m.selected = 0
-			}
-			return m, nil
-		case "home":
-			m.selected = 0
-			return m, nil
-		case "end":
-			if len(list) > 0 {
-				m.selected = len(list) - 1
-			}
-			return m, nil
 		case "enter":
-			if len(list) > 0 && m.selected < len(list) {
-				ch := list[m.selected]
-				// Remove the channel from the master list so
-				// the next render reflects the unhide.
-				for i := range m.channels {
-					if m.channels[i].ID == ch.ID {
-						m.channels = append(m.channels[:i], m.channels[i+1:]...)
-						break
-					}
-				}
-				// Clamp selection against the *new* filtered list.
-				nextList := m.filtered()
-				if m.selected >= len(nextList) && m.selected > 0 {
-					m.selected = len(nextList) - 1
-				}
-				if m.selected < 0 {
-					m.selected = 0
-				}
-				return m, func() tea.Msg {
-					return UnhideChannelMsg{ChannelID: ch.ID}
+			sel := m.list.Current()
+			if sel < 0 || sel >= len(list) {
+				return m, nil
+			}
+			ch := list[sel]
+			// Remove the channel from the master list so
+			// the next render reflects the unhide.
+			for i := range m.channels {
+				if m.channels[i].ID == ch.ID {
+					m.channels = append(m.channels[:i], m.channels[i+1:]...)
+					break
 				}
 			}
-			return m, nil
+			// Clamp selection against the *new* filtered list.
+			m.list.SetCount(len(m.filtered()))
+			return m, func() tea.Msg {
+				return UnhideChannelMsg{ChannelID: ch.ID}
+			}
 		}
 		// All other keys (including letters, backspace, etc.)
-		// go to the filter input. Selection is clamped against
-		// the new filtered list after every keystroke.
+		// go to the filter input. The list's SetCount call
+		// above already clamps the selection against the new
+		// filtered list after every keystroke.
 		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
-		list = m.filtered()
-		if m.selected >= len(list) {
-			m.selected = len(list) - 1
-		}
-		if m.selected < 0 {
-			m.selected = 0
-		}
+		m.list.SetCount(len(m.filtered()))
 		return m, cmd
 	case tea.MouseMsg:
-		list := m.filtered()
+		m.list.SetCount(len(m.filtered()))
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
-			if m.selected > 0 {
-				m.selected--
-			}
+			m.list.Navigate(-1)
 		case tea.MouseButtonWheelDown:
-			if m.selected < len(list)-1 {
-				m.selected++
-			}
+			m.list.Navigate(1)
 		}
 	}
 	return m, nil
@@ -236,9 +197,10 @@ func (m HiddenChannelsModel) View() string {
 		if maxVisible > len(list) {
 			maxVisible = len(list)
 		}
+		sel := m.list.Current()
 		start := 0
-		if m.selected >= maxVisible {
-			start = m.selected - maxVisible + 1
+		if sel >= maxVisible {
+			start = sel - maxVisible + 1
 		}
 		end := start + maxVisible
 		if end > len(list) {
@@ -259,7 +221,7 @@ func (m HiddenChannelsModel) View() string {
 			}
 
 			name := m.displayName(ch)
-			if i == m.selected {
+			if i == sel {
 				b.WriteString(ChannelSelectedStyle.Render("> " + name))
 			} else {
 				b.WriteString(ChannelItemStyle.Render("  " + name))
