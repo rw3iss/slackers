@@ -86,6 +86,28 @@ var (
 	StatusConnected        lipgloss.Style
 	StatusDisconnected     lipgloss.Style
 	HelpStyle              lipgloss.Style
+
+	// Message-pane hot-path styles — rebuilt by ApplyTheme so they
+	// always reflect the active palette. Reference these directly
+	// inside render loops instead of calling lipgloss.NewStyle()
+	// per frame / per message / per reaction.
+	MessagePendingStyle       lipgloss.Style // "⏳ pending" badge on unsent friend messages
+	MessageHighlightBgStyle   lipgloss.Style // fixed 236 background for flagged/highlight lines
+	MessageSelectBgStyle      lipgloss.Style // fixed 237 background used by react-mode selection
+	MessageDateSepStyle       lipgloss.Style // date separator row
+	MessageFileStyle          lipgloss.Style // idle file attachment row
+	MessageFileSelectedStyle  lipgloss.Style // file row when in select-mode and highlighted
+	MessageFileUploadingStyle lipgloss.Style // "uploading…" muted italic
+	MessageThreadRuleStyle    lipgloss.Style // thread-box top rule
+	MessageReplyLabelStyle    lipgloss.Style // "X replies" label on inline reply rows
+	MessageReactionStyle      lipgloss.Style // unselected reaction badge
+	MessageReactionSelStyle   lipgloss.Style // selected reaction badge
+	MessageHeaderHintStyle    lipgloss.Style // muted italic hint in the message-pane header
+	MessageHeaderSecureStyle  lipgloss.Style // fixed "#00ff00" "secure p2p" indicator
+	MessageHeaderDateStyle    lipgloss.Style // "Today" style date in the header
+	MessageHeaderHighlight    lipgloss.Style // highlight color used for header info banners
+	MessageCogStyle           lipgloss.Style // "⚙" cog in friend chat header
+	FriendCardPillStyle       lipgloss.Style // styled pill rendered in place of [FRIEND:…] markers
 )
 
 // activeTheme tracks the most recently applied theme so the UI can
@@ -230,6 +252,42 @@ func rebuildDerivedStyles() {
 	StatusDisconnected = lipgloss.NewStyle().Foreground(ColorError)
 
 	HelpStyle = styleFromKey(theme.KeyInfoText)
+
+	// Message-pane hot-path styles. Kept at the bottom of ApplyTheme
+	// so they pick up any palette change before the next render.
+	MessagePendingStyle = lipgloss.NewStyle().
+		Foreground(ColorHighlight).
+		Italic(true)
+	MessageHighlightBgStyle = lipgloss.NewStyle().Background(lipgloss.Color("236"))
+	MessageSelectBgStyle = lipgloss.NewStyle().Background(lipgloss.Color("237"))
+	MessageDateSepStyle = lipgloss.NewStyle().Foreground(ColorDayLabel).Bold(true)
+	MessageFileStyle = lipgloss.NewStyle().Foreground(ColorFileButton)
+	MessageFileSelectedStyle = lipgloss.NewStyle().
+		Foreground(ColorFileButton).
+		Bold(true).
+		Background(lipgloss.Color("236"))
+	MessageFileUploadingStyle = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+	MessageThreadRuleStyle = lipgloss.NewStyle().Foreground(ColorPrimary)
+	MessageReplyLabelStyle = lipgloss.NewStyle().Foreground(ColorReplyLabel).Italic(true)
+	MessageReactionStyle = lipgloss.NewStyle().
+		Background(lipgloss.Color("236")).
+		Foreground(lipgloss.Color("252")).
+		Padding(0, 1)
+	MessageReactionSelStyle = lipgloss.NewStyle().
+		Background(lipgloss.Color("240")).
+		Foreground(ColorPrimary).
+		Bold(true).
+		Padding(0, 1)
+	MessageHeaderHintStyle = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+	MessageHeaderSecureStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00"))
+	MessageHeaderDateStyle = lipgloss.NewStyle().Foreground(ColorMuted)
+	MessageHeaderHighlight = lipgloss.NewStyle().Foreground(ColorHighlight)
+	MessageCogStyle = lipgloss.NewStyle().Foreground(ColorHighlight)
+	FriendCardPillStyle = lipgloss.NewStyle().
+		Foreground(ColorAccent).
+		Background(lipgloss.Color("236")).
+		Bold(true).
+		Padding(0, 1)
 }
 
 // UserColors assigns a consistent color to a username by hashing.

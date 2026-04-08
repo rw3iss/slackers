@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -182,6 +183,63 @@ func Save(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// debounceState holds state for the debounced config saver. A single
+// goroutine owns the timer so rapid successive Save calls coalesce
+// into one on-disk write.
+var (
+	debounceMu      sync.Mutex
+	debouncePending *Config
+	debounceTimer   *time.Timer
+)
+
+// SaveDebounced schedules a Save for the given config after a short
+// idle window. Rapid successive calls replace the pending save so at
+// most one write actually hits disk per idle period. Use this in key
+// handlers that can fire dozens of times per second (settings
+// toggles, sidebar drag, shortcut rebind) where Save's synchronous
+// disk I/O would otherwise dominate the hot path.
+//
+// The idle window is 750ms — long enough to coalesce keystroke
+// bursts, short enough that a user who immediately quits the app
+// rarely loses a change. A final Flush is still advisable on exit.
+func SaveDebounced(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	debounceMu.Lock()
+	defer debounceMu.Unlock()
+	debouncePending = cfg
+	if debounceTimer != nil {
+		debounceTimer.Stop()
+	}
+	debounceTimer = time.AfterFunc(750*time.Millisecond, func() {
+		debounceMu.Lock()
+		c := debouncePending
+		debouncePending = nil
+		debounceTimer = nil
+		debounceMu.Unlock()
+		if c != nil {
+			_ = Save(c)
+		}
+	})
+}
+
+// FlushDebounced synchronously writes any pending debounced save.
+// Call on clean shutdown so rapid last-second changes aren't lost.
+func FlushDebounced() {
+	debounceMu.Lock()
+	c := debouncePending
+	debouncePending = nil
+	if debounceTimer != nil {
+		debounceTimer.Stop()
+		debounceTimer = nil
+	}
+	debounceMu.Unlock()
+	if c != nil {
+		_ = Save(c)
+	}
 }
 
 // NotificationTTL returns the user's notification timeout as a

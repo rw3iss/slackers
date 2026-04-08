@@ -478,7 +478,7 @@ func (m FriendsConfigModel) handleMenuKey(msg tea.KeyMsg) (FriendsConfigModel, t
 			if m.cfg != nil && m.cfg.P2PAddress == "" {
 				if ip, err := detectPublicIP(); err == nil && ip != "" {
 					m.cfg.P2PAddress = ip
-					go config.Save(m.cfg)
+					config.SaveDebounced(m.cfg)
 				}
 			}
 			m.buildMyFields()
@@ -505,7 +505,7 @@ func (m FriendsConfigModel) handleMenuKey(msg tea.KeyMsg) (FriendsConfigModel, t
 				} else {
 					m.cfg.ShareMyInfoFormat = "json"
 				}
-				go config.Save(m.cfg)
+				config.SaveDebounced(m.cfg)
 			}
 			return m, m.setStatusMessage("Share format set to "+strings.ToUpper(shareFormatMode(m.cfg)), 0)
 		}
@@ -747,7 +747,7 @@ func (m *FriendsConfigModel) applyMyField(val string) {
 		}
 		m.cfg.FriendPingSeconds = n
 	}
-	go config.Save(m.cfg)
+	config.SaveDebounced(m.cfg)
 	m.message = "Saved"
 }
 

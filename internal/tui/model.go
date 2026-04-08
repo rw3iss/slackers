@@ -750,6 +750,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// early-return below.
 		if key.Matches(msg, m.keymap.Quit) {
 			clearWindowUrgent()
+			// Flush any pending debounced config save so
+			// last-second edits (theme change, shortcut
+			// rebind, etc.) actually hit disk.
+			config.FlushDebounced()
 			if m.p2pNode != nil {
 				_ = m.p2pNode.Close()
 			}
@@ -893,7 +897,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					ApplyTheme(t)
 					m.messages.Refresh()
 				}
-				go config.Save(m.cfg)
+				config.SaveDebounced(m.cfg)
 				m.warning = "Switched to theme: " + newPrimary
 			} else {
 				m.warning = "No alternate theme set (configure in Settings → Appearance)"
@@ -1153,7 +1157,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Persist favorite changes before closing.
 				if m.emojiPicker.FavDirty() {
 					m.cfg.EmojiFavorites = m.emojiPicker.Favorites()
-					go config.Save(m.cfg)
+					config.SaveDebounced(m.cfg)
 				}
 				m.overlay = overlayNone
 				return m, nil
@@ -1164,7 +1168,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// survive even if the app exits abruptly.
 			if m.emojiPicker.FavDirty() {
 				m.cfg.EmojiFavorites = m.emojiPicker.Favorites()
-				go config.Save(m.cfg)
+				config.SaveDebounced(m.cfg)
 				m.emojiPicker.ClearFavDirty()
 			}
 			return m, cmd
@@ -1227,7 +1231,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					prev := m.input.Value()
 					m.input.PushHistory(prev)
 					m.cfg.InputHistory = m.input.History()
-					go config.Save(m.cfg)
+					config.SaveDebounced(m.cfg)
 					m.input.Reset()
 					m.input.ClearEscapeOnce()
 					m.resizeComponents()
@@ -1475,7 +1479,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ToggleCollapseMsg:
 		m.cfg.CollapsedGroups = m.channels.CollapsedGroups()
-		go config.Save(m.cfg)
+		config.SaveDebounced(m.cfg)
 		return m, nil
 
 	case SettingsSavedMsg:
@@ -2220,7 +2224,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.cfg.Theme = msg.Name
 		}
-		go config.Save(m.cfg)
+		config.SaveDebounced(m.cfg)
 		m.messages.Refresh()
 		return m, nil
 
@@ -2299,7 +2303,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case SidebarActionHide:
 			m.channels.HideChannel(msg.ChannelID)
 			m.cfg.HiddenChannels = m.channels.HiddenChannelIDs()
-			go config.Save(m.cfg)
+			config.SaveDebounced(m.cfg)
 			m.rebuildPollChannels()
 			return m, nil
 		case SidebarActionRename:
@@ -2436,7 +2440,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Save favorites if changed.
 		if m.emojiPicker.FavDirty() {
 			m.cfg.EmojiFavorites = m.emojiPicker.Favorites()
-			go config.Save(m.cfg)
+			config.SaveDebounced(m.cfg)
 		}
 		switch msg.Purpose {
 		case EmojiPurposeInsert:
@@ -2501,7 +2505,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Persist the new favorites list to user config; keep the
 		// browser open so the user can keep working with it.
 		m.cfg.FavoriteFolders = msg.Favorites
-		go config.Save(m.cfg)
+		config.SaveDebounced(m.cfg)
 		return m, nil
 
 	case FileBrowserCancelMsg:
@@ -2626,7 +2630,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if text != "" && m.currentCh != nil {
 			m.input.PushHistory(text)
 			m.cfg.InputHistory = m.input.History()
-			go config.Save(m.cfg)
+			config.SaveDebounced(m.cfg)
 			m.input.Reset()
 			// The input bar may have been multi-line — after reset it
 			// shrinks back to one row, so re-flow the panes so the messages
@@ -3577,7 +3581,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case WhitelistUpdateMsg:
 		m.cfg.SecureWhitelist = msg.Whitelist
-		go config.Save(m.cfg)
+		config.SaveDebounced(m.cfg)
 		return m, nil
 
 	case FriendsLoadedMsg:
@@ -3706,34 +3710,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case FriendPingMsg:
-		// friendPingCmd already updated friendStore online flags;
-		// refresh the sidebar so colours/labels reflect new state,
-		// and refresh the message-pane header if the user is
-		// currently looking at a friend whose state changed (so
-		// "🔒 secure p2p" / "🔓 p2p offline" updates without
-		// requiring a click).
+		// friendPingCmd already updated friendStore online flags.
+		// Only rebuild the sidebar when a friend's online state
+		// actually *changed* this tick — previously this ran on
+		// every ping (default: every 5 s) regardless, thrashing
+		// the channel list and re-sorting. Also refresh the
+		// message-pane header if the user is currently looking
+		// at a friend whose state flipped.
 		var resendCmds []tea.Cmd
+		anyStateChanged := false
+		currentFriendFlipped := false
 		if len(msg.Online) > 0 {
-			m.channels.SetFriendChannels(m.buildFriendChannels())
-			if m.currentCh != nil && m.currentCh.IsFriend {
-				if _, changed := msg.Online[m.currentCh.UserID]; changed {
-					m.setChannelHeader()
-				}
-			}
-			// Detect offline→online transitions and schedule a
-			// pending-message resend for any friend that just
-			// came online. The transition is gated on the
-			// previous ping result so this only fires once per
-			// reconnect, not on every ping.
 			for uid, online := range msg.Online {
 				prev := m.friendPrevOnline[uid]
 				m.friendPrevOnline[uid] = online
-				if online && !prev {
-					if cmd := m.resendPendingFriendMessagesCmd(uid); cmd != nil {
-						resendCmds = append(resendCmds, cmd)
+				if prev != online {
+					anyStateChanged = true
+					if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == uid {
+						currentFriendFlipped = true
+					}
+					if online && !prev {
+						// offline → online: pull any pending resends.
+						if cmd := m.resendPendingFriendMessagesCmd(uid); cmd != nil {
+							resendCmds = append(resendCmds, cmd)
+						}
 					}
 				}
 			}
+		}
+		if anyStateChanged {
+			m.channels.SetFriendChannels(m.buildFriendChannels())
+		}
+		if currentFriendFlipped {
+			m.setChannelHeader()
 		}
 		cmds := append(resendCmds, m.friendPingTickCmd())
 		return m, tea.Batch(cmds...)
@@ -4016,7 +4025,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case tea.MouseActionRelease:
 			m.dragging = false
-			go config.Save(m.cfg)
+			config.SaveDebounced(m.cfg)
 			return m, nil
 		}
 		return m, nil
@@ -4113,7 +4122,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.channels.ToggleCollapse(headerKey)
 					m.channels.buildRows()
 					m.cfg.CollapsedGroups = m.channels.CollapsedGroups()
-					go config.Save(m.cfg)
+					config.SaveDebounced(m.cfg)
 				} else if isChannel && ch != nil {
 					// Switching channels exits thread view if it
 					// was open — the thread belongs to whatever
@@ -4294,7 +4303,7 @@ func (m *Model) cycleFocusBackward() {
 // saveLastChannel persists the currently viewed channel ID to config.
 func (m *Model) saveLastChannel(channelID string) {
 	m.cfg.LastChannelID = channelID
-	go config.Save(m.cfg) // fire-and-forget, don't block the UI
+	config.SaveDebounced(m.cfg) // fire-and-forget, don't block the UI
 }
 
 // buildChannelIndex populates the channel ID -> name/alias lookup.
@@ -4360,7 +4369,7 @@ func (m *Model) persistLastSeen() {
 			m.cfg.LastSeenTS[k] = v
 		}
 	}
-	go config.Save(m.cfg)
+	config.SaveDebounced(m.cfg)
 }
 
 // stripQuotePrefix removes a leading "> " (or ">") from each non-empty line.

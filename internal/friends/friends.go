@@ -81,14 +81,34 @@ type FriendRequest struct {
 	Multiaddr string `json:"multiaddr"`
 }
 
+// FriendStore is a thread-safe, JSON-backed list of Friend records
+// with a secondary byUserID index for O(1) Get / Update / SetOnline
+// / UpdateLastOnline lookups. Every write path that can add, remove,
+// or reorder entries must call reindexLocked() before releasing the
+// write lock so the index stays consistent with the slice.
 type FriendStore struct {
-	friends []Friend
-	path    string
-	mu      sync.RWMutex
+	friends  []Friend
+	byUserID map[string]int // UserID → index into friends slice
+	path     string
+	mu       sync.RWMutex
+}
+
+// reindexLocked rebuilds byUserID from the current friends slice.
+// Caller must already hold the write lock.
+func (s *FriendStore) reindexLocked() {
+	s.byUserID = make(map[string]int, len(s.friends))
+	for i, f := range s.friends {
+		if f.UserID != "" {
+			s.byUserID[f.UserID] = i
+		}
+	}
 }
 
 func NewFriendStore(path string) *FriendStore {
-	return &FriendStore{path: path}
+	return &FriendStore{
+		path:     path,
+		byUserID: make(map[string]int),
+	}
 }
 
 func DefaultPath() string {
@@ -106,11 +126,16 @@ func (s *FriendStore) Load() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			s.friends = nil
+			s.reindexLocked()
 			return nil
 		}
 		return fmt.Errorf("reading friends: %w", err)
 	}
-	return json.Unmarshal(data, &s.friends)
+	if err := json.Unmarshal(data, &s.friends); err != nil {
+		return err
+	}
+	s.reindexLocked()
+	return nil
 }
 
 func (s *FriendStore) Save() error {
@@ -138,43 +163,52 @@ func (s *FriendStore) All() []Friend {
 func (s *FriendStore) Add(f Friend) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, existing := range s.friends {
-		if f.UserID != "" && existing.UserID == f.UserID {
-			return fmt.Errorf("friend %s already exists", f.UserID)
-		}
-		if f.SlackerID != "" && existing.SlackerID == f.SlackerID {
-			return fmt.Errorf("friend with SlackerID %s already exists", f.SlackerID)
-		}
-	}
-	// Generate a UserID if not provided (for non-Slack friends).
+	// Generate a UserID if not provided (for non-Slack friends)
+	// so the index lookup below sees the eventual value.
 	if f.UserID == "" && f.SlackerID != "" {
 		f.UserID = "slacker:" + f.SlackerID
+	}
+	if f.UserID != "" {
+		if _, exists := s.byUserID[f.UserID]; exists {
+			return fmt.Errorf("friend %s already exists", f.UserID)
+		}
+	}
+	if f.SlackerID != "" {
+		// SlackerID collision still requires a linear scan because
+		// the index is keyed on UserID, but this only fires on Add.
+		for _, existing := range s.friends {
+			if existing.SlackerID == f.SlackerID {
+				return fmt.Errorf("friend with SlackerID %s already exists", f.SlackerID)
+			}
+		}
 	}
 	if f.AddedAt == 0 {
 		f.AddedAt = time.Now().Unix()
 	}
 	s.friends = append(s.friends, f)
+	if f.UserID != "" {
+		s.byUserID[f.UserID] = len(s.friends) - 1
+	}
 	return nil
 }
 
 func (s *FriendStore) Remove(userID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, f := range s.friends {
-		if f.UserID == userID {
-			s.friends = append(s.friends[:i], s.friends[i+1:]...)
-			return
-		}
+	idx, ok := s.byUserID[userID]
+	if !ok {
+		return
 	}
+	s.friends = append(s.friends[:idx], s.friends[idx+1:]...)
+	// Every subsequent entry shifted — reindex the whole map.
+	s.reindexLocked()
 }
 
 func (s *FriendStore) Get(userID string) *Friend {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for i, f := range s.friends {
-		if f.UserID == userID {
-			return &s.friends[i]
-		}
+	if idx, ok := s.byUserID[userID]; ok && idx < len(s.friends) {
+		return &s.friends[idx]
 	}
 	return nil
 }
@@ -182,11 +216,8 @@ func (s *FriendStore) Get(userID string) *Friend {
 func (s *FriendStore) SetOnline(userID string, online bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, f := range s.friends {
-		if f.UserID == userID {
-			s.friends[i].Online = online
-			return
-		}
+	if idx, ok := s.byUserID[userID]; ok && idx < len(s.friends) {
+		s.friends[idx].Online = online
 	}
 }
 
@@ -200,26 +231,25 @@ func (s *FriendStore) Count() int {
 func (s *FriendStore) Update(f Friend) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, existing := range s.friends {
-		if existing.UserID == f.UserID {
-			// Preserve runtime-only fields.
-			f.Online = existing.Online
-			s.friends[i] = f
-			return nil
-		}
+	idx, ok := s.byUserID[f.UserID]
+	if !ok || idx >= len(s.friends) {
+		return fmt.Errorf("friend %s not found", f.UserID)
 	}
-	return fmt.Errorf("friend %s not found", f.UserID)
+	// Preserve runtime-only fields.
+	f.Online = s.friends[idx].Online
+	s.friends[idx] = f
+	// UserID is the map key; Update can't change it, but in case
+	// a buggy caller passes a different one, the record at idx
+	// already has the old UserID so the map is still correct.
+	return nil
 }
 
 // UpdateLastOnline records the current time as last online for a friend.
 func (s *FriendStore) UpdateLastOnline(userID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, f := range s.friends {
-		if f.UserID == userID {
-			s.friends[i].LastOnline = time.Now().Unix()
-			return
-		}
+	if idx, ok := s.byUserID[userID]; ok && idx < len(s.friends) {
+		s.friends[idx].LastOnline = time.Now().Unix()
 	}
 }
 
@@ -302,6 +332,9 @@ func (s *FriendStore) Import(incoming []Friend, overwrite bool) (added, skipped,
 				}
 				s.mu.Lock()
 				s.friends = append(s.friends, f)
+				if f.UserID != "" {
+					s.byUserID[f.UserID] = len(s.friends) - 1
+				}
 				s.mu.Unlock()
 				overwritten++
 			} else {

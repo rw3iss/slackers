@@ -229,6 +229,14 @@ type MessageViewModel struct {
 	// in the rendered text.
 	friendCards map[string]friends.ContactCard
 
+	// formattedTextCache memoises format.FormatMessage results
+	// keyed by message ID. Populated lazily on first render and
+	// invalidated whenever the message text or user map changes
+	// (SetMessages, SetUsers, AppendMessage, EditMessageLocal).
+	// Without this cache every message re-runs Slack mrkdwn
+	// parsing (multiple regex passes) on every render cycle.
+	formattedTextCache map[string]string
+
 	// Context mode (search result viewing)
 	contextMode     bool
 	contextMessages []types.Message
@@ -250,6 +258,10 @@ func NewMessageView() MessageViewModel {
 func (m *MessageViewModel) SetMessages(msgs []types.Message) {
 	m.messages = msgs
 	m.contextMode = false
+	// Full list replacement — drop the formatted-text cache so
+	// stale entries don't linger indefinitely across channel
+	// switches. Re-populated lazily on the next render.
+	m.formattedTextCache = nil
 	m.rebuildContent()
 	if m.autoScroll {
 		m.viewport.GotoBottom()
@@ -262,6 +274,7 @@ func (m *MessageViewModel) SetMessagesSilent(msgs []types.Message) {
 	wasAtBottom := m.viewport.AtBottom()
 	m.messages = msgs
 	m.contextMode = false
+	m.formattedTextCache = nil
 	m.rebuildContent()
 	if wasAtBottom {
 		m.viewport.GotoBottom()
@@ -273,6 +286,8 @@ func (m *MessageViewModel) AppendMessage(msg types.Message) {
 		return
 	}
 	m.messages = append(m.messages, msg)
+	// One new message — cache only loses correctness for that one
+	// entry, so nothing needs to be dropped here.
 	m.rebuildContent()
 	if m.autoScroll {
 		m.viewport.GotoBottom()
@@ -338,6 +353,31 @@ func (m *MessageViewModel) ContextChannelID() string {
 
 func (m *MessageViewModel) SetUsers(users map[string]string) {
 	m.users = users
+	// User display-name changes can affect @mentions inside
+	// cached formatted text; invalidate so everything re-parses.
+	m.formattedTextCache = nil
+}
+
+// formatText returns the user-visible rendered form of a message body,
+// memoised by message ID. The cache is invalidated by any code path
+// that can change the raw text (SetMessages, SetMessagesSilent,
+// AppendMessage, EditMessageLocal) or the user display-name map
+// (SetUsers). Reactions / deletes don't affect the text so they
+// don't need to touch the cache.
+func (m *MessageViewModel) formatText(messageID, raw string) string {
+	if m.formattedTextCache == nil {
+		m.formattedTextCache = make(map[string]string)
+	}
+	if messageID != "" {
+		if cached, ok := m.formattedTextCache[messageID]; ok {
+			return cached
+		}
+	}
+	out := format.FormatMessage(raw, m.users)
+	if messageID != "" {
+		m.formattedTextCache[messageID] = out
+	}
+	return out
 }
 
 func (m *MessageViewModel) SetChannelName(name string) {
@@ -521,6 +561,9 @@ func (m *MessageViewModel) MessageByID(messageID string) *types.Message {
 // Refresh re-renders the cached viewport content. Call this after a theme
 // switch so the cached ANSI codes are rebuilt against the new colors.
 func (m *MessageViewModel) Refresh() {
+	// Theme change doesn't affect the raw formatted-text output
+	// (that's mrkdwn → plain, no theme involvement), so only the
+	// ANSI-coloured content built downstream needs a rebuild.
 	m.rebuildContent()
 }
 
@@ -532,6 +575,12 @@ func (m *MessageViewModel) EditMessageLocal(messageID, newText string) bool {
 		return false
 	}
 	target.Text = newText
+	// Invalidate the cached formatted-text entry for this message
+	// so the next render re-runs mrkdwn parsing against the new
+	// body.
+	if m.formattedTextCache != nil {
+		delete(m.formattedTextCache, messageID)
+	}
 	m.rebuildContent()
 	return true
 }
@@ -801,11 +850,7 @@ func (m *MessageViewModel) rewriteFriendCards(line string, lineIdx int) string {
 	if !strings.Contains(line, "[FRIEND:") {
 		return line
 	}
-	pillStyle := lipgloss.NewStyle().
-		Foreground(ColorAccent).
-		Background(lipgloss.Color("236")).
-		Bold(true).
-		Padding(0, 1)
+	pillStyle := FriendCardPillStyle
 	if m.friendCards == nil {
 		m.friendCards = make(map[string]friends.ContactCard)
 	}
@@ -1609,25 +1654,25 @@ func (m MessageViewModel) View() string {
 	// title). Friend channels render the label right-aligned alongside the
 	// cog icon further down, so skip it here in that case.
 	if m.secureLabel != "" && !m.isFriendCh {
-		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00")).Render(" "+m.secureLabel))
+		headerParts = append(headerParts, MessageHeaderSecureStyle.Render(" "+m.secureLabel))
 	}
 
 	// Determine the date of the first visible message for the sticky date bar.
 	dateStr := m.visibleDate()
 	if dateStr != "" {
-		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorMuted).Render("  "+dateStr))
+		headerParts = append(headerParts, MessageHeaderDateStyle.Render("  "+dateStr))
 	}
 
 	if m.selectMode {
-		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorHighlight).Render("  [FILE SELECT: ↑↓ navigate | Enter: download | f/Esc: exit]"))
+		headerParts = append(headerParts, MessageHeaderHighlight.Render("  [FILE SELECT: ↑↓ navigate | Enter: download | f/Esc: exit]"))
 	} else if m.contextMode {
-		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorHighlight).Render("  [Context - PgUp: load more | scroll bottom: exit]"))
+		headerParts = append(headerParts, MessageHeaderHighlight.Render("  [Context - PgUp: load more | scroll bottom: exit]"))
 	} else if len(m.selectables) > 0 {
-		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorMuted).Render("  [f: select files]"))
+		headerParts = append(headerParts, MessageHeaderDateStyle.Render("  [f: select files]"))
 	}
 
 	if m.threadMode {
-		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(ColorMuted).Italic(true).Render("  (Esc to exit thread, type to reply)"))
+		headerParts = append(headerParts, MessageHeaderHintStyle.Render("  (Esc to exit thread, type to reply)"))
 	}
 
 	headerLeft := strings.Join(headerParts, "")
@@ -1642,9 +1687,9 @@ func (m MessageViewModel) View() string {
 		if contentW < 0 {
 			contentW = 0
 		}
-		hintStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
-		rightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00"))
-		cogStyle := lipgloss.NewStyle().Foreground(ColorHighlight)
+		hintStyle := MessageHeaderHintStyle
+		rightStyle := MessageHeaderSecureStyle
+		cogStyle := MessageCogStyle
 		rightVisible := strings.TrimLeft(m.secureLabel, " ")
 		// Compose right block plain text to measure visible width.
 		// Layout: "<hint>  <secure label>  ⚙"
@@ -1840,10 +1885,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		maxWidth = 20
 	}
 
-	highlightBg := lipgloss.NewStyle().Background(lipgloss.Color("236"))
-	dateSepStyle := lipgloss.NewStyle().Foreground(ColorDayLabel).Bold(true)
-	fileStyle := lipgloss.NewStyle().Foreground(ColorFileButton)
-	fileSelectedStyle := lipgloss.NewStyle().Foreground(ColorFileButton).Bold(true).Background(lipgloss.Color("236"))
+	highlightBg := MessageHighlightBgStyle
+	dateSepStyle := MessageDateSepStyle
+	fileStyle := MessageFileStyle
+	fileSelectedStyle := MessageFileSelectedStyle
 
 	var lastDate string
 	fileIdx := 0 // tracks which selectable file we're at
@@ -1884,15 +1929,12 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		// been delivered yet. Flag is cleared automatically once the
 		// peer comes back online and the message is re-sent.
 		if msg.Pending {
-			pendingStyle := lipgloss.NewStyle().
-				Foreground(ColorHighlight).
-				Italic(true)
-			headerLine += "  " + pendingStyle.Render("⏳ pending")
+			headerLine += "  " + MessagePendingStyle.Render("⏳ pending")
 		}
 
 		// Highlight selected message in select mode.
 		if m.reactMode && i == m.reactIdx {
-			selectHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
+			selectHighlight := MessageSelectBgStyle
 			hasReactions := len(msg.Reactions) > 0
 			hasInlineReplies := !m.threadMode && m.replyFormat == "inline" && len(msg.Replies) > 0 && m.expandedReplies[msg.MessageID]
 			// Only authors can edit or delete their own messages,
@@ -1916,7 +1958,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			headerLine = selectHighlight.Render(headerLine + hint)
 		}
 
-		text := format.FormatMessage(msg.Text, m.users)
+		text := m.formatText(msg.MessageID, msg.Text)
 		// Collapse long [FRIEND:<json|hash>] markers into short
 		// [FRIEND:#fc-N] reference tokens *before* word-wrapping,
 		// so the marker stays on a single line and the per-line
@@ -1930,7 +1972,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 
 		// Top rule for the boxed first message (used by thread view).
 		if m.boxFirstMessage && i == 0 {
-			ruleStyle := lipgloss.NewStyle().Foreground(ColorPrimary)
+			ruleStyle := MessageThreadRuleStyle
 			ruleW := maxWidth
 			if ruleW < 10 {
 				ruleW = 10
@@ -1975,7 +2017,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		}
 
 		// Render file attachments.
-		uploadingStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+		uploadingStyle := MessageFileUploadingStyle
 		for _, f := range msg.Files {
 			isSelected := m.selectMode && fileIdx == m.selectIdx
 			sizeStr := formatFileSize(f.Size)
@@ -2005,21 +2047,13 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			}
 			replyLabel := ""
 			if replyCount > 0 {
-				replyStyle := lipgloss.NewStyle().Foreground(ColorReplyLabel).Italic(true)
-				replyLabel = replyStyle.Render(fmt.Sprintf("%d %s", replyCount, pluralReplies(replyCount)))
+				replyLabel = MessageReplyLabelStyle.Render(fmt.Sprintf("%d %s", replyCount, pluralReplies(replyCount)))
 			}
 			var reactionParts []string
 			var reactionWidths []int
 			if len(msg.Reactions) > 0 {
-				reactionStyle := lipgloss.NewStyle().
-					Background(lipgloss.Color("236")).
-					Foreground(lipgloss.Color("252")).
-					Padding(0, 1)
-				selectedReactionStyle := lipgloss.NewStyle().
-					Background(lipgloss.Color("240")).
-					Foreground(ColorPrimary).
-					Bold(true).
-					Padding(0, 1)
+				reactionStyle := MessageReactionStyle
+				selectedReactionStyle := MessageReactionSelStyle
 				for ri, r := range msg.Reactions {
 					emoji := resolveEmoji(r.Emoji)
 					var rendered string
@@ -2072,16 +2106,9 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		// Inline reply rendering (if enabled).
 		if m.replyFormat == "inline" && replyCount > 0 && m.expandedReplies[msg.MessageID] {
 			replyIndent := "    "
-			replyHeaderStyle := lipgloss.NewStyle().Foreground(ColorMuted)
-			reactionStyle := lipgloss.NewStyle().
-				Background(lipgloss.Color("236")).
-				Foreground(lipgloss.Color("252")).
-				Padding(0, 1)
-			selectedReactionStyle := lipgloss.NewStyle().
-				Background(lipgloss.Color("240")).
-				Foreground(ColorPrimary).
-				Bold(true).
-				Padding(0, 1)
+			replyHeaderStyle := MessageHeaderDateStyle
+			reactionStyle := MessageReactionStyle
+			selectedReactionStyle := MessageReactionSelStyle
 			// Spacing-1 adds 1 blank between the "X replies" row and the
 			// reply list, plus 1 between each reply. Spacing-2 adds 2.
 			betweenReplies := 0
@@ -2110,7 +2137,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				}
 				header := replyHeaderStyle.Render(fmt.Sprintf("↳ %s %s", rName, rTime))
 				if replyListActive && ri == m.replyIdx {
-					selectHighlight := lipgloss.NewStyle().Background(lipgloss.Color("237"))
+					selectHighlight := MessageSelectBgStyle
 					replyDelete := ""
 					if m.isMyMessage(reply) {
 						replyDelete = "  d: delete"
@@ -2118,7 +2145,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 					header = selectHighlight.Render(header + " [r: react" + replyDelete + "  Esc: back]")
 				}
 				lines = append(lines, replyIndent+header)
-				rText := format.FormatMessage(reply.Text, m.users)
+				rText := m.formatText(reply.MessageID, reply.Text)
 				for _, rLine := range strings.Split(rText, "\n") {
 					lines = append(lines, replyIndent+"  "+MessageTextStyle.Render(rLine))
 				}
@@ -2158,7 +2185,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 
 		// Bottom rule for the boxed first message (used by thread view).
 		if m.boxFirstMessage && i == 0 {
-			ruleStyle := lipgloss.NewStyle().Foreground(ColorPrimary)
+			ruleStyle := MessageThreadRuleStyle
 			ruleW := maxWidth
 			if ruleW < 10 {
 				ruleW = 10
