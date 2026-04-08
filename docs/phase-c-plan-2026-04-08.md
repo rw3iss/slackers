@@ -190,6 +190,23 @@ Task 2 `handlers_p2p.go` extraction and Task 3 (OverlayScaffold) are left as fol
   ```
 - Verification: `go build ./...`, `go vet ./...`, `make build` all clean; binary installed to `~/.local/bin/slackers`.
 
+### Task 2 (continued) — handlers_slack.go extraction — ✅ complete
+
+- Created `internal/tui/handlers_slack.go` (469 lines) holding the Slack / message-action methods and the small notification-store helpers they depend on.
+- Moved (methods on `*Model`): `editMessage`, `isMyMessage`, `requestMessageDelete`, `cancelUpload`, `confirmMessageDelete`, `toggleReaction`, `setChannelHeader`, `secureIndicator`, `decryptMessages`, `clearChannelNotifs`, `activateNotification`, `lookupChannelByID`, `recordUnreadMessage`, `recordReaction`.
+- Most of these have both a Slack and a P2P branch — they're the user-level "operate on a message" actions that route to whichever backend owns the currently-selected chat. Keeping them together makes the message-action semantics easy to audit in one file.
+- Line count: model.go is now **4,350 lines** (down from ~6,200 at the start of Phase C — a 30% reduction). Current layout:
+  ```
+  4350 internal/tui/model.go
+   610 internal/tui/handlers_p2p.go
+   469 internal/tui/handlers_slack.go
+   457 internal/tui/handlers_ui.go
+   373 internal/tui/cmds.go
+   176 internal/tui/selectablelist.go
+    41 internal/tui/persist.go
+  ```
+- Verification: `go build ./...`, `go vet ./...`, `make build` all clean; binary installed.
+
 ### Task 3 — OverlayScaffold — deferred
 
 Not attempted in this pass. Reason: after Task 1 + Task 2 landed I was at a good stopping point and the `OverlayScaffold` migration would have touched another 3+ files with visual risk. Picking it up fresh in a dedicated session is safer than rushing the tail of this one. The `OverlayBox` helper added during Phase A remains available as the foundation for that future refactor.
