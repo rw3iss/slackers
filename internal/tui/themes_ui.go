@@ -403,7 +403,7 @@ func (m ThemePickerModel) View() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.message))
 		b.WriteString("\n\n")
 	}
-	b.WriteString(dimStyle.Render("  ↑/↓ preview · Enter apply · e edit · c clone · d delete · i import · Esc cancel"))
+	b.WriteString(dimStyle.Render("  ↑/↓: preview" + HintSep + "Enter: apply" + HintSep + "e: edit" + HintSep + "c: clone" + HintSep + "d: delete" + HintSep + "i: import" + HintSep + FooterHintClose))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -807,9 +807,9 @@ func (m ThemeEditorModel) View() string {
 		b.WriteString("\n\n")
 	}
 	if m.editingName {
-		b.WriteString(dimStyle.Render("  Type name · Enter accept · Esc cancel"))
+		b.WriteString(dimStyle.Render("  Type name" + HintSep + "Enter: accept" + HintSep + FooterHintCancel))
 	} else {
-		b.WriteString(dimStyle.Render("  ↑/↓ navigate · Enter edit · s save · Esc back"))
+		b.WriteString(dimStyle.Render("  ↑/↓: navigate" + HintSep + "Enter: edit" + HintSep + "s: save" + HintSep + FooterHintBack))
 	}
 
 	box := lipgloss.NewStyle().
@@ -1180,7 +1180,7 @@ func (m *ThemeColorPickerModel) View() string {
 			fgLabel, fgVal, bgLabel, bgVal, boldOn, italicOn, preview))
 	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  Arrows/mouse · Space assign+toggle · Enter accept · Tab/f/b slot · Alt-B bold · Alt-I italic · x clear · r reset · m manual · Esc cancel"))
+	b.WriteString(dimStyle.Render("  Arrows/mouse" + HintSep + "Space: assign+toggle" + HintSep + "Enter: accept" + HintSep + "Tab/f/b: slot" + HintSep + "Alt-B: bold" + HintSep + "Alt-I: italic" + HintSep + "x: clear" + HintSep + "r: reset" + HintSep + "m: manual" + HintSep + FooterHintCancel))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

@@ -1720,7 +1720,7 @@ func (m FriendsConfigModel) viewMenu() string {
 func (m FriendsConfigModel) viewList() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).MarginBottom(1)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
-	onStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00"))
+	onStyle := lipgloss.NewStyle().Foreground(ColorStatusOn)
 	offStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 
 	var b strings.Builder
@@ -1787,7 +1787,7 @@ func (m FriendsConfigModel) viewList() string {
 
 func (m FriendsConfigModel) viewEditFields(title string, fields []settingsField, selected int, editing bool, hint string) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).MarginBottom(1)
-	labelStyle := lipgloss.NewStyle().Width(16).Foreground(lipgloss.Color("252"))
+	labelStyle := lipgloss.NewStyle().Width(16).Foreground(ColorDescText)
 	selLabelStyle := lipgloss.NewStyle().Width(16).Bold(true).Foreground(ColorPrimary)
 	valueStyle := lipgloss.NewStyle().Foreground(ColorAccent)
 	descStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
@@ -1862,7 +1862,7 @@ func (m FriendsConfigModel) viewEditFields(title string, fields []settingsField,
 // represents the navigation row.
 func (m FriendsConfigModel) viewEditFriendStandalone(title string) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).MarginBottom(1)
-	labelStyle := lipgloss.NewStyle().Width(16).Foreground(lipgloss.Color("252"))
+	labelStyle := lipgloss.NewStyle().Width(16).Foreground(ColorDescText)
 	selLabelStyle := lipgloss.NewStyle().Width(16).Bold(true).Foreground(ColorPrimary)
 	valueStyle := lipgloss.NewStyle().Foreground(ColorAccent)
 	descStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
@@ -2105,7 +2105,7 @@ func (m FriendsConfigModel) viewImport() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.message))
 		b.WriteString("\n\n")
 	}
-	b.WriteString(dimStyle.Render("  ↑/↓ navigate · Enter select/toggle · Tab next · Esc back"))
+	b.WriteString(dimStyle.Render("  ↑/↓: navigate" + HintSep + "Enter: select/toggle" + HintSep + "Tab: next" + HintSep + FooterHintBack))
 
 	return m.renderBox(b.String())
 }

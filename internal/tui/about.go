@@ -65,7 +65,7 @@ func (m AboutModel) View() string {
 	b.WriteString(dimStyle.Render("Donate: "))
 	b.WriteString(linkStyle.Render("https://buymeacoffee.com/ttv1xp6yaj"))
 	b.WriteString("\n\n")
-	b.WriteString(hintStyle.Render("Esc to close"))
+	b.WriteString(hintStyle.Render(FooterHintClose))
 
 	// Center each line within the box and apply a rounded border.
 	contentLines := strings.Split(b.String(), "\n")

@@ -545,7 +545,7 @@ func (m *FileBrowserModel) View() string {
 		Foreground(ColorAccent)
 
 	fileStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
+		Foreground(ColorDescText)
 
 	selectedPrefix := lipgloss.NewStyle().
 		Foreground(ColorPrimary).

@@ -1346,7 +1346,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if ch != nil {
 					m.channels.HideChannel(ch.ID)
 					m.cfg.HiddenChannels = m.channels.HiddenChannelIDs()
-					_ = config.Save(m.cfg)
+					if err := config.Save(m.cfg); err != nil {
+						m.warning = "Failed to persist hidden channels: " + err.Error()
+					}
 					m.rebuildPollChannels()
 				}
 				return m, nil
@@ -1522,7 +1524,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UnhideChannelMsg:
 		m.channels.UnhideChannel(msg.ChannelID)
 		m.cfg.HiddenChannels = m.channels.HiddenChannelIDs()
-		_ = config.Save(m.cfg)
+		if err := config.Save(m.cfg); err != nil {
+			m.warning = "Failed to persist hidden channels: " + err.Error()
+		}
 		m.rebuildPollChannels()
 		if len(m.channels.HiddenChannelsList()) == 0 {
 			m.overlay = overlayNone
@@ -1541,7 +1545,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.channels.SetAliases(m.cfg.ChannelAliases)
 		m.buildChannelIndex()
-		_ = config.Save(m.cfg)
+		if err := config.Save(m.cfg); err != nil {
+			m.warning = "Failed to persist channel rename: " + err.Error()
+		}
 		return m, nil
 
 	case ChannelsLoadedMsg:
@@ -2536,7 +2542,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case fbPurposeSettings:
 			if msg.IsDir {
 				m.cfg.DownloadPath = msg.Path
-				_ = config.Save(m.cfg)
+				if err := config.Save(m.cfg); err != nil {
+					m.warning = "Failed to persist download path: " + err.Error()
+				}
 				// Update the settings field value and reopen settings.
 				m.settings = NewSettingsModel(m.cfg, m.version)
 				m.settings.SetSize(m.width, m.height)

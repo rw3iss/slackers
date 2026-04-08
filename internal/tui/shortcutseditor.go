@@ -378,7 +378,7 @@ func (m ShortcutsEditorModel) View() string {
 		Foreground(ColorMuted)
 
 	keyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("229")).
+		Foreground(ColorKeyBindText).
 		Width(24)
 
 	selectedKeyStyle := lipgloss.NewStyle().
@@ -387,7 +387,7 @@ func (m ShortcutsEditorModel) View() string {
 		Width(24)
 
 	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
+		Foreground(ColorDescText)
 
 	dimStyle := lipgloss.NewStyle().
 		Foreground(ColorMuted).

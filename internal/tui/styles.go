@@ -63,8 +63,37 @@ var (
 	ColorBorderActive    lipgloss.Color
 	ColorBorderActiveBg  lipgloss.Color
 
+	// Shared widget colors — centralised to eliminate inline
+	// magic 256-color indices scattered across overlays. Refreshed
+	// by rebuildDerivedStyles so theme changes pick them up.
+	ColorKeyBindText lipgloss.Color // 229 — keybind text in help / shortcut editor
+	ColorDescText    lipgloss.Color // 252 — secondary description text / metadata
+	ColorStatusOn    lipgloss.Color // #00ff00 — online / secure / "on" indicator
+
 	// IsDarkTheme is true when the active theme self-identifies as dark.
 	IsDarkTheme = true
+)
+
+// Footer hint format constants. Every overlay should reference
+// these instead of hand-rolling its own Esc-action label so the
+// footer voice stays consistent across the app.
+const (
+	// HintSep is the separator placed between hint items in a
+	// footer line. Middot with surrounding spaces gives a clean
+	// visual break that reads well in monospaced fonts.
+	HintSep = " · "
+	// FooterHintClose is the canonical footer suffix for a leaf
+	// overlay that's dismissed by pressing Esc. Most modals,
+	// lists, and viewers should use this.
+	FooterHintClose = "Esc: close"
+	// FooterHintBack is used by nested overlays that return to
+	// a parent view (e.g. Friends Config sub-pages, Settings
+	// sub-pages, theme editor inside theme picker).
+	FooterHintBack = "Esc: back"
+	// FooterHintCancel is reserved for destructive-action
+	// confirmations where the Esc key actually cancels a
+	// committed change (not just closes a modal).
+	FooterHintCancel = "Esc: cancel"
 )
 
 // Derived styles — rebuilt by ApplyTheme.
@@ -203,6 +232,15 @@ func ApplyTheme(t theme.Theme) {
 	ColorMenuItem, ColorMenuItemBg = applyKey(t, theme.KeyMenuItem)
 	ColorBorderDefault, ColorBorderDefaultBg = applyKey(t, theme.KeyBorderDefault)
 	ColorBorderActive, ColorBorderActiveBg = applyKey(t, theme.KeyBorderActive)
+
+	// Shared widget colors. These are not yet theme keys —
+	// they're fixed 256-color indices chosen to read well on
+	// both dark and light themes. They're here (rather than as
+	// const) so a future theme extension can override them
+	// without touching callers.
+	ColorKeyBindText = lipgloss.Color("229")
+	ColorDescText = lipgloss.Color("252")
+	ColorStatusOn = lipgloss.Color("#00ff00")
 
 	IsDarkTheme = t.IsDark()
 

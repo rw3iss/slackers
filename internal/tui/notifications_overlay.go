@@ -231,7 +231,7 @@ func (m NotificationsOverlayModel) renderEntry(n notifications.Notification, sel
 	} else {
 		headerStyle = headerStyle.Foreground(ColorAccent)
 	}
-	bodyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	bodyStyle := lipgloss.NewStyle().Foreground(ColorDescText)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 	tagStyle := lipgloss.NewStyle().Foreground(ColorHighlight)
 

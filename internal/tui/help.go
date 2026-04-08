@@ -229,8 +229,8 @@ func (m *HelpModel) rebuildLines() {
 		Bold(true).
 		Foreground(ColorAccent)
 
-	keyColor := lipgloss.Color("229")
-	descColor := lipgloss.Color("252")
+	keyColor := ColorKeyBindText
+	descColor := ColorDescText
 	keyStyle := lipgloss.NewStyle().Foreground(keyColor).Width(24)
 	descStyle := lipgloss.NewStyle().Foreground(descColor)
 

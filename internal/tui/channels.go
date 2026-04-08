@@ -764,7 +764,7 @@ func (m ChannelListModel) renderItem(ch types.Channel, rowIdx int, maxLen int, i
 		style = ChannelSelectedStyle
 	case ch.IsFriend && m.unread[ch.ID]:
 		// Online friend (unread = online indicator) in green.
-		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00"))
+		style = lipgloss.NewStyle().Foreground(ColorStatusOn)
 	case ch.IsFriend:
 		// Offline friend in muted.
 		style = lipgloss.NewStyle().Foreground(ColorMuted)

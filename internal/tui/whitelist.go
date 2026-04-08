@@ -151,7 +151,7 @@ func (m WhitelistModel) View() string {
 		Italic(true)
 
 	secureStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#00ff00"))
+		Foreground(ColorStatusOn)
 
 	var b strings.Builder
 

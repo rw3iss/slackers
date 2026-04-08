@@ -164,7 +164,7 @@ func (m FilesListModel) View() string {
 		Italic(true)
 
 	nameStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
+		Foreground(ColorDescText)
 
 	selectedNameStyle := lipgloss.NewStyle().
 		Foreground(ColorPrimary).
