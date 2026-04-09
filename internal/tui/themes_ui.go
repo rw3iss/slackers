@@ -391,9 +391,9 @@ func (m ThemePickerModel) View() string {
 		}
 		var line string
 		if i == m.selected {
-			line = selStyle.Render(marker+t.Name) + tag
+			line = selStyle.Render(marker+t.DisplayName()) + tag
 		} else {
-			line = textStyle.Render(marker+t.Name) + tag
+			line = textStyle.Render(marker+t.DisplayName()) + tag
 		}
 		b.WriteString(line)
 		b.WriteString("\n")

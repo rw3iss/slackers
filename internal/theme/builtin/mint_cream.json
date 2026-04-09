@@ -1,0 +1,26 @@
+{
+  "name": "Mint Cream",
+  "mode": "light",
+  "colors": {
+    "primary": "#2f7a4f",
+    "secondary": "#6b7e6c",
+    "accent": "#1f8a8a",
+    "error": "#b6352f",
+    "muted": "#8a9c8c",
+    "highlight": "#a86b1c",
+    "messageText": "#1d2b1f",
+    "infoText": "#6b7e6c",
+    "dayLabel": "#6b7e6c",
+    "timestamp": "#8a9c8c",
+    "background": "/#f5faf3",
+    "pageHeader": "#2f7a4f+b",
+    "groupHeader": "#5a6e5c",
+    "statusMessage": "#5a6e5c",
+    "fileButton": "#a85a18",
+    "replyLabel": "#1f8a8a",
+    "selection": "#1d2b1f/#dceadb",
+    "menuItem": "#1d2b1f",
+    "borderDefault": "#b9c9b6",
+    "borderActive": "#2f7a4f"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "Aurora",
+  "mode": "light",
+  "colors": {
+    "primary": "#4f5bd5",
+    "secondary": "#6b7280",
+    "accent": "#2eb88a",
+    "error": "#e0455a",
+    "muted": "#8b94aa",
+    "highlight": "#c0830d",
+    "messageText": "#1f2330",
+    "infoText": "#7a8195",
+    "dayLabel": "#7a8195",
+    "timestamp": "#8b94aa",
+    "background": "/#f4f6fc",
+    "pageHeader": "#4f5bd5+b",
+    "groupHeader": "#5b6276",
+    "statusMessage": "#5b6276",
+    "fileButton": "#c0540d",
+    "replyLabel": "#2eb88a",
+    "selection": "#1f2330/#dde2f4",
+    "menuItem": "#1f2330",
+    "borderDefault": "#b8c0d4",
+    "borderActive": "#4f5bd5"
+  }
+}

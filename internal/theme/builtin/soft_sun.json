@@ -1,0 +1,26 @@
+{
+  "name": "Soft Sun",
+  "mode": "light",
+  "colors": {
+    "primary": "#c0540d",
+    "secondary": "#7a6b4a",
+    "accent": "#8a6d2c",
+    "error": "#b8311c",
+    "muted": "#9a8a6e",
+    "highlight": "#a04a0d",
+    "messageText": "#2b2316",
+    "infoText": "#7a6b4a",
+    "dayLabel": "#7a6b4a",
+    "timestamp": "#9a8a6e",
+    "background": "/#fdf8ec",
+    "pageHeader": "#c0540d+b",
+    "groupHeader": "#6f5e3a",
+    "statusMessage": "#6f5e3a",
+    "fileButton": "#8a6d2c",
+    "replyLabel": "#8a6d2c",
+    "selection": "#2b2316/#f1e6c4",
+    "menuItem": "#2b2316",
+    "borderDefault": "#d4c79e",
+    "borderActive": "#c0540d"
+  }
+}

@@ -460,6 +460,33 @@ func (t Theme) IsDark() bool {
 	return strings.ToLower(t.Mode) != "light"
 }
 
+// DisplayName returns the theme name with a "(light)" suffix
+// appended for themes whose mode is "light". Used by the picker
+// and the settings overlay so users can tell at a glance which
+// themes have a light background. Dark themes get the bare name.
+//
+// The suffix is purely a presentation concern — the persisted
+// cfg.Theme value stays as the canonical Name without the tag,
+// so saved configs and FindByName lookups round-trip cleanly.
+func (t Theme) DisplayName() string {
+	if !t.IsDark() {
+		return t.Name + " (light)"
+	}
+	return t.Name
+}
+
+// DisplayNameOf looks up a theme by name and returns its
+// DisplayName(), or the input string unchanged if no theme
+// matches. Used by surfaces that only have a name string
+// (e.g. settings.go's themeValueLabel) and need the same
+// "(light)" annotation as the picker.
+func DisplayNameOf(name string) string {
+	if t, ok := FindByName(name); ok {
+		return t.DisplayName()
+	}
+	return name
+}
+
 // SanitizeFilename converts a theme name into a safe filename component.
 func SanitizeFilename(s string) string {
 	var b strings.Builder

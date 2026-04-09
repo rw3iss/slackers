@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/backup"
 	"github.com/rw3iss/slackers/internal/config"
+	"github.com/rw3iss/slackers/internal/theme"
 )
 
 // SettingsSavedMsg is sent when settings have been persisted to disk.
@@ -411,7 +412,11 @@ func themeValueLabel(name string) string {
 	if name == "" {
 		return "Default"
 	}
-	return name
+	// Surface the "(light)" annotation in the Settings rows so the
+	// Theme / Alt Theme fields match the Theme picker. The lookup
+	// is a no-op when the name doesn't resolve to any installed
+	// theme — the unknown name passes through unchanged.
+	return theme.DisplayNameOf(name)
 }
 
 func boolToOnOff(b bool) string {

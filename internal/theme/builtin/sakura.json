@@ -1,0 +1,26 @@
+{
+  "name": "Sakura",
+  "mode": "light",
+  "colors": {
+    "primary": "#b6336e",
+    "secondary": "#7a5a64",
+    "accent": "#8a3aa3",
+    "error": "#c8272a",
+    "muted": "#9c7783",
+    "highlight": "#a85a18",
+    "messageText": "#36161f",
+    "infoText": "#7a5a64",
+    "dayLabel": "#7a5a64",
+    "timestamp": "#9c7783",
+    "background": "/#fff1f4",
+    "pageHeader": "#b6336e+b",
+    "groupHeader": "#6f4a55",
+    "statusMessage": "#6f4a55",
+    "fileButton": "#c0540d",
+    "replyLabel": "#8a3aa3",
+    "selection": "#36161f/#fad6e0",
+    "menuItem": "#36161f",
+    "borderDefault": "#d8b6c1",
+    "borderActive": "#b6336e"
+  }
+}

@@ -1,9 +1,15 @@
 # Themes
 
-Slackers ships with 11 built-in themes:
+Slackers ships with 15 built-in themes (9 dark, 6 light):
 
-`default` · `dracula` · `cyberpunk` · `solarized_light` · `forest`
-· `nord` · `synthwave` · `monokai` · `paper` · `matrix` · `sunset`
+**Dark:** `default` · `cyberpunk` · `dracula` · `forest` · `matrix`
+· `monokai` · `nord` · `sunset` · `synthwave`
+
+**Light:** `aurora` · `mint_cream` · `paper` · `sakura` · `soft_sun`
+· `solarized_light`
+
+Light themes are tagged `(light)` after the name in the picker and
+in `Settings → Theme` so you can spot them at a glance.
 
 ## Picking a theme
 

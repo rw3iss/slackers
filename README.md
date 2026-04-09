@@ -22,7 +22,7 @@ A lightweight, terminal-based Slack client.
 - **Output view** -- commands like `/help`, `/friends`, `/channels`, `/me` open a temporary console pane in place of the chat. Tab still cycles focus, switching channels closes it automatically, and running another command swaps the body in place.
 - **Command List browser** (`Alt-C`) -- full-screen searchable list of every registered command with name + description + usage; Enter inserts into the input bar so you can fill in arguments.
 - **Customizable shortcuts** -- rebind any key in-app, changes take effect immediately
-- **Color themes** -- 11 built-in themes, an in-app editor with a 256-color picker (fg/bg + bold/italic), live preview, and Ctrl-Y to flip between a primary + alternate theme
+- **Color themes** -- 15 built-in themes (6 light, 9 dark — light themes are tagged `(light)` in the picker), an in-app editor with a 256-color picker (fg/bg + bold/italic), live preview, and Ctrl-Y to flip between a primary + alternate theme
 - **Reactions on replies, edit / delete own messages, inline reply selection** -- everything Slack does, in a TUI
 - **In-message item navigation** -- in select mode (`Ctrl-J`), arrow keys cycle through every interactive item in a message in priority order: contact-card pills → file rows → reactions → reply list. Each selection shows a context-aware hint in the message header (`a`/`v`/`c` for cards, `Enter`/`c` for files).
 - **Notifications view** (`Alt-N`) -- a single panel collects unread messages, reactions on your messages, and pending friend requests, each click jumps straight to the source
@@ -306,10 +306,15 @@ See [How_It_Works.md](How_It_Works.md#friends--private-chat) for the technical d
 
 ## Themes
 
-Slackers ships with 11 built-in color themes — **Default, Dracula, Cyberpunk,
-Solarized Light, Forest, Nord, Synthwave, Monokai, Paper, Matrix, Sunset** —
-selectable from **Settings → Theme** with live preview as you arrow through
-the list.
+Slackers ships with 15 built-in color themes:
+
+- **Dark:** Default, Cyberpunk, Dracula, Forest, Matrix, Monokai, Nord, Sunset, Synthwave
+- **Light:** Aurora, Mint Cream, Paper, Sakura, Soft Sun, Solarized Light
+
+Light themes are tagged `(light)` after the name in the picker and the
+Settings → Theme row so they're easy to spot. Each theme is selectable
+from **Settings → Theme** with live preview as you arrow through the
+list.
 
 Custom themes live in `~/.config/slackers/themes/*.json` and are flat
 key/value maps from semantic color names to terminal colors. Values support
