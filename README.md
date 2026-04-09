@@ -18,11 +18,15 @@ A lightweight, terminal-based Slack client.
 - **File browser** -- upload, download, browse and search files across all channels
 - **Mouse support** -- click channels, scroll panels, drag sidebar resize, click files, right-click for context menus
 - **Multi-line editor** -- expandable textarea with normal/edit mode toggle
+- **Slash commands** (`/`) -- typing `/` opens a fuzzy-matching suggestion popup above the input bar; built-in commands include `/help`, `/commands`, `/friends`, `/add-friend`, `/remove-friend`, `/theme`, `/themes`, `/channels`, `/clear-history`, `/me`, `/config`, `/settings`, `/shortcuts`, `/version`, `/quit`. Tab completes, Enter runs.
+- **Output view** -- commands like `/help`, `/friends`, `/channels`, `/me` open a temporary console pane in place of the chat. Tab still cycles focus, switching channels closes it automatically, and running another command swaps the body in place.
+- **Command List browser** (`Alt-C`) -- full-screen searchable list of every registered command with name + description + usage; Enter inserts into the input bar so you can fill in arguments.
 - **Customizable shortcuts** -- rebind any key in-app, changes take effect immediately
 - **Color themes** -- 11 built-in themes, an in-app editor with a 256-color picker (fg/bg + bold/italic), live preview, and Ctrl-Y to flip between a primary + alternate theme
 - **Reactions on replies, edit / delete own messages, inline reply selection** -- everything Slack does, in a TUI
+- **In-message item navigation** -- in select mode (`Ctrl-J`), arrow keys cycle through every interactive item in a message in priority order: contact-card pills → file rows → reactions → reply list. Each selection shows a context-aware hint in the message header (`a`/`v`/`c` for cards, `Enter`/`c` for files).
 - **Notifications view** (`Alt-N`) -- a single panel collects unread messages, reactions on your messages, and pending friend requests, each click jumps straight to the source
-- **Right-click context menus** -- right-click a message for React / Reply / Edit / Delete, or a sidebar channel for Hide / Rename / Invite to Slackers / View Contact Info
+- **Right-click context menus** -- right-click a message for React / Reply / Edit / Delete, or a sidebar channel for Hide / Rename / Invite to Slackers / View Contact Info / Remove Friend (friend channels). Right-click a `[FRIEND:...]` pill in chat for Add Friend / View Contact Info / Copy Contact Info, with self/friend/non-friend variants.
 - **Channel management** -- hide, alias (with a filterable Ctrl-G hidden-channels overlay), collapse groups, sort by type/name/recent
 - **E2E encrypted messaging** -- optional P2P secure mode with X25519 key exchange
 - **Friends list** -- private P2P chat with befriended Slackers users, works without a Slack workspace
@@ -130,7 +134,11 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Alt-I` | Open friend config for the current friend chat |
 | `Alt-M` | Insert `[FRIEND:me]` (your contact card) into the input |
 | `Alt-N` | Open the notifications view |
+| `Alt-C` | Open the slash-command browser (also `/commands`) |
+| `Alt-K` | Open the keyboard shortcuts editor |
 | `Ctrl-Y` | Toggle between primary and alternate theme |
+| `/` (in input) | Start a slash command — popup shows fuzzy matches |
+| `Tab` (slash popup) | Complete the highlighted command into the input |
 | `Esc` | Exit current mode → focus chat input → first/second clears input |
 | `Ctrl-H` | Help (shows current bindings) |
 | `Ctrl-S` | Settings |
@@ -193,6 +201,38 @@ slackers export [path]         Write a full config backup to a zip file
 slackers import <zip>          Restore from a backup zip (--mode replace|merge)
 slackers version               Print version
 ```
+
+### Slash commands
+
+Slackers has an in-app slash command system. Type `/` in the input
+bar to open a fuzzy-matching suggestion popup; navigate with the
+arrow keys, press **Tab** to complete the highlighted command into
+the input, or press **Enter** to run it directly.
+
+| Command | Description |
+|---------|-------------|
+| `/help [topic]` | Open in-app help (topics: `friends`, `themes`, `commands`, `setup`, `p2p`, `secure`, `shortcuts`, `debug`) |
+| `/commands` | Open the full Command List browser (also `Alt-C`) |
+| `/version` | Show the running slackers version |
+| `/quit` | Quit slackers |
+| `/me` | Show your own contact card |
+| `/friends` | List your friends in the Output view |
+| `/add-friend <hash\|json\|[FRIEND:...]>` | Import a contact card |
+| `/remove-friend <name\|id>` | Remove a friend (with confirmation prompt) |
+| `/channels` | List every channel and friend chat |
+| `/clear-history` | Clear the current friend chat's history (with prompt) |
+| `/themes` | List installed themes |
+| `/theme <name>` | Switch the active theme |
+| `/settings` | Open the settings overlay |
+| `/shortcuts` | Open the keyboard shortcuts editor |
+| `/config` | Show the current config (tokens redacted) |
+
+Commands open results in a temporary **Output view** that replaces
+the messages pane. The sidebar, input bar, and Tab focus cycling
+all keep working — picking a sidebar channel auto-closes the
+output, sending a regular chat message also closes it, and
+running another command swaps the body in place. **Esc** on the
+messages pane closes the output and returns to chat.
 
 ### Debugging
 

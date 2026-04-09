@@ -2,7 +2,7 @@
 
 Terminal-based Slack client in Go with an optional libp2p peer-to-peer friends layer. TUI is built on [Bubbletea](https://github.com/charmbracelet/bubbletea) (Elm architecture).
 
-Project version: **0.20.0** · Go: **1.25.7** · entry: `cmd/slackers/main.go`
+Project version: **0.21.0** · Go: **1.25.7** · entry: `cmd/slackers/main.go`
 
 ## Quick commands
 

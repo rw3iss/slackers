@@ -59,6 +59,7 @@ var ActionDescriptions = map[string]string{
 	"emoji_picker":       "Open emoji picker (insert at cursor)",
 	"select_message":     "Enter message select mode (react / reply / edit / delete)",
 	"shortcuts_editor":   "Open the keyboard shortcuts editor",
+	"command_list":       "Open the slash-command browser (also: /commands)",
 }
 
 // ActionOrder defines the display order for the shortcuts editor.
@@ -75,7 +76,7 @@ var ActionOrder = []string{
 	"toggle_input_mode", "toggle_full_mode", "toggle_theme",
 	"befriend", "emoji_picker", "select_message",
 	"friend_details", "notifications", "share_my_info",
-	"help", "settings", "shortcuts_editor",
+	"help", "settings", "shortcuts_editor", "command_list",
 }
 
 // DefaultShortcuts returns the built-in default shortcut mappings.

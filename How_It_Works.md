@@ -423,9 +423,84 @@ Entries are added as the app observes the underlying event and cleared when the 
 
 ## Right-click context menus
 
-The TUI exposes two overlay-backed right-click context menus that share the same popup-positioning machinery (`ansiTruncatePad` + computed click-inside hit test):
+The TUI exposes three overlay-backed right-click context menus that share the same popup-positioning machinery (`ansiTruncatePad` + computed click-inside hit test):
 
 - **Message options** (`MsgOptionsModel`, `overlayMsgOptions`) — right-click any message in the chat view to get React / Reply / Edit / Delete. Edit and Delete only appear when `isMyMessage(msg)` returns true. The same set of actions is available by keyboard via the select-mode hint (`r` / `e` / `d`) so mouse and keyboard users stay in sync.
-- **Sidebar channel options** (`SidebarOptionsModel`, `overlaySidebarOptions`) — right-click any channel entry in the sidebar. Every channel gets Hide / Rename; DM / private-group entries whose target user is not already a friend also get **Invite to Slackers** (which switches to that chat and pre-fills the input with the Slack-mrkdwn invite text plus a `[FRIEND:<json>]` payload on its own line); friend channels instead get **View Contact Info**, which opens the Friends Config overlay directly on that friend's Edit Friend page.
+- **Sidebar channel options** (`SidebarOptionsModel`, `overlaySidebarOptions`) — right-click any channel entry in the sidebar. Every channel gets Hide / Rename; DM / private-group entries whose target user is not already a friend also get **Invite to Slackers** (which switches to that chat and pre-fills the input with the Slack-mrkdwn invite text plus a `[FRIEND:<json>]` payload on its own line); friend channels instead get **View Contact Info** (opens the Friends Config overlay on that friend's Edit Friend page) and **Remove Friend** (with a y/Enter confirmation prompt — the chat history view stays on screen for one last reference read until the user navigates away). The right-click handler uses a non-mutating `ChannelByRow` lookup so the popup does NOT move the sidebar cursor off the user's currently active channel.
+- **Friend card pill options** (`FriendCardOptionsModel`, `overlayFriendCardOptions`) — right-click any `[FRIEND:...]` pill rendered inside a chat message. The menu items adapt to the card's relationship to the local user: **self** → View Contact Info / Copy Contact Info; **already a friend** → View Friend Profile / View Contact Info / Copy Contact Info; **non-friend** → Add Friend / View Contact Info / Copy Contact Info. Right-click hit-testing on the chat pane prioritises items in order — friend card → reaction → file → fall back to parent message — so item-specific menus only fire on the item itself, not the whole message line. The pill hit-test allows ±3 cells horizontally and ±1 row vertically to compensate for the wide leading 👤 emoji glyph.
+
+## In-message item navigation (select mode)
+
+The message select mode (`Ctrl-J` or `s`) extends beyond reactions and the inline reply list to cycle through every interactive item in a parent message in priority order. Left/right arrow keys walk a combined index over `[ contact cards | files | reactions | reply list virtual ]`, with the existing "down into replies" navigation preserved at the end.
+
+Each kind of selection swaps the inline keyboard hint shown above the highlighted message:
+
+- **Contact card pill** — `[a: add friend  v: view info  c: copy info  ←/→: navigate]`. Pressing `a` routes through the same `FriendCardOptionsSelectMsg` dispatch the right-click menu uses (so the existing self-check, conflict prompt, and handshake all run unchanged); `v` opens the temporary contact card view modal; `c` marshals the card to JSON and copies it to the clipboard; `Enter` defaults to View Contact Info.
+- **File row** — `[Enter: download  c: copy contents  ←/→: navigate]`. Enter routes through the existing `FilesListDownloadMsg` path; `c` triggers the existing `FileCopyRequestMsg` flow (large-file confirmation included).
+- **Reaction badge** — Enter toggles, behaviour unchanged.
+- **Reply list virtual element** — down arrow enters the reply tree, behaviour unchanged.
+
+The selection state is encoded in the existing `reactionSelIdx` field, reinterpreted via `selectedItemKind() (kind, localIdx)`. A per-message render counter (`renderingCardCount`) is reset at the top of each parent message in `renderMessageList` and incremented for every pill emitted by `rewriteFriendCards`, so the pill style flips to `FriendCardPillSelectedStyle` for whichever card matches the cursor position. File rendering checks the same kind/index pair to switch to `MessageFileSelectedStyle` when the cursor lands on a file row.
+
+## Slash command framework
+
+Slackers exposes a slash-command interface in the input bar — type `/` to start. The architecture is split between a Model-agnostic framework package (`internal/commands`) and the TUI host code that registers concrete handlers as closures over `*Model`.
+
+### Framework (`internal/commands`)
+
+The package is a self-contained dictionary + lookup engine with no Bubbletea or Slackers dependencies. It compiles standalone and is unit-tested.
+
+- **`Command`** — name, aliases, kind (command vs emote), description, usage, args, and a `RunFunc(ctx *Context) Result` handler.
+- **`Registry`** — owns the command set, indexed both by name (`map[string]*Command`) and by a character trie for prefix lookup. Aliases share the same canonical Command pointer.
+- **`trie`** — each node caches the names of every descendant command on the path from root to that node, so prefix lookup is O(len(prefix)) regardless of how many commands are registered. Empty-prefix lookup returns every name in the registry.
+- **`FuzzyScore` / `RankFuzzy`** — subsequence match scorer with bonuses for exact prefix matches (highest), substring matches at word boundaries, and contiguous runs of matching characters. The scorer falls back to a global pass when the trie returns fewer than `topN` candidates so subsequence matches like `addfri` → `add-friend` and `rmfr` → `remove-friend` still surface.
+- **`Result`** — `Status`, `StatusBar` (one-line status), `Title` + `Body` (Output view content), `FocusOutput` (opt-in to auto-Tab focus to the output pane), and `Cmd` (a follow-up `tea.Cmd`-shaped value carried as `any` so the package stays Bubbletea-free).
+- **`tokenize`** — splits raw arg strings into tokens, honouring `"two words"` quotes for arguments containing whitespace.
+- **`embed.FS` over `help/*.md`** — `Topics()` and `Topic(name)` expose the embedded markdown help files. Adding a new topic is just dropping `help/<topic>.md` in the package and rebuilding.
+
+### TUI integration (`internal/tui/commands_basic.go`)
+
+The host file `commands_basic.go` registers every concrete command as a closure that captures `*Model`. The registry is built once in `NewModel` *before* the splash screen, so the trie is fully cached by the time the user sees the loading view. Custom user emote / command JSON files (`~/.config/slackers/emotes.json`, `commands.json`) are merged into the same registry on startup — currently empty stubs but the loader is wired so adding them later is a no-op change.
+
+The 14 foundation commands are:
+
+- **General:** `/commands`, `/help [topic]`, `/version`, `/quit`, `/me`
+- **Friends:** `/friends`, `/add-friend <hash|json|[FRIEND:...]>`, `/remove-friend <name|id>`
+- **Channels & messages:** `/channels`, `/clear-history`, `/settings`, `/shortcuts`
+- **Appearance:** `/themes`, `/theme <name>`
+- **Diagnostics:** `/config` (with tokens redacted via `mask`)
+
+Every command flows through `applyCommandResult`, the single funnel that:
+
+1. Sets `m.warning` from `Result.StatusBar`
+2. Activates the Output view from `Result.Title` + `Result.Body` (creating a fresh view or swapping content if the view is already active)
+3. Honours `Result.FocusOutput` to optionally Tab focus to the messages pane
+4. Schedules `Result.Cmd` (typed as `any`, accepts both `tea.Cmd` and `func() tea.Msg`)
+
+### Suggestion popup (`CmdSuggestModel`)
+
+Floats inline above the input bar — it's part of the vertical layout (not a screen overlay) so it doesn't need z-ordering against the message pane. As the user types after `/`, every keystroke calls `refreshCmdSuggest()` which queries `registry.Lookup(input, 8)` and updates the popup. Up/Down navigates with cursor-windowed visible slice. Tab completes the highlighted suggestion into the input bar with a trailing space; Enter runs the highlighted command directly (preserving any args already typed after the command name); Esc dismisses the popup without affecting the input value.
+
+The popup auto-hides as soon as the user types a space after the command name (so it doesn't fight with whatever arg is being typed), or when the input no longer starts with `/`.
+
+### Output view (`OutputViewModel`)
+
+A pane-state — *not* an overlay. When `m.outputActive` is true, `renderBaseView` swaps `m.messages.View()` for `m.outputView.View()`, leaving the sidebar / input / status bar untouched. This means Tab still cycles focus normally, sidebar selection still switches channels (which auto-closes the output via `setChannelHeader`), the input still accepts new commands and chat messages, and key events route to the output viewport only when focus lands on the messages pane.
+
+- Switching channels closes the output (handled by a single line in `setChannelHeader`, which every channel-switch path calls)
+- Sending a regular chat message closes the output (the user wants to see their freshly-sent message in the chat)
+- Running another command swaps the body in place via `SetTitle` / `SetBody` instead of allocating a fresh view
+- Esc on the messages pane closes the output and returns to chat
+- Window resize syncs `outputView.SetSize` from `resizeComponents`
+
+The pane's `focused` state is updated by `updateFocus` based on `m.focus == FocusMessages && m.outputActive`, so the active border accurately reflects where keystrokes go.
+
+### Command List overlay (`CommandListModel`)
+
+A full-screen modal opened via `/commands` or the global `Alt-C` shortcut. Embeds `SelectableList`, has a top filter input, and renders each command as `name  description  [emote?]` in two aligned columns. Enter inserts `/<name> ` into the input bar and closes the overlay so the user can fill in arguments before pressing Enter again to run.
+
+### Help system (`/help [topic]`)
+
+`/help` reads from the embedded `internal/commands/help/*.md` files via the `commands.Topic(name)` accessor. Topics: `main`, `commands`, `friends`, `themes`, `setup`, `p2p`, `secure`, `shortcuts`, `debug`. Adding a new topic is just dropping a markdown file in the package directory and rebuilding — no code change needed.
 
 In that second instance set a different P2P Port (e.g. 9901), share its contact card to the primary instance, and you can chat between the two.
