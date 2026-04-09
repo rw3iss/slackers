@@ -555,24 +555,75 @@ func (m *Model) applyCommandResult(res commands.Result) tea.Cmd {
 }
 
 // refreshCmdSuggest re-evaluates the suggestion popup state from
-// the current input bar value. Hides the popup if the input
-// doesn't start with "/" or has no matches.
+// the current input bar value. Three states:
+//
+//  1. Input doesn't start with "/" → hide popup.
+//  2. Input is "/cmd" with no space yet → command mode (fuzzy
+//     match against the registry).
+//  3. Input is "/cmd <partial>" with at least one space and a
+//     known command → arg mode (fuzzy match against the
+//     completion source for the command's first ArgSpec.Kind).
+//
+// Uses the raw (non-trimmed) input value for space-boundary
+// detection so "/theme " (trailing space) enters arg mode even
+// though TrimSpace would collapse it.
 func (m *Model) refreshCmdSuggest() {
-	val := strings.TrimSpace(m.input.Value())
-	if !strings.HasPrefix(val, "/") || m.cmdRegistry == nil {
+	raw := m.input.Value()
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(trimmed, "/") || m.cmdRegistry == nil {
 		m.cmdSuggest.Hide()
 		return
 	}
-	// If the user has already typed a space the command name is
-	// settled — drop the popup so it doesn't compete with the
-	// arg the user is typing.
-	rest := strings.TrimPrefix(val, "/")
-	if i := strings.IndexAny(rest, " \t"); i >= 0 {
+	rest := strings.TrimPrefix(trimmed, "/")
+	// Find the first whitespace in the trimmed input to decide
+	// whether the command name is still being typed. Use the
+	// raw input to detect a trailing space (user just hit space
+	// after the command name, hasn't typed the arg yet).
+	rawRest := strings.TrimPrefix(strings.TrimLeft(raw, " \t"), "/")
+	spaceIdx := strings.IndexAny(rest, " \t")
+	rawSpaceIdx := strings.IndexAny(rawRest, " \t")
+	if spaceIdx < 0 && rawSpaceIdx < 0 {
+		// Command mode — no space yet.
+		matches := m.cmdRegistry.Lookup(trimmed, 8)
+		m.cmdSuggest.SetMatches(matches)
+		m.cmdSuggest.SetWidth(m.width - 2)
+		return
+	}
+	// Arg mode. Parse out the command name and the partial arg.
+	var name, partial string
+	if rawSpaceIdx >= 0 {
+		name = rawRest[:rawSpaceIdx]
+		partial = strings.TrimLeft(rawRest[rawSpaceIdx+1:], " \t")
+	} else {
+		name = rest
+	}
+	cmd := m.cmdRegistry.Get(name)
+	if cmd == nil || len(cmd.Args) == 0 {
 		m.cmdSuggest.Hide()
 		return
 	}
-	matches := m.cmdRegistry.Lookup(val, 8)
-	m.cmdSuggest.SetMatches(matches)
+	// Drop any preceding already-typed args — we only complete
+	// the CURRENT token (the one the user is still typing),
+	// which is whatever comes after the last whitespace.
+	if lastSpace := strings.LastIndexAny(partial, " \t"); lastSpace >= 0 {
+		partial = partial[lastSpace+1:]
+	}
+	pool := m.argCompletionsForKind(cmd.Args[0].Kind)
+	if len(pool) == 0 {
+		m.cmdSuggest.Hide()
+		return
+	}
+	ranked := rankArgCandidates(partial, pool, 8)
+	if len(ranked) == 0 {
+		m.cmdSuggest.Hide()
+		return
+	}
+	// The prefix inserted on Tab-complete is "/cmd " (or
+	// "/cmd <earlier args> ") so the completion replaces only
+	// the last token. Reconstruct from the input bar value
+	// minus the current partial.
+	prefix := "/" + name + " "
+	m.cmdSuggest.SetArgMatches(ranked, prefix)
 	m.cmdSuggest.SetWidth(m.width - 2)
 }
 

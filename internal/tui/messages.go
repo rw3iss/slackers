@@ -53,6 +53,15 @@ type MessageCopyRequestMsg struct {
 	MessageID string
 }
 
+// CopySnippetRequestMsg is sent when the user presses `c` in
+// message or output select mode while the cursor is on an
+// in-message code snippet. The Text field carries the raw
+// snippet body (no backticks). The model funnels it through
+// copyToClipboard and surfaces a status-bar confirmation.
+type CopySnippetRequestMsg struct {
+	Text string
+}
+
 // EditMessageRequestMsg is sent when the user requests to edit a message.
 // The model verifies authorship and pre-fills the input with the message
 // text wrapped in [EDIT:id] syntax.
@@ -163,6 +172,24 @@ type friendCardHit struct {
 	endCol   int
 }
 
+// codeSnippetHit tracks an inline code span (`...`) rendered inside
+// a chat message body. Used for select-mode sub-item navigation so
+// the user can press right-arrow to cursor onto a snippet and 'c'
+// to copy it to the clipboard. Siblings: friendCardHit (cards),
+// reactionHit (reactions), files (via selectables).
+//
+// The raw payload is what gets copied; line / col positions are
+// recorded so the renderer can flip the highlighted span to the
+// selected style without re-parsing the marker at render time.
+type codeSnippetHit struct {
+	raw      string // literal text between the backticks
+	msgIdx   int    // index of the parent message (matches i in renderMessageList)
+	localIdx int    // 0-based snippet index within the parent message
+	line     int    // absolute line in viewport content
+	startCol int
+	endCol   int
+}
+
 // reactionHit tracks a clickable reaction badge for mouse hit-testing.
 type reactionHit struct {
 	messageID string
@@ -240,6 +267,12 @@ type MessageViewModel struct {
 	// the full data without re-parsing or carrying the entire blob
 	// in the rendered text.
 	friendCards map[string]friends.ContactCard
+	// codeSnippetHits records every inline `code` span rendered
+	// inside chat messages. Used by select mode for sub-item
+	// navigation (cursor onto a snippet → 'c' copies it) and
+	// by the render pass to apply the highlighted style to the
+	// currently selected snippet. Rebuilt per render.
+	codeSnippetHits []codeSnippetHit
 
 	// formattedTextCache memoises format.FormatMessage results
 	// keyed by message ID. Populated lazily on first render and
@@ -255,13 +288,15 @@ type MessageViewModel struct {
 	contextTarget   int
 	contextChannel  string
 
-	// Per-message render state used by rewriteFriendCards to know
-	// which contact-card pill it's currently substituting and
-	// whether that pill is the one selected in react/select mode.
-	// Reset to (renderingMsgIdx=-1, renderingCardCounter=0) at the
-	// start of every parent message in renderMessageList.
-	renderingMsgIdx    int
-	renderingCardCount int
+	// Per-message render state used by rewriteFriendCards and
+	// rewriteCodeSnippets to know which pill / snippet they're
+	// currently substituting and whether that substitution is
+	// the one selected in react/select mode. Both counters are
+	// reset at the top of every parent message in
+	// renderMessageList.
+	renderingMsgIdx       int
+	renderingCardCount    int
+	renderingSnippetCount int
 }
 
 // NewMessageView creates a new message view model.
@@ -1076,6 +1111,66 @@ func (m *MessageViewModel) rewriteFriendCards(line string, lineIdx int) string {
 	return out
 }
 
+// rewriteCodeSnippets walks the given rendered body line, finds
+// every inline `...` code span, replaces each with a styled
+// italic span, and records the hit in codeSnippetHits so select
+// mode can sub-cursor onto it.
+//
+// This is called per-line from renderMessageList after
+// rewriteFriendCards, so it only sees body lines (not headers,
+// not reactions, not file rows). The per-message hit counter
+// (renderingSnippetCount, reset at the top of each parent
+// message in renderMessageList) is used to match each
+// substitution against the select-mode cursor's localIdx.
+//
+// Fenced ```...``` blocks are deliberately NOT rewritten here —
+// they're multi-line and the chat render path wraps one body line
+// at a time, so a fenced block wouldn't survive the wrap-and-
+// rewrite pipeline. Fenced block support in chat is a follow-up;
+// the Output view already handles them via its own parser.
+func (m *MessageViewModel) rewriteCodeSnippets(line string, lineIdx int) string {
+	if !strings.Contains(line, "`") {
+		return line
+	}
+	idleStyle := CodeSnippetStyle
+	selStyle := CodeSnippetSelectedStyle
+	selKind, selIdx := m.selectedItemKind()
+	snippetSelectedInMsg := m.reactMode &&
+		m.renderingMsgIdx == m.reactIdx &&
+		selKind == ItemCodeSnippet
+
+	out := line
+	idx := 0
+	for {
+		match := inlineCodePat.FindStringIndex(out[idx:])
+		if match == nil {
+			break
+		}
+		matchStart := idx + match[0]
+		matchEnd := idx + match[1]
+		raw := out[matchStart+1 : matchEnd-1] // strip backticks
+		style := idleStyle
+		if snippetSelectedInMsg && selIdx == m.renderingSnippetCount {
+			style = selStyle
+		}
+		rendered := style.Render(raw)
+		preWidth := lipgloss.Width(out[:matchStart])
+		renderedWidth := lipgloss.Width(rendered)
+		m.codeSnippetHits = append(m.codeSnippetHits, codeSnippetHit{
+			raw:      raw,
+			msgIdx:   m.renderingMsgIdx,
+			localIdx: m.renderingSnippetCount,
+			line:     lineIdx,
+			startCol: preWidth,
+			endCol:   preWidth + renderedWidth,
+		})
+		m.renderingSnippetCount++
+		out = out[:matchStart] + rendered + out[matchEnd:]
+		idx = matchStart + len(rendered)
+	}
+	return out
+}
+
 // friendCardDisplayName returns the best short label for a friend
 // card pill. Order of preference:
 //  1. Real Name from the card (e.g. "Ryan Weiss")
@@ -1274,12 +1369,24 @@ func (m *MessageViewModel) ExitReactMode() {
 // SelectedItemKind classifies the intra-message item currently
 // highlighted in select/react mode. The integer index inside the
 // message is returned alongside via SelectedItemKindAndIdx().
+//
+// The walk order matches the priority the select-mode left/right
+// arrow navigation uses:
+//
+//	cards → files → code snippets → reactions → reply list
+//
+// with sub-items grouped by kind (all cards, then all files,
+// then all snippets, etc.). Code snippets sit between the
+// content-level items (cards/files) and the feedback-level items
+// (reactions/reply list) because they're sub-items of the
+// message body text itself.
 type SelectedItemKind int
 
 const (
 	ItemNone SelectedItemKind = iota
 	ItemCard
 	ItemFile
+	ItemCodeSnippet
 	ItemReaction
 	ItemReplyList
 )
@@ -1319,12 +1426,13 @@ func messageContactCards(text string) []friends.ContactCard {
 // itemCounts returns the number of selectable items per category
 // for the given parent message and whether the inline reply list
 // virtual element should be present at the end.
-func (m *MessageViewModel) itemCounts(msg *types.Message) (cards, files, reactions int, hasReplyList bool) {
+func (m *MessageViewModel) itemCounts(msg *types.Message) (cards, files, snippets, reactions int, hasReplyList bool) {
 	if msg == nil {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	cards = len(messageContactCards(msg.Text))
 	files = len(msg.Files)
+	snippets = len(parseCodeSnippets(msg.Text))
 	reactions = len(msg.Reactions)
 	hasReplyList = !m.threadMode && m.replyFormat == "inline" &&
 		len(msg.Replies) > 0 && m.expandedReplies[msg.MessageID]
@@ -1335,8 +1443,8 @@ func (m *MessageViewModel) itemCounts(msg *types.Message) (cards, files, reactio
 // a parent message. This is the upper bound for left/right cycling
 // through reactionSelIdx in select mode.
 func (m *MessageViewModel) totalSubElems(msg *types.Message) int {
-	cards, files, reactions, hasReplyList := m.itemCounts(msg)
-	n := cards + files + reactions
+	cards, files, snippets, reactions, hasReplyList := m.itemCounts(msg)
+	n := cards + files + snippets + reactions
 	if hasReplyList {
 		n++
 	}
@@ -1352,7 +1460,7 @@ func (m *MessageViewModel) totalSubElems(msg *types.Message) int {
 // with the older reaction-only navigation; in the new model it
 // indexes into a combined list:
 //
-//	[ cards | files | reactions | replyList? ]
+//	[ cards | files | snippets | reactions | replyList? ]
 //
 // so a value of e.g. cards + 1 means "the second file".
 func (m *MessageViewModel) selectedItemKind() (SelectedItemKind, int) {
@@ -1361,7 +1469,7 @@ func (m *MessageViewModel) selectedItemKind() (SelectedItemKind, int) {
 		return ItemNone, -1
 	}
 	idx := m.reactionSelIdx
-	cards, files, reactions, hasReplyList := m.itemCounts(sel)
+	cards, files, snippets, reactions, hasReplyList := m.itemCounts(sel)
 	if idx < cards {
 		return ItemCard, idx
 	}
@@ -1370,6 +1478,10 @@ func (m *MessageViewModel) selectedItemKind() (SelectedItemKind, int) {
 		return ItemFile, idx
 	}
 	idx -= files
+	if idx < snippets {
+		return ItemCodeSnippet, idx
+	}
+	idx -= snippets
 	if idx < reactions {
 		return ItemReaction, idx
 	}
@@ -1419,6 +1531,25 @@ func (m *MessageViewModel) SelectedFileInItem() *types.FileInfo {
 	return &f
 }
 
+// SelectedCodeSnippet returns the raw text of the currently
+// highlighted in-message code snippet, or "" if the cursor isn't
+// on a snippet. Used by the `c`-key copy action in select mode.
+func (m *MessageViewModel) SelectedCodeSnippet() string {
+	sel := m.SelectedMessage()
+	if sel == nil {
+		return ""
+	}
+	kind, idx := m.selectedItemKind()
+	if kind != ItemCodeSnippet {
+		return ""
+	}
+	snippets := parseCodeSnippets(sel.Text)
+	if idx < 0 || idx >= len(snippets) {
+		return ""
+	}
+	return snippets[idx]
+}
+
 // InReactMode returns whether select (formerly react) mode is active.
 func (m *MessageViewModel) InReactMode() bool {
 	return m.reactMode
@@ -1454,6 +1585,103 @@ func (m *MessageViewModel) SelectedMessageID() string {
 
 // scrollToReactCursor scrolls the viewport so the currently selected message
 // in react/select mode is visible.
+// scrollToSelectedSubItem ensures the currently selected in-
+// message sub-item (card, file, snippet, or reaction) is visible
+// in the viewport. Called after left/right arrow nav in select
+// mode so cycling through items of a long wrapped message
+// doesn't leave the cursor off-screen.
+//
+// Looks the target line up in the appropriate hit array based on
+// the selected kind. File rows aren't in any hit array (they're
+// rendered inline by line position), so for ItemFile we fall
+// back to the parent message scroll logic.
+//
+// Only adjusts YOffset when the target is outside [top, bottom];
+// otherwise leaves the scroll position alone.
+func (m *MessageViewModel) scrollToSelectedSubItem() {
+	kind, idx := m.selectedItemKind()
+	if kind == ItemNone {
+		return
+	}
+	var targetLine int = -1
+	switch kind {
+	case ItemCodeSnippet:
+		for _, h := range m.codeSnippetHits {
+			if h.msgIdx == m.reactIdx && h.localIdx == idx {
+				targetLine = h.line
+				break
+			}
+		}
+	case ItemReaction:
+		// reactionHits store msg message id + emoji. Walk the
+		// list and pick the Nth matching reaction on the
+		// currently selected message.
+		sel := m.SelectedMessage()
+		if sel == nil {
+			return
+		}
+		count := 0
+		for _, h := range m.reactionHits {
+			if h.messageID != sel.MessageID {
+				continue
+			}
+			if count == idx {
+				targetLine = h.line
+				break
+			}
+			count++
+		}
+	case ItemCard:
+		// Walk friend card hits in render order and match by
+		// localIdx. The hit records don't carry a msg index
+		// but since rebuildContent rebuilds them per-render,
+		// the N-th entry for a message is the N-th card
+		// rendered for the currently selected message.
+		sel := m.SelectedMessage()
+		if sel == nil {
+			return
+		}
+		// Find the parent message's header line so we can
+		// limit our scan to cards rendered after it.
+		headerLine := -1
+		for line, id := range m.lineToMsgID {
+			if id == sel.MessageID {
+				headerLine = line
+				break
+			}
+		}
+		if headerLine < 0 {
+			return
+		}
+		count := 0
+		for _, h := range m.friendCardHits {
+			if h.line <= headerLine {
+				continue
+			}
+			if count == idx {
+				targetLine = h.line
+				break
+			}
+			count++
+		}
+	default:
+		// ItemFile / ItemReplyList / ItemNone fall through to
+		// the parent message scroll below.
+	}
+	if targetLine < 0 {
+		// Fall back to the parent message scroll behaviour.
+		m.scrollToReactCursor()
+		return
+	}
+	top := m.viewport.YOffset
+	bottom := top + m.viewport.Height - 1
+	if targetLine < top {
+		m.viewport.SetYOffset(targetLine)
+	} else if targetLine > bottom-1 {
+		m.viewport.SetYOffset(targetLine - m.viewport.Height + 2)
+	}
+}
+
 func (m *MessageViewModel) scrollToReactCursor() {
 	view := m.viewMessages()
 	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(view) {
@@ -1779,6 +2007,7 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 						m.replyReactionSelIdx = -1
 					}
 					m.rebuildContent()
+					m.scrollToSelectedSubItem()
 				}
 				return m, nil
 			case "right":
@@ -1806,6 +2035,7 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 						m.replyReactionSelIdx = -1
 					}
 					m.rebuildContent()
+					m.scrollToSelectedSubItem()
 				}
 				return m, nil
 			case "enter", " ":
@@ -1985,11 +2215,13 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				}
 				return m, nil
 			case "c":
-				// 'c' has three meanings depending on what's
+				// 'c' has four meanings depending on what's
 				// selected inside the current message:
 				//   - card selected → Copy Contact Info
 				//   - file selected → copy file contents via
 				//     the existing FileCopyRequestMsg flow
+				//   - code snippet selected → copy the raw
+				//     snippet text via CopySnippetRequestMsg
 				//   - nothing selected → copy the parent
 				//     message itself (author + timestamp +
 				//     text, no replies/reactions) via
@@ -2013,6 +2245,14 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					m.rebuildContent()
 					return m, func() tea.Msg {
 						return FileCopyRequestMsg{File: f}
+					}
+				}
+				if snippet := m.SelectedCodeSnippet(); snippet != "" {
+					m.reactMode = false
+					m.reactionSelIdx = -1
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return CopySnippetRequestMsg{Text: snippet}
 					}
 				}
 				// Fall back to copying the whole message.
@@ -2330,6 +2570,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 	m.reactionHits = nil
 	m.friendCardHits = nil
 	m.friendCards = make(map[string]friends.ContactCard)
+	m.codeSnippetHits = nil
 
 	var lines []string
 	// m.width - 5 = pane width minus 2 borders, 2 cells of
@@ -2352,10 +2593,12 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 
 	for i, msg := range msgs {
 		// Reset per-message render state used by rewriteFriendCards
-		// to know which contact-card pill it's currently emitting
-		// and whether it's the one selected by the cursor.
+		// and rewriteCodeSnippets — both need the index/counter
+		// to start fresh at every parent message so the cursor
+		// matching is unambiguous.
 		m.renderingMsgIdx = i
 		m.renderingCardCount = 0
+		m.renderingSnippetCount = 0
 
 		name := msg.UserName
 		if name == "" {
@@ -2398,7 +2641,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		// Highlight selected message in select mode.
 		if m.reactMode && i == m.reactIdx {
 			selectHighlight := MessageSelectBgStyle
-			cards, files, _, hasInlineReplies := m.itemCounts(&msg)
+			cards, files, snippets, _, hasInlineReplies := m.itemCounts(&msg)
 			hasReactions := len(msg.Reactions) > 0
 			// Only authors can edit or delete their own messages,
 			// so hide the "e: edit" / "d: delete" hints when the
@@ -2408,10 +2651,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				authorHint = "  e: edit  d: delete"
 			}
 			// Item-specific hint takes priority when the cursor
-			// has cycled onto a card or file inside the message.
+			// has cycled onto a sub-item inside the message.
 			// Otherwise we show the default reply / react / nav
-			// hints (with the new card/file mention if any are
-			// available to navigate to).
+			// hints, listing only the sub-item categories that
+			// actually exist on this message.
 			var hint string
 			selKind, _ := m.selectedItemKind()
 			switch selKind {
@@ -2419,9 +2662,11 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				hint = " [a: add friend  v: view info  c: copy info  ←/→: navigate]"
 			case ItemFile:
 				hint = " [Enter: download  c: copy contents  ←/→: navigate]"
+			case ItemCodeSnippet:
+				hint = " [c: copy snippet  ←/→: navigate]"
 			default:
 				navParts := []string{}
-				if cards > 0 || files > 0 {
+				if cards > 0 || files > 0 || snippets > 0 {
 					navParts = append(navParts, "items")
 				}
 				if hasReactions {
@@ -2483,6 +2728,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			for _, tl := range textLines {
 				rendered := highlightBg.Render("  " + MessageTextStyle.Render(tl))
 				rendered = m.rewriteFriendCards(rendered, len(lines))
+				rendered = m.rewriteCodeSnippets(rendered, len(lines))
 				lines = append(lines, rendered)
 			}
 			if m.itemSpacing >= 2 && len(textLines) > 0 {
@@ -2496,6 +2742,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			for _, tl := range textLines {
 				rendered := "  " + MessageTextStyle.Render(tl)
 				rendered = m.rewriteFriendCards(rendered, len(lines))
+				rendered = m.rewriteCodeSnippets(rendered, len(lines))
 				lines = append(lines, rendered)
 			}
 			if m.itemSpacing >= 2 && len(textLines) > 0 {

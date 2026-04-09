@@ -44,7 +44,6 @@ package tui
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -67,22 +66,17 @@ type outputItem struct {
 	text       string
 	selectable bool
 	// snippets are the code spans parsed out of text (backtick
-	// inline or triple-backtick fenced). Each snippet records its
-	// raw copy-paste payload and the visible row range inside
-	// the rendered item body. Row indices are relative to the
-	// item's first rendered line (0-based).
+	// inline or triple-backtick fenced). Each snippet records
+	// its raw copy-paste payload; the highlight substitution
+	// happens at render time by re-running the regex, so we
+	// don't need to track byte positions here.
 	snippets []outputSnippet
-	// renderedLines is the styled multi-line text of this item,
-	// computed once at SetItems time so View() is a cheap join.
-	renderedLines []string
 }
 
 // outputSnippet is one code block / inline code span parsed out
 // of an item's text. Used for sub-selection.
 type outputSnippet struct {
-	raw       string // the actual code payload (no backticks)
-	rowStart  int    // first line index inside renderedLines
-	rowEnd    int    // last line index (inclusive)
+	raw string // the actual code payload (no backticks)
 }
 
 // OutputViewModel is the temporary console pane.
@@ -222,31 +216,18 @@ func sectionsToItems(sections []commands.Section) []outputItem {
 	return out
 }
 
-// codeFencePat matches a triple-backtick fenced block. The
-// opening and closing fences must each be on their own line.
-// Captures the body only (not the fences).
-var codeFencePat = regexp.MustCompile("(?s)```\\s*\\n(.*?)\\n\\s*```")
-
-// inlineCodePat matches a single-backtick inline code span.
-// Conservative: doesn't match if either side is inside a triple
-// fence (we run codeFencePat first and carve out those ranges).
-var inlineCodePat = regexp.MustCompile("`([^`\\n]+)`")
-
-// parseSnippets extracts code snippets from an item's text. Only
-// the raw payload is recorded at parse time; the row positions
-// are filled in by rebuildRender after the item has been styled
-// and wrapped.
+// parseSnippets builds outputSnippet records for every code
+// span found in the given text. The raw payload comes from the
+// shared parseCodeSnippets helper; row positions are filled in
+// by rebuildRender once the item has been styled and wrapped.
 func parseSnippets(text string) []outputSnippet {
-	var out []outputSnippet
-	// Fenced blocks first.
-	for _, m := range codeFencePat.FindAllStringSubmatch(text, -1) {
-		out = append(out, outputSnippet{raw: strings.TrimSpace(m[1])})
+	raws := parseCodeSnippets(text)
+	if len(raws) == 0 {
+		return nil
 	}
-	// Strip fenced blocks from the search region so we don't
-	// also pick up backticks inside them.
-	stripped := codeFencePat.ReplaceAllString(text, "\x00FENCE\x00")
-	for _, m := range inlineCodePat.FindAllStringSubmatch(stripped, -1) {
-		out = append(out, outputSnippet{raw: m[1]})
+	out := make([]outputSnippet, len(raws))
+	for i, r := range raws {
+		out[i] = outputSnippet{raw: r}
 	}
 	return out
 }
@@ -393,10 +374,20 @@ func (o *OutputViewModel) moveItem(delta int) {
 		}
 		return
 	}
-	// Walk to the next/previous selectable item.
+	// Walk to the next/previous selectable item, wrapping around
+	// when we run off the end. Limit the walk to two full passes
+	// so an items slice with zero selectables never spins.
 	step := delta
 	idx := o.selectedItem + step
-	for idx >= 0 && idx < len(o.items) {
+	for attempts := 0; attempts < len(o.items)*2; attempts++ {
+		if idx < 0 {
+			idx = len(o.items) - 1
+			continue
+		}
+		if idx >= len(o.items) {
+			idx = 0
+			continue
+		}
 		if o.items[idx].selectable {
 			o.selectedItem = idx
 			o.selectedSnippet = -1
@@ -405,7 +396,6 @@ func (o *OutputViewModel) moveItem(delta int) {
 		}
 		idx += step
 	}
-	// No further selectable item in that direction — stay put.
 }
 
 // rebuildRender styles every item into renderedLines, applying

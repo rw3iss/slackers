@@ -1647,17 +1647,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmdSuggest.Move(1)
 					return m, nil
 				case "tab":
+					// Command mode: complete the command name
+					// with a trailing space so the user can
+					// start typing args.
 					if sel := m.cmdSuggest.Selected(); sel != nil {
 						m.input.Reset()
 						m.input.InsertAtCursor("/" + sel.Name + " ")
 						m.refreshCmdSuggest()
 						return m, nil
 					}
+					// Arg mode: complete the highlighted arg
+					// value, preserving any prior tokens. The
+					// current partial (whatever comes after
+					// the last whitespace) is REPLACED; earlier
+					// args / the command prefix are preserved.
+					if arg := m.cmdSuggest.SelectedArg(); arg != nil {
+						val := m.input.Value()
+						// Drop the in-progress partial token.
+						if i := strings.LastIndexAny(val, " \t"); i >= 0 {
+							val = val[:i+1]
+						}
+						m.input.Reset()
+						m.input.InsertAtCursor(val + quoteArgIfNeeded(arg.Name))
+						m.refreshCmdSuggest()
+						return m, nil
+					}
 				case "enter":
+					// Command mode: run the selected command
+					// with whatever args are currently typed.
 					if sel := m.cmdSuggest.Selected(); sel != nil {
-						// Build the full command line: /<name>
-						// followed by any args the user has
-						// already typed after the command name.
 						line := "/" + sel.Name
 						val := strings.TrimSpace(m.input.Value())
 						if i := strings.IndexAny(val, " \t"); i >= 0 {
@@ -1670,6 +1688,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.cmdSuggest.Hide()
 						m.resizeComponents()
 						res := m.cmdRegistry.Run(line)
+						return m, m.applyCommandResult(res)
+					}
+					// Arg mode: substitute the highlighted arg
+					// into the input and run immediately, same
+					// as command-mode Enter but with the
+					// selected candidate replacing the partial.
+					if arg := m.cmdSuggest.SelectedArg(); arg != nil {
+						val := m.input.Value()
+						if i := strings.LastIndexAny(val, " \t"); i >= 0 {
+							val = val[:i+1] + quoteArgIfNeeded(arg.Name)
+						}
+						m.input.PushHistory(val)
+						m.cfg.InputHistory = m.input.History()
+						config.SaveDebounced(m.cfg)
+						m.input.Reset()
+						m.cmdSuggest.Hide()
+						m.resizeComponents()
+						res := m.cmdRegistry.Run(val)
 						return m, m.applyCommandResult(res)
 					}
 				case "esc":
@@ -2850,6 +2886,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		text := formatMessageForCopy(*mm, m.users)
 		if copyToClipboard(text) {
 			m.warning = "Message copied to clipboard"
+		} else {
+			m.warning = "Copy failed: no clipboard tool found"
+		}
+		return m, nil
+
+	case CopySnippetRequestMsg:
+		if msg.Text == "" {
+			m.warning = "No snippet to copy"
+			return m, nil
+		}
+		if copyToClipboard(msg.Text) {
+			m.warning = "Snippet copied to clipboard"
 		} else {
 			m.warning = "Copy failed: no clipboard tool found"
 		}

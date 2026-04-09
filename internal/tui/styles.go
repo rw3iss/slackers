@@ -138,6 +138,8 @@ var (
 	MessageCogStyle             lipgloss.Style // "⚙" cog in friend chat header
 	FriendCardPillStyle         lipgloss.Style // styled pill rendered in place of [FRIEND:…] markers
 	FriendCardPillSelectedStyle lipgloss.Style // pill highlighted when cursor is on it in select mode
+	CodeSnippetStyle            lipgloss.Style // idle styling for inline `code` spans in chat
+	CodeSnippetSelectedStyle    lipgloss.Style // highlighted styling when cursor is on a snippet
 
 	// Emoji picker hot-path styles.
 	EmojiActiveBgStyle     lipgloss.Style // tab highlight background for the active category
@@ -345,6 +347,24 @@ func rebuildDerivedStyles() {
 		Background(ColorAccent).
 		Bold(true).
 		Padding(0, 1)
+	// CodeSnippetStyle is the idle rendering for inline `code`
+	// spans inside chat message bodies. Italic + accent fg so it
+	// reads as "this is a code-ish thing" without adding any
+	// background fill (that would clash with the message pane's
+	// own background when the cursor isn't on the snippet).
+	CodeSnippetStyle = lipgloss.NewStyle().
+		Foreground(ColorAccent).
+		Italic(true)
+	// CodeSnippetSelectedStyle is the highlighted form when the
+	// user has arrow-navigated the select-mode cursor onto a
+	// snippet. Inverts fg/bg like FriendCardPillSelectedStyle
+	// does, so the active snippet pops against neighbouring
+	// text.
+	CodeSnippetSelectedStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("0")).
+		Background(ColorAccent).
+		Bold(true).
+		Italic(true)
 
 	// Emoji picker styles.
 	EmojiActiveBgStyle = lipgloss.NewStyle().Background(lipgloss.Color("236"))
