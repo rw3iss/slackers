@@ -26,7 +26,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rw3iss/slackers/internal/commands"
+	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/friends"
+	"github.com/rw3iss/slackers/internal/setup"
 	"github.com/rw3iss/slackers/internal/theme"
 	"github.com/rw3iss/slackers/internal/types"
 )
@@ -402,6 +404,56 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 	// ---- Diagnostics -----------------------------------------------
 
 	register(commands.Command{
+		Name:        "setup",
+		Description: "Import or share workspace credentials",
+		Usage:       "/setup <json|hash|--flags> · /setup share [hash|json]",
+		Run: func(ctx *commands.Context) commands.Result {
+			if len(ctx.Args) == 0 {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "Usage: /setup <json|hash|--flags>  or  /setup share [hash|json]",
+				}
+			}
+			// `/setup share [hash|json]`
+			if strings.EqualFold(ctx.Args[0], "share") {
+				format := "hash"
+				if len(ctx.Args) > 1 {
+					format = strings.ToLower(ctx.Args[1])
+				}
+				if format != "hash" && format != "json" {
+					return commands.Result{
+						Status:    commands.StatusError,
+						StatusBar: "Usage: /setup share [hash|json]",
+					}
+				}
+				return m.buildSetupShareResult(format)
+			}
+			// Import path — reuse the unified parser.
+			parsed, err := setup.ParseAny(ctx.Raw)
+			if err != nil {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "Setup: " + err.Error(),
+				}
+			}
+			// Kick off the confirmation-aware import. The
+			// Cmd isn't nil-safe here — importSetupConfig may
+			// mutate m directly (stage a pending prompt) and
+			// return nil, OR return applySetupConfig's cmd.
+			cmd := m.importSetupConfig(parsed)
+			if m.pendingSetupImport != nil {
+				// Confirmation staged — StatusBar is already
+				// populated by importSetupConfig.
+				return commands.Result{Status: commands.StatusOK}
+			}
+			return commands.Result{
+				Status: commands.StatusOK,
+				Cmd:    cmd,
+			}
+		},
+	})
+
+	register(commands.Command{
 		Name:        "config",
 		Description: "Show the current configuration",
 		Usage:       "/config",
@@ -459,7 +511,8 @@ func (m *Model) applyCommandResult(res commands.Result) tea.Cmd {
 	if res.StatusBar != "" {
 		m.warning = res.StatusBar
 	}
-	if res.Body != "" {
+	hasOutput := res.Body != "" || len(res.Sections) > 0
+	if hasOutput {
 		// If the output view is already active, swap the
 		// content in place so /help → /friends → /channels all
 		// re-use the same pane (and the surrounding chrome
@@ -467,10 +520,17 @@ func (m *Model) applyCommandResult(res commands.Result) tea.Cmd {
 		// fresh view and activate the pane state.
 		if m.outputActive {
 			m.outputView.SetTitle(res.Title)
-			m.outputView.SetBody(res.Body)
 		} else {
-			m.outputView = NewOutputView(res.Title, res.Body)
+			m.outputView = NewOutputView(res.Title, "")
 			m.outputActive = true
+		}
+		if len(res.Sections) > 0 {
+			// Structured path — each section becomes one
+			// selectable item, code snippets parsed for sub
+			// selection.
+			m.outputView.SetItems(res.Sections)
+		} else {
+			m.outputView.SetBody(res.Body)
 		}
 		m.outputView.SetSize(m.messages.width, m.messages.height)
 		// Default: focus stays on whichever pane it was on
@@ -514,6 +574,180 @@ func (m *Model) refreshCmdSuggest() {
 	matches := m.cmdRegistry.Lookup(val, 8)
 	m.cmdSuggest.SetMatches(matches)
 	m.cmdSuggest.SetWidth(m.width - 2)
+}
+
+// buildSetupShareResult constructs the output for `/setup share`.
+// The result is a multi-section Output view: an intro paragraph
+// explaining what the output does, then the CLI import commands,
+// then the in-app import commands, each rendered as its own
+// selectable section with code-fenced body. The user can
+// right-arrow into each section to select the code snippet and
+// copy it to their clipboard with 'c'.
+//
+// User OAuth token is deliberately not included — only client id
+// / client secret / app token are exported, matching the CLI
+// `slackers setup share` behaviour.
+func (m *Model) buildSetupShareResult(format string) commands.Result {
+	if m.cfg == nil {
+		return commands.Result{
+			Status:    commands.StatusError,
+			StatusBar: "No config loaded",
+		}
+	}
+	share := setup.Config{
+		ClientID:     m.cfg.ClientID,
+		ClientSecret: m.cfg.ClientSecret,
+		AppToken:     m.cfg.AppToken,
+	}
+	if share.IsEmpty() {
+		return commands.Result{
+			Status:    commands.StatusError,
+			StatusBar: "No workspace credentials configured yet — run /setup first",
+		}
+	}
+	hash, err := setup.Encode(share)
+	if err != nil {
+		return commands.Result{
+			Status:    commands.StatusError,
+			StatusBar: "Encode hash failed: " + err.Error(),
+		}
+	}
+	js, err := share.ToJSON()
+	if err != nil {
+		return commands.Result{
+			Status:    commands.StatusError,
+			StatusBar: "Encode JSON failed: " + err.Error(),
+		}
+	}
+
+	sections := []commands.Section{
+		{
+			Text: "Share these commands with teammates to set up slackers with your current workspace. " +
+				"Either format works — the hash is shorter and obfuscated (but still fully decodable, not encrypted).",
+			Selectable: false,
+		},
+		{
+			Title:      "CLI — JSON form",
+			Text:       "```\nslackers setup '" + js + "'\n```",
+			Selectable: true,
+		},
+		{
+			Title:      "CLI — hash form",
+			Text:       "```\nslackers setup " + hash + "\n```",
+			Selectable: true,
+		},
+		{
+			Text:       "Or from inside a running slackers instance:",
+			Selectable: false,
+		},
+		{
+			Title:      "In-app — JSON form",
+			Text:       "```\n/setup " + js + "\n```",
+			Selectable: true,
+		},
+		{
+			Title:      "In-app — hash form",
+			Text:       "```\n/setup " + hash + "\n```",
+			Selectable: true,
+		},
+		{
+			Text: "Your user OAuth token (xoxp-) is NOT included in this output. " +
+				"Teammates running the import will still need to authorize with their own Slack account via " +
+				"`slackers login`.",
+			Selectable: false,
+		},
+	}
+	// Drop the format hint onto the status bar too so users
+	// running /setup share json see their choice acknowledged.
+	statusBar := "Setup share: both formats shown, " + format + " is the default"
+	return commands.Result{
+		Status:    commands.StatusOK,
+		Title:     "Setup Share",
+		Sections:  sections,
+		StatusBar: statusBar,
+	}
+}
+
+// importSetupConfig is the shared import entry point for both the
+// internal `/setup <arg>` command and any future TUI-invoked CLI
+// path. It decides whether the current config already has enough
+// credentials to warrant a confirmation prompt — if so, it stages
+// the new values in m.pendingSetupImport and surfaces a y/Enter
+// confirmation via the status bar. Otherwise it applies directly.
+//
+// Either way the apply path is applySetupConfig, which is the
+// single place tokens actually get written, debounced-saved, and
+// reported back to the user.
+func (m *Model) importSetupConfig(cfg setup.Config) tea.Cmd {
+	if cfg.IsEmpty() {
+		m.warning = "Setup payload is empty — nothing to import"
+		return nil
+	}
+	// Detect existing credentials that would be overwritten. We
+	// compare each incoming non-empty field against the current
+	// cfg.* value; if any is already set, we require confirmation.
+	hasExisting := false
+	if m.cfg != nil {
+		if cfg.ClientID != "" && m.cfg.ClientID != "" && cfg.ClientID != m.cfg.ClientID {
+			hasExisting = true
+		}
+		if cfg.ClientSecret != "" && m.cfg.ClientSecret != "" && cfg.ClientSecret != m.cfg.ClientSecret {
+			hasExisting = true
+		}
+		if cfg.AppToken != "" && m.cfg.AppToken != "" && cfg.AppToken != m.cfg.AppToken {
+			hasExisting = true
+		}
+		if cfg.UserToken != "" && m.cfg.UserToken != "" && cfg.UserToken != m.cfg.UserToken {
+			hasExisting = true
+		}
+	}
+	if hasExisting {
+		staged := cfg
+		m.pendingSetupImport = &staged
+		m.warning = "Replace existing Slack credentials? y=yes, any other key=cancel"
+		return nil
+	}
+	return m.applySetupConfig(cfg)
+}
+
+// applySetupConfig writes non-empty incoming fields into m.cfg and
+// persists. It does NOT attempt to bring slackSvc / socketSvc
+// online — the user still needs to restart (or re-run setup) for
+// Slack services to be instantiated with the new tokens. A status
+// bar line confirms which fields were updated and prompts for a
+// restart when needed.
+func (m *Model) applySetupConfig(cfg setup.Config) tea.Cmd {
+	if m.cfg == nil {
+		m.warning = "No config loaded — cannot apply setup"
+		return nil
+	}
+	changed := []string{}
+	if cfg.ClientID != "" && m.cfg.ClientID != cfg.ClientID {
+		m.cfg.ClientID = cfg.ClientID
+		changed = append(changed, "client id")
+	}
+	if cfg.ClientSecret != "" && m.cfg.ClientSecret != cfg.ClientSecret {
+		m.cfg.ClientSecret = cfg.ClientSecret
+		changed = append(changed, "client secret")
+	}
+	if cfg.AppToken != "" && m.cfg.AppToken != cfg.AppToken {
+		m.cfg.AppToken = cfg.AppToken
+		changed = append(changed, "app token")
+	}
+	if cfg.UserToken != "" && m.cfg.UserToken != cfg.UserToken {
+		m.cfg.UserToken = cfg.UserToken
+		changed = append(changed, "user token")
+	}
+	if len(changed) == 0 {
+		m.warning = "Setup: all fields already match current config"
+		return nil
+	}
+	if err := config.Save(m.cfg); err != nil {
+		m.warning = "Setup: saved in memory but failed to persist: " + err.Error()
+		return nil
+	}
+	m.warning = "Setup: updated " + strings.Join(changed, ", ") + " — restart to activate Slack services"
+	return nil
 }
 
 // confirmClearFriendHistory wipes the current friend's chat

@@ -29,6 +29,19 @@ above the input showing the top fuzzy matches.
 - `/search <query>` — search messages in the current channel
 - `/settings` — open the settings overlay
 
+### Workspace setup
+
+- `/setup <json|hash|--flags>` — import workspace credentials
+  (client id, client secret, app token, optionally user token).
+  All three formats are auto-detected; the same flow runs from
+  the CLI via `slackers setup <arg>`. If existing credentials are
+  set, a y/Enter confirmation prompt appears before overwriting.
+- `/setup share [hash|json]` — print the current workspace
+  credentials in a sharable form. Opens the Output view with
+  each import command as a selectable code-snippet sub-item —
+  press right-arrow to select a snippet, `c` to copy it. The
+  user OAuth token (`xoxp-`) is excluded from shared output.
+
 ### Friends & P2P
 
 - `/friends` — list friends in the Output view

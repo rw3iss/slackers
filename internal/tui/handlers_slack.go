@@ -330,6 +330,43 @@ func (m *Model) markSlackRead(ch *types.Channel) {
 
 // ---- Channel header / secure indicator --------------------------------
 
+// formatMessageForCopy renders a single message as a two-line
+// "UserName  Timestamp\nText" block suitable for pasting into
+// another document. Used by the Copy Message action in select
+// mode and the right-click context menu.
+//
+// Replies and reactions are deliberately omitted — keeping the
+// output format simple means copying multiple messages
+// in sequence produces a clean contiguous transcript (one blank
+// line between each entry).
+//
+// The trailing newline lets sequential copies concatenate
+// cleanly: each entry is a self-contained paragraph.
+func formatMessageForCopy(mm types.Message, users map[string]types.User) string {
+	name := mm.UserName
+	if name == "" {
+		if u, ok := users[mm.UserID]; ok {
+			if u.DisplayName != "" {
+				name = u.DisplayName
+			} else if u.RealName != "" {
+				name = u.RealName
+			}
+		}
+		if name == "" {
+			name = mm.UserID
+		}
+	}
+	ts := mm.Timestamp.Format("Jan 2 15:04")
+	var b strings.Builder
+	b.WriteString(name)
+	b.WriteString("  ")
+	b.WriteString(ts)
+	b.WriteString("\n")
+	b.WriteString(mm.Text)
+	b.WriteString("\n")
+	return b.String()
+}
+
 func (m *Model) setChannelHeader() {
 	if m.currentCh == nil {
 		return

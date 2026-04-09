@@ -20,6 +20,7 @@ import (
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/friends"
+	"github.com/rw3iss/slackers/internal/setup"
 	"github.com/rw3iss/slackers/internal/slack"
 	themepkg "github.com/rw3iss/slackers/internal/theme"
 	"github.com/rw3iss/slackers/internal/tui"
@@ -221,28 +222,156 @@ var rootCmd = &cobra.Command{
 }
 
 var setupCmd = &cobra.Command{
-	Use:   "setup",
-	Short: "Run interactive setup wizard",
+	Use:   "setup [json|hash|--client-id X --client-secret Y --app-token Z]",
+	Short: "Run interactive setup wizard, or import/share workspace credentials",
 	Long: `Set up Slackers with your Slack tokens.
 
-Two methods are available:
-  1. Manual  - paste tokens directly (you get them from your Slack app settings)
-  2. OAuth   - authorize via browser (automatically obtains bot + user tokens)
+With no arguments, runs the interactive wizard (manual token entry or OAuth).
 
-The OAuth method still requires an App-Level Token (xapp-...) which must be
-created manually in your Slack app settings under Socket Mode.`,
+With a single positional argument, parses and imports credentials in any of
+the supported formats:
+
+  slackers setup '{"client_id":"...","client_secret":"...","app_token":"..."}'
+  slackers setup <compact-hash>
+
+With --client-id / --client-secret / --app-token / --user-token flags, writes
+those fields directly into the config:
+
+  slackers setup --client-id 123.456 --client-secret deadbeef --app-token xapp-...
+
+To print the current workspace config in a shareable format:
+
+  slackers setup share          # default: compact hash
+  slackers setup share hash     # explicit compact hash
+  slackers setup share json     # full JSON
+
+The shared output includes the import commands teammates can run to
+bootstrap their own clients. The user OAuth token (xoxp-) is intentionally
+omitted from 'setup share' output — only client id / client secret / app
+token are exported.`,
+	DisableFlagParsing: true, // we parse flags ourselves via setup.ParseFlags
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load(config.DefaultConfigPath())
 		if err != nil {
 			cfg, _ = config.Load(config.DefaultConfigPath())
 		}
 
-		if err := runSetupFlow(cfg); err != nil {
-			return err
+		// `slackers setup` with no args → interactive wizard.
+		if len(args) == 0 {
+			return runSetupFlow(cfg)
 		}
 
-		return nil
+		// `slackers setup share [hash|json]`
+		if args[0] == "share" {
+			return runSetupShare(cfg, args[1:])
+		}
+
+		// Otherwise this is an import. Try the three format
+		// paths via internal/setup.ParseAny (JSON, flags, hash).
+		// Joining args back with spaces lets `setup --a 1 --b 2`
+		// and `setup '<hash with no spaces>'` both flow through
+		// the same parser.
+		joined := strings.Join(args, " ")
+		parsed, err := setup.ParseAny(joined)
+		if err != nil {
+			return fmt.Errorf("setup: %w", err)
+		}
+		return runSetupImportCLI(cfg, parsed)
 	},
+}
+
+// runSetupImportCLI applies a parsed setup.Config to the on-disk
+// config file and prints a summary to stdout. Used from
+// `slackers setup <arg>`. When the CLI detects existing
+// credentials we still overwrite — there's no interactive TUI
+// here to prompt y/Enter on, and the user deliberately invoked
+// the import by running the command.
+func runSetupImportCLI(cfg *config.Config, payload setup.Config) error {
+	if payload.IsEmpty() {
+		return fmt.Errorf("setup: payload has no fields")
+	}
+	changed := []string{}
+	if payload.ClientID != "" && cfg.ClientID != payload.ClientID {
+		cfg.ClientID = payload.ClientID
+		changed = append(changed, "client id")
+	}
+	if payload.ClientSecret != "" && cfg.ClientSecret != payload.ClientSecret {
+		cfg.ClientSecret = payload.ClientSecret
+		changed = append(changed, "client secret")
+	}
+	if payload.AppToken != "" && cfg.AppToken != payload.AppToken {
+		cfg.AppToken = payload.AppToken
+		changed = append(changed, "app token")
+	}
+	if payload.UserToken != "" && cfg.UserToken != payload.UserToken {
+		cfg.UserToken = payload.UserToken
+		changed = append(changed, "user token")
+	}
+	if len(changed) == 0 {
+		fmt.Println("setup: every field already matches the current config — nothing to do")
+		return nil
+	}
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("setup: saved in memory but failed to persist: %w", err)
+	}
+	fmt.Printf("setup: updated %s\n", strings.Join(changed, ", "))
+	fmt.Println("restart slackers for Slack services to pick up the new tokens")
+	return nil
+}
+
+// runSetupShare prints the current config in either hash (default)
+// or JSON form with the matching CLI + in-app import commands
+// prefixed so teammates can copy-paste straight in.
+//
+// The user OAuth token (xoxp-) is intentionally excluded from the
+// shared payload — even a leaked hash can only bootstrap a fresh
+// OAuth login, not impersonate the sharer.
+func runSetupShare(cfg *config.Config, args []string) error {
+	format := "hash"
+	if len(args) > 0 {
+		format = strings.ToLower(args[0])
+	}
+	if format != "hash" && format != "json" {
+		return fmt.Errorf("setup share: format must be 'hash' or 'json', got %q", format)
+	}
+	share := setup.Config{
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		AppToken:     cfg.AppToken,
+		// UserToken intentionally omitted.
+	}
+	if share.IsEmpty() {
+		return fmt.Errorf("setup share: no workspace credentials configured yet — run 'slackers setup' first")
+	}
+
+	hash, err := setup.Encode(share)
+	if err != nil {
+		return fmt.Errorf("setup share: encode hash: %w", err)
+	}
+	js, err := share.ToJSON()
+	if err != nil {
+		return fmt.Errorf("setup share: encode json: %w", err)
+	}
+
+	fmt.Println("Run this command to set up slackers with your current workspace.")
+	fmt.Println("Either format will work — the hash is shorter for sharing.")
+	fmt.Println()
+	fmt.Println("  slackers setup '" + js + "'")
+	fmt.Println("  slackers setup " + hash)
+	fmt.Println()
+	fmt.Println("Or from inside a running slackers instance:")
+	fmt.Println()
+	fmt.Println("  /setup " + js)
+	fmt.Println("  /setup " + hash)
+	fmt.Println()
+	if format == "hash" {
+		fmt.Println("Default output (hash):")
+		fmt.Println(hash)
+	} else {
+		fmt.Println("JSON output:")
+		fmt.Println(js)
+	}
+	return nil
 }
 
 var loginCmd = &cobra.Command{

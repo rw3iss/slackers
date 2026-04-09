@@ -35,13 +35,21 @@ func peerIDFromBytes(b []byte) (string, error) {
 	return pid.String(), nil
 }
 
-// CardHashPrefix is the legacy gzip+JSON contact-card encoding.
-// Kept for backward-compatible decoding only — new cards always
-// use the compact CardHashPrefix2 binary format below.
+// CardHashPrefix is the legacy gzip+JSON contact-card encoding
+// prefix. As of this version slackers no longer EMITS either this
+// or CardHashPrefix2 on encode — it's still stripped on decode so
+// old shared strings (e.g. cards copied into someone's clipboard
+// months ago, or baked into Slack DM invite messages) continue to
+// round-trip. New cards are bare base64url of the current binary
+// layout with no prefix at all.
 const CardHashPrefix = "SLF1."
 
-// CardHashPrefix2 is the current compact binary contact-card format.
-// Layout (after stripping the prefix and base64url-decoding):
+// CardHashPrefix2 is the legacy compact binary contact-card
+// prefix. See CardHashPrefix above — kept only for decode-time
+// backwards compatibility.
+//
+// The current encoding layout (unchanged from SLF2 apart from the
+// dropped prefix) is:
 //
 //	[1] version (currently 2)
 //	[32] X25519 public key, raw
@@ -60,14 +68,18 @@ const CardHashPrefix2 = "SLF2."
 // SLF2 payload so future format revisions can be detected on decode.
 const compactCardSchemaVersion byte = 2
 
-// EncodeContactCard returns the compact SLF2 encoding for a contact
-// card. Only the fields needed to actually establish a connection are
-// included (X25519 public key, libp2p peer ID, IPv4, port). Display
-// name, email, and slacker_id are dropped — the friend's slacker
-// instance fills in a placeholder name from the peer ID and replaces
-// it once the first message arrives.
+// EncodeContactCard returns the compact contact-card hash. Only the
+// fields needed to establish a connection are included (X25519
+// public key, libp2p peer ID, IPv4, port). Display name, email,
+// and slacker_id are dropped — the friend's slacker instance fills
+// in a placeholder name from the peer ID and replaces it once the
+// first message arrives.
 //
-// Format: "SLF2." + base64url(<binary blob>) — typically ~109 chars.
+// The output is bare `base64url(<binary blob>)` — typically ~105
+// chars, with no version prefix. Decoders detect the format by
+// attempting the base64url + binary layout parse; they also strip
+// a legacy SLF1./SLF2. prefix if someone pastes an old shared
+// string into Add a Friend or /add-friend.
 func EncodeContactCard(card ContactCard) (string, error) {
 	pub, err := base64.StdEncoding.DecodeString(card.PublicKey)
 	if err != nil {
@@ -95,23 +107,40 @@ func EncodeContactCard(card ContactCard) (string, error) {
 	binary.BigEndian.PutUint16(portBytes[:], uint16(port))
 	buf.Write(portBytes[:])
 
-	return CardHashPrefix2 + base64.RawURLEncoding.EncodeToString(buf.Bytes()), nil
+	return base64.RawURLEncoding.EncodeToString(buf.Bytes()), nil
 }
 
 // DecodeContactCard parses any supported hash format back into a
-// ContactCard. Tries the compact SLF2 binary format first, then
-// falls back to the legacy SLF1 (gzip+JSON) form for older hashes
-// floating around in clipboards / saved files.
+// ContactCard. The primary path is the bare compact binary layout
+// (base64url → schema-versioned binary). Legacy `SLF2.` and `SLF1.`
+// prefixes are stripped transparently so cards shared before the
+// prefix was dropped still round-trip cleanly. If the compact
+// parse fails, the legacy gzip+JSON form is tried as a second
+// fallback.
 func DecodeContactCard(s string) (ContactCard, error) {
-	var card ContactCard
 	s = strings.TrimSpace(s)
-	switch {
-	case strings.HasPrefix(s, CardHashPrefix2):
-		return decodeCompactCard(strings.TrimPrefix(s, CardHashPrefix2))
-	case strings.HasPrefix(s, CardHashPrefix):
-		return decodeLegacyCard(strings.TrimPrefix(s, CardHashPrefix))
+	// Strip any legacy prefixes. Current encoder emits neither,
+	// but accepting them here keeps older shared strings valid.
+	trimmed := s
+	if p := strings.TrimPrefix(trimmed, CardHashPrefix2); p != trimmed {
+		return decodeCompactCard(p)
 	}
-	return card, fmt.Errorf("not a contact card hash (no recognized prefix)")
+	if p := strings.TrimPrefix(trimmed, CardHashPrefix); p != trimmed {
+		// SLF1 was always the legacy gzip+JSON form.
+		if card, err := decodeLegacyCard(p); err == nil {
+			return card, nil
+		}
+	}
+	// No recognised prefix — assume it's the current bare format.
+	if card, err := decodeCompactCard(s); err == nil {
+		return card, nil
+	}
+	// Last-ditch fallback: maybe it's a legacy gzip+JSON blob
+	// someone stripped the prefix from.
+	if card, err := decodeLegacyCard(s); err == nil {
+		return card, nil
+	}
+	return ContactCard{}, fmt.Errorf("not a valid contact card hash")
 }
 
 // decodeCompactCard parses the SLF2 binary payload (without prefix)
@@ -252,14 +281,18 @@ func shortID(peerID string) string {
 }
 
 // ParseAnyContactCard accepts either a raw JSON contact card or a
-// hash-encoded one (CardHashPrefix-prefixed string) and returns the
-// resulting ContactCard. Used by the Add Friend paste handler and the
-// CLI import-friend command so a single function can route both
-// input formats.
+// hash-encoded one and returns the resulting ContactCard. Used by
+// the Add Friend paste handler and the CLI import-friend command so
+// a single function can route both input formats.
+//
+// Detection order:
+//  1. Leading "{" → JSON unmarshal.
+//  2. Anything else → DecodeContactCard (which handles bare hash,
+//     legacy SLF2./SLF1. prefixes, and the old gzip+JSON fallback).
 func ParseAnyContactCard(input string) (ContactCard, error) {
 	trimmed := strings.TrimSpace(input)
-	if strings.HasPrefix(trimmed, CardHashPrefix2) || strings.HasPrefix(trimmed, CardHashPrefix) {
-		return DecodeContactCard(trimmed)
+	if trimmed == "" {
+		return ContactCard{}, fmt.Errorf("empty contact card input")
 	}
 	if strings.HasPrefix(trimmed, "{") {
 		var card ContactCard
@@ -268,5 +301,5 @@ func ParseAnyContactCard(input string) (ContactCard, error) {
 		}
 		return card, nil
 	}
-	return ContactCard{}, fmt.Errorf("input is neither JSON nor a contact hash")
+	return DecodeContactCard(trimmed)
 }

@@ -18,6 +18,7 @@ const (
 	MsgActionReply
 	MsgActionEdit
 	MsgActionDelete
+	MsgActionCopy
 )
 
 // MsgOptionsSelectMsg signals which option the user chose.
@@ -60,8 +61,15 @@ func NewMsgOptions(messageID, preview string, x, y, minX int, allowAuthorActions
 	if allowAuthorActions {
 		items = append(items,
 			msgOptionsItem{"Edit", MsgActionEdit},
-			msgOptionsItem{"Delete", MsgActionDelete},
 		)
+	}
+	// Copy Message is available regardless of author — any user
+	// can quote or archive any message they can see. Placed
+	// after Edit (when visible) so the author-only actions
+	// cluster together at the top.
+	items = append(items, msgOptionsItem{"Copy Message", MsgActionCopy})
+	if allowAuthorActions {
+		items = append(items, msgOptionsItem{"Delete", MsgActionDelete})
 	}
 	return MsgOptionsModel{
 		messageID: messageID,

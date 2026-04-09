@@ -121,13 +121,51 @@ const (
 	StatusInfo                      // informational — like OK but visually muted
 )
 
+// Section is a single structured output block returned by a
+// command. The host (TUI) maps each Section to a selectable item
+// in the Output view, so commands with multiple discrete "things
+// the user might want to copy" (command lines, friend cards, file
+// paths, etc.) can return them as separate Sections instead of a
+// single concatenated Body string.
+//
+// Sections can contain embedded code snippets via standard
+// markdown-ish delimiters:
+//
+//	`inline code`
+//	```
+//	fenced block
+//	```
+//
+// The host parses those out at render time and makes each one a
+// sub-selectable item inside the Section, so the user can
+// right-arrow into the snippet sub-list and copy an individual
+// snippet without having to copy the whole Section.
+type Section struct {
+	// Text is the rendered paragraph shown in the Output view.
+	// May span multiple lines. Embedded code snippets (either
+	// inline with single backticks or fenced with triple
+	// backticks) are parsed by the host and rendered in the
+	// code-snippet style. The full Text is the fallback "copy
+	// this item" payload when no sub-snippet is selected.
+	Text string
+	// Title is an optional bold header rendered above Text.
+	// Empty means no header.
+	Title string
+	// Selectable, when false, renders the section as plain
+	// informational text the user cannot cursor to. Defaults
+	// to true.
+	Selectable bool
+}
+
 // Result is the value a command returns to its caller.
 //
 // All fields are optional; an empty Result is treated as a silent
 // success. Title + Body, when non-empty, open the Output view
-// with that content. StatusBar populates the bottom-of-screen
-// warning slot. Cmd is a follow-up tea.Cmd that the host should
-// run after handling the rest of the result (e.g. dispatching a
+// with that content. Sections, when non-empty, takes precedence
+// over Body and renders the output as a sequence of selectable
+// items. StatusBar populates the bottom-of-screen warning slot.
+// Cmd is a follow-up tea.Cmd that the host should run after
+// handling the rest of the result (e.g. dispatching a
 // FriendsConfigOpenMsg or starting a download).
 //
 // FocusOutput is an opt-in. The default UX after running a
@@ -143,6 +181,7 @@ type Result struct {
 	Status      ResultStatus
 	Title       string
 	Body        string
+	Sections    []Section
 	StatusBar   string
 	FocusOutput bool
 	// Cmd is a tea.Cmd-shaped follow-up represented here as an

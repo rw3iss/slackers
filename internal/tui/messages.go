@@ -42,6 +42,17 @@ type DeleteMessageRequestMsg struct {
 	MessageID string
 }
 
+// MessageCopyRequestMsg is sent when the user requests to copy a
+// single message to the clipboard. The model resolves the message
+// by ID and writes a simple "UserName  Timestamp\nText" block via
+// the shared copyToClipboard helper. Only the initial message is
+// copied — replies and reactions are intentionally omitted so that
+// selecting multiple messages and copying each produces a clean
+// contiguous block.
+type MessageCopyRequestMsg struct {
+	MessageID string
+}
+
 // EditMessageRequestMsg is sent when the user requests to edit a message.
 // The model verifies authorship and pre-fills the input with the message
 // text wrapped in [EDIT:id] syntax.
@@ -1974,12 +1985,15 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				}
 				return m, nil
 			case "c":
-				// 'c' has two distinct meanings depending on
-				// what's selected:
-				//   - card: Copy Contact Info (JSON to clipboard)
-				//   - file: copy file contents to clipboard via
+				// 'c' has three meanings depending on what's
+				// selected inside the current message:
+				//   - card selected → Copy Contact Info
+				//   - file selected → copy file contents via
 				//     the existing FileCopyRequestMsg flow
-				// Falls through to no-op when neither.
+				//   - nothing selected → copy the parent
+				//     message itself (author + timestamp +
+				//     text, no replies/reactions) via
+				//     MessageCopyRequestMsg
 				if card := m.SelectedContactCard(); card != nil {
 					c := *card
 					m.reactMode = false
@@ -2001,7 +2015,17 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 						return FileCopyRequestMsg{File: f}
 					}
 				}
-				return m, nil
+				// Fall back to copying the whole message.
+				msgID := m.SelectedReplyMessageID()
+				if msgID == "" {
+					msgID = m.SelectedMessageID()
+				}
+				if msgID == "" {
+					return m, nil
+				}
+				return m, func() tea.Msg {
+					return MessageCopyRequestMsg{MessageID: msgID}
+				}
 			case "esc":
 				// Esc unwinds: reply-reaction → reply → reactionSelIdx → exit react mode.
 				if onReplyList && m.replyReactionSelIdx >= 0 {
@@ -2414,7 +2438,9 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				if hasInlineReplies {
 					replyDownHint = "  ↓: into replies"
 				}
-				hint = " [Enter: reply  r: react" + authorHint + navHint + replyDownHint + "]"
+				// Copy is always available on a selected message
+				// (any user can copy any message they can see).
+				hint = " [Enter: reply  r: react" + authorHint + "  c: copy" + navHint + replyDownHint + "]"
 			}
 			headerLine = selectHighlight.Render(headerLine + hint)
 		}

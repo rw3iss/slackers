@@ -1,5 +1,53 @@
 # Setup
 
+## Workspace credential sharing (`setup share` / `setup <arg>`)
+
+If your team already has a working slackers instance somewhere,
+you can pipe their credentials directly into your own copy:
+
+```bash
+# On the teammate's machine
+slackers setup share          # default: hash form
+slackers setup share json     # explicit JSON form
+```
+
+That prints an intro blurb followed by two ready-to-run import
+commands in both JSON and hash formats. They'll look like:
+
+```bash
+slackers setup '{"client_id":"...","client_secret":"...","app_token":"xapp-..."}'
+slackers setup H4sIAAAAAAAA_...
+```
+
+**The user OAuth token (`xoxp-`) is intentionally excluded from
+shared output.** Even a leaked setup hash can only be used to
+bootstrap a fresh OAuth login via `slackers login`, not to
+impersonate the sharer.
+
+You can also run `/setup share` from inside a running slackers
+instance — the output opens in the Output view with each command
+rendered as a selectable code-snippet sub-item so you can press
+right-arrow to select the snippet and `c` to copy it to the
+clipboard.
+
+Import supports three input formats, auto-detected:
+
+```bash
+# 1. JSON
+slackers setup '{"client_id":"...","client_secret":"..."}'
+
+# 2. Hash (compact single-line)
+slackers setup H4sIAAAAAAAA_...
+
+# 3. Flags
+slackers setup --client-id X --client-secret Y --app-token xapp-...
+```
+
+The same three forms work inside a running client via the
+`/setup <arg>` command. If your existing config already has
+Slack credentials, the import flow prompts for confirmation
+before overwriting.
+
 ## First-time login
 
 Get a Client ID, Client Secret, and App-Level Token from your team's

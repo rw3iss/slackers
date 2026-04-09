@@ -22,6 +22,7 @@ import (
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/notifications"
 	"github.com/rw3iss/slackers/internal/secure"
+	"github.com/rw3iss/slackers/internal/setup"
 	"github.com/rw3iss/slackers/internal/shortcuts"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
 	"github.com/rw3iss/slackers/internal/theme"
@@ -297,6 +298,15 @@ type Model struct {
 	// history for that friend and refreshes the message view.
 	// Used by /clear-history.
 	pendingClearFriendHistoryID string
+
+	// Pending setup import confirmation. When non-nil, the next
+	// y/Enter writes the staged credentials into m.cfg and
+	// persists; any other key cancels. Used by both the CLI
+	// `slackers setup <arg>` (only when running inside the TUI)
+	// and the internal `/setup <arg>` command so an incoming
+	// setup hash/JSON/flags payload always gets a "replace
+	// existing credentials?" prompt before clobbering.
+	pendingSetupImport *setup.Config
 
 	// Pending copy-to-clipboard confirmation for a large file. When
 	// non-nil, the next y/Enter kicks off the actual copy; any other
@@ -878,6 +888,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.pendingClearFriendHistoryID = ""
 			m.warning = "Clear history cancelled"
+			return m, nil
+		}
+
+		// Pending setup import confirmation.
+		if m.pendingSetupImport != nil {
+			s := msg.String()
+			if s == "y" || s == "Y" || s == "enter" {
+				cfg := *m.pendingSetupImport
+				m.pendingSetupImport = nil
+				return m, m.applySetupConfig(cfg)
+			}
+			m.pendingSetupImport = nil
+			m.warning = "Setup import cancelled"
 			return m, nil
 		}
 
@@ -2561,6 +2584,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return EditMessageRequestMsg{MessageID: msg.MessageID}
 			}
+		case MsgActionCopy:
+			return m, func() tea.Msg {
+				return MessageCopyRequestMsg{MessageID: msg.MessageID}
+			}
 		case MsgActionDelete:
 			m.requestMessageDelete(msg.MessageID)
 		}
@@ -2773,6 +2800,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.outputActive = false
 		return m, nil
 
+	case outputCopiedMsg:
+		// Forwarded from OutputViewModel when the user hits 'c'
+		// on a selected item or snippet. Surface the feedback
+		// in the status bar so the copy action has a visible
+		// result.
+		m.warning = msg.msg
+		return m, nil
+
 	case openSettingsMsg:
 		m.settings = NewSettingsModel(m.cfg, m.version)
 		m.settings.SetSize(m.width, m.height)
@@ -2804,6 +2839,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DeleteMessageRequestMsg:
 		m.requestMessageDelete(msg.MessageID)
+		return m, nil
+
+	case MessageCopyRequestMsg:
+		mm := m.messages.MessageByID(msg.MessageID)
+		if mm == nil {
+			m.warning = "Message not found"
+			return m, nil
+		}
+		text := formatMessageForCopy(*mm, m.users)
+		if copyToClipboard(text) {
+			m.warning = "Message copied to clipboard"
+		} else {
+			m.warning = "Copy failed: no clipboard tool found"
+		}
 		return m, nil
 
 	case EditMessageRequestMsg:

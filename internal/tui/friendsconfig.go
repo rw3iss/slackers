@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/friends"
+	"github.com/rw3iss/slackers/internal/setup"
 )
 
 // FriendsConfigOpenMsg signals that the friends config overlay should open.
@@ -820,6 +821,18 @@ func shareInfoOptions() []shareInfoOption {
 			getValue: func(m *FriendsConfigModel) string { return m.contactCmdHash },
 		},
 		{
+			label: "Copy Workspace Setup (JSON)",
+			desc: "Share your workspace credentials (client id, client secret, app token) as JSON. " +
+				"Teammates can paste it into 'slackers setup <json>' or '/setup <json>'. Does NOT include your user OAuth token.",
+			getValue: func(m *FriendsConfigModel) string { return buildSetupShareJSON(m.cfg) },
+		},
+		{
+			label: "Copy Workspace Setup (Hash)",
+			desc: "Same as Workspace Setup (JSON) but as a compact single-line hash. Easier to paste into chat. " +
+				"Fully decodable by any slackers client — NOT encrypted. User OAuth token is excluded.",
+			getValue: func(m *FriendsConfigModel) string { return buildSetupShareHash(m.cfg) },
+		},
+		{
 			label:    "Copy Public Key",
 			desc:     "Just your X25519 public key. Useful for manually updating a friend's key field if it has drifted.",
 			getValue: func(m *FriendsConfigModel) string { return m.myPublicKey },
@@ -885,6 +898,55 @@ func (m FriendsConfigModel) handleShareInfoKey(msg tea.KeyMsg) (FriendsConfigMod
 		return m, m.setStatusMessage(opt.label+": could not copy", 0)
 	}
 	return m, nil
+}
+
+// buildSetupShareJSON returns a single-line JSON encoding of the
+// workspace setup credentials (client id / client secret / app
+// token). User OAuth token is intentionally excluded — sharing
+// xoxp- tokens would let recipients impersonate the sharer.
+//
+// Returns an empty string when no credentials are configured, so
+// the caller can surface "value unavailable" via the standard
+// shareInfoOption flow.
+func buildSetupShareJSON(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	share := setup.Config{
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		AppToken:     cfg.AppToken,
+	}
+	if share.IsEmpty() {
+		return ""
+	}
+	js, err := share.ToJSON()
+	if err != nil {
+		return ""
+	}
+	return js
+}
+
+// buildSetupShareHash returns the compact base64url(gzip(json))
+// encoding of the same fields. Same security caveats as the JSON
+// variant — the hash is obfuscated, not encrypted.
+func buildSetupShareHash(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	share := setup.Config{
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		AppToken:     cfg.AppToken,
+	}
+	if share.IsEmpty() {
+		return ""
+	}
+	hash, err := setup.Encode(share)
+	if err != nil {
+		return ""
+	}
+	return hash
 }
 
 // exportContactCardToDownloads writes the contact card JSON to a file in
