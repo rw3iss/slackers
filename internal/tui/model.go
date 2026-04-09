@@ -279,6 +279,15 @@ type Model struct {
 	// messages pane.
 	outputActive bool
 
+	// themeNameCache caches theme.LoadAll() output so arg-
+	// completion for /theme and /share theme doesn't hit disk
+	// on every keystroke. Populated lazily on first lookup;
+	// themes don't change mid-session so a process-lifetime
+	// cache is safe. Commands that create/delete themes (the
+	// theme picker's import / clone / delete path) set this
+	// back to nil to force a fresh reload.
+	themeNameCache []argCandidate
+
 	// Reactions
 	reactMsgID string // message ID for pending reaction
 
@@ -1637,6 +1646,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			//               the popup is showing all commands, and
 			//               results in "Unknown command: /".
 			//
+			// When the input starts with "/" (a slash command in
+			// progress), Up and Down must NEVER fall through to
+			// the textarea's input history navigation — that
+			// would silently scroll over the user's typed
+			// command. If the suggestion popup is visible, the
+			// arrow keys navigate it; if it's not, they're a
+			// no-op. Either way, swallow the keystroke.
+			isSlash := strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/")
+			if isSlash && m.cmdRegistry != nil {
+				switch msg.String() {
+				case "up":
+					if m.cmdSuggest.Visible() {
+						m.cmdSuggest.Move(-1)
+					}
+					return m, nil
+				case "down":
+					if m.cmdSuggest.Visible() {
+						m.cmdSuggest.Move(1)
+					}
+					return m, nil
+				}
+			}
 			// Esc dismisses the popup but leaves the input alone.
 			if m.cmdRegistry != nil && m.cmdSuggest.Visible() {
 				switch msg.String() {

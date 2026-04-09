@@ -52,6 +52,12 @@ func (m *Model) argCompletionsForKind(kind commands.ArgKind) []argCandidate {
 		return out
 
 	case commands.ArgThemeName:
+		// Lazy cache — theme.LoadAll hits disk for user themes,
+		// and the user types one character at a time, so caching
+		// shaves measurable latency off the popup refresh.
+		if m.themeNameCache != nil {
+			return m.themeNameCache
+		}
 		all := theme.LoadAll()
 		out := make([]argCandidate, 0, len(all))
 		for _, t := range all {
@@ -64,6 +70,7 @@ func (m *Model) argCompletionsForKind(kind commands.ArgKind) []argCandidate {
 				Description: desc,
 			})
 		}
+		m.themeNameCache = out
 		return out
 
 	case commands.ArgFriendID:
@@ -112,6 +119,55 @@ func (m *Model) argCompletionsForKind(kind commands.ArgKind) []argCandidate {
 		return out
 	}
 	return nil
+}
+
+// argCompletionsForContext returns the candidate pool for the
+// NEXT argument of the given command, given the tokens typed so
+// far. This is the context-aware extension point used by
+// refreshCmdSuggest: it knows that /share's second argument
+// depends on the first-arg value (friend → friend list,
+// theme → theme list, me → nothing).
+//
+// Commands whose arg kinds don't depend on earlier values fall
+// through to the simpler per-index ArgSpec.Kind lookup.
+func (m *Model) argCompletionsForContext(cmdName string, priorArgs []string) []argCandidate {
+	cmd := m.cmdRegistry.Get(cmdName)
+	if cmd == nil {
+		return nil
+	}
+	argIdx := len(priorArgs)
+
+	// Special-case /share: first arg is a subcommand enum, and
+	// the second arg's type depends on which subcommand was
+	// chosen. All the routing lives on the shareTargets
+	// registry defined in commands_basic.go so adding a new
+	// subcommand is a one-line change there.
+	if cmdName == "share" {
+		if argIdx == 0 {
+			out := make([]argCandidate, 0, len(shareTargets))
+			for _, t := range shareTargets {
+				out = append(out, argCandidate{
+					Name:        t.name,
+					Description: t.description,
+				})
+			}
+			return out
+		}
+		if argIdx == 1 && len(priorArgs) > 0 {
+			t := findShareTarget(priorArgs[0])
+			if t == nil || !t.needsArg {
+				return nil
+			}
+			return m.argCompletionsForKind(t.secondArgKind)
+		}
+		return nil
+	}
+
+	// Generic path — look up ArgSpec[argIdx].Kind.
+	if argIdx >= len(cmd.Args) {
+		return nil
+	}
+	return m.argCompletionsForKind(cmd.Args[argIdx].Kind)
 }
 
 // rankArgCandidates fuzzy-scores the candidate pool against the

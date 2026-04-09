@@ -404,6 +404,67 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 	// ---- Diagnostics -----------------------------------------------
 
 	register(commands.Command{
+		Name:        "share",
+		Description: "Share your contact card, setup, a friend's card, or a theme in the current chat",
+		Usage:       "/share <me|profile|setup|friend <id|name>|theme <name>>",
+		Args: []commands.ArgSpec{
+			{Name: "target", Help: "one of: me, profile, setup, friend, theme"},
+			{Name: "value", Optional: true, Help: "second-arg value for friend / theme subcommands"},
+		},
+		Run: func(ctx *commands.Context) commands.Result {
+			if len(ctx.Args) == 0 {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "Usage: /share <me|profile|setup|friend <name>|theme <name>>",
+				}
+			}
+			target := findShareTarget(ctx.Args[0])
+			if target == nil {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "Unknown /share target: " + ctx.Args[0] + " (try me, profile, setup, friend, theme)",
+				}
+			}
+			if target.needsArg && len(ctx.Args) < 2 {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "/share " + target.name + " requires a second argument (e.g. /share " + target.name + " <name>)",
+				}
+			}
+			if m.currentCh == nil {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "No channel selected — nothing to share into",
+				}
+			}
+			// Build the message body for the selected target.
+			body, err := m.buildShareBody(*target, ctx.Args)
+			if err != nil {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "Share failed: " + err.Error(),
+				}
+			}
+			if body == "" {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "Share produced no content — nothing to send",
+				}
+			}
+			// Dispatch through the normal send path so all the
+			// existing routing (friend vs slack, marker expansion,
+			// file extraction, etc.) runs unchanged.
+			return commands.Result{
+				Status:    commands.StatusOK,
+				StatusBar: "Shared " + target.name + " in " + m.currentCh.Name,
+				Cmd: func() tea.Msg {
+					return InputSendMsg{Text: body}
+				},
+			}
+		},
+	})
+
+	register(commands.Command{
 		Name:        "setup",
 		Description: "Import or share workspace credentials",
 		Usage:       "/setup <json|hash|--flags> · /setup share [hash|json]",
@@ -499,6 +560,67 @@ func mask(s string) string {
 // path Ctrl-S takes.
 type openSettingsMsg struct{}
 
+// shareTarget describes one valid first-argument to the /share
+// command. Kept at package scope so both the dispatcher and the
+// argument-completion popup pull from the same source of truth,
+// and adding a new share target is a one-line change here.
+type shareTarget struct {
+	name        string
+	description string
+	// needsArg, when true, means the target requires a second
+	// positional argument (friend id, theme name, etc.) and the
+	// dispatcher should error on a missing second arg.
+	needsArg bool
+	// secondArgKind, when needsArg is true, is used by the
+	// context-aware arg completion popup to fetch the second-
+	// level pool (friend list, theme list, …).
+	secondArgKind commands.ArgKind
+}
+
+// shareTargets is the ordered list of /share subcommands. The
+// order is the default popup order when the user types "/share "
+// with no partial. Add new entries here to expose them in both
+// the command dispatcher and the suggestion popup in one step.
+var shareTargets = []shareTarget{
+	{
+		name:        "me",
+		description: "Share your own contact card in the current chat",
+	},
+	{
+		name:        "profile",
+		description: "Alias for /share me",
+	},
+	{
+		name:        "setup",
+		description: "Share your workspace setup credentials (no user token)",
+	},
+	{
+		name:          "friend",
+		description:   "Share a friend's contact card — needs a friend id/name",
+		needsArg:      true,
+		secondArgKind: commands.ArgFriendID,
+	},
+	{
+		name:          "theme",
+		description:   "Share a theme's JSON in the current chat — needs a theme name",
+		needsArg:      true,
+		secondArgKind: commands.ArgThemeName,
+	},
+}
+
+// findShareTarget returns the shareTarget matching the given
+// name (case-insensitive), or nil if the name isn't a known
+// subcommand.
+func findShareTarget(name string) *shareTarget {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for i := range shareTargets {
+		if shareTargets[i].name == name {
+			return &shareTargets[i]
+		}
+	}
+	return nil
+}
+
 // applyCommandResult turns a commands.Result into the right side
 // effects on the model: open the Output view if a Body is set,
 // surface the StatusBar message, and dispatch the follow-up
@@ -560,9 +682,11 @@ func (m *Model) applyCommandResult(res commands.Result) tea.Cmd {
 //  1. Input doesn't start with "/" → hide popup.
 //  2. Input is "/cmd" with no space yet → command mode (fuzzy
 //     match against the registry).
-//  3. Input is "/cmd <partial>" with at least one space and a
-//     known command → arg mode (fuzzy match against the
-//     completion source for the command's first ArgSpec.Kind).
+//  3. Input is "/cmd <prior args…> <partial>" → arg mode. Prior
+//     args are parsed out of the input and passed to
+//     argCompletionsForContext so commands like /share whose
+//     second-arg type depends on the first-arg value can
+//     dispatch the right candidate pool.
 //
 // Uses the raw (non-trimmed) input value for space-boundary
 // detection so "/theme " (trailing space) enters arg mode even
@@ -574,41 +698,39 @@ func (m *Model) refreshCmdSuggest() {
 		m.cmdSuggest.Hide()
 		return
 	}
-	rest := strings.TrimPrefix(trimmed, "/")
-	// Find the first whitespace in the trimmed input to decide
-	// whether the command name is still being typed. Use the
-	// raw input to detect a trailing space (user just hit space
-	// after the command name, hasn't typed the arg yet).
-	rawRest := strings.TrimPrefix(strings.TrimLeft(raw, " \t"), "/")
-	spaceIdx := strings.IndexAny(rest, " \t")
-	rawSpaceIdx := strings.IndexAny(rawRest, " \t")
-	if spaceIdx < 0 && rawSpaceIdx < 0 {
+	// Use the raw (not-trimmed) input for space boundary
+	// detection so a trailing space enters arg mode with an
+	// empty partial, showing the full pool.
+	rawBody := strings.TrimPrefix(strings.TrimLeft(raw, " \t"), "/")
+	spaceIdx := strings.IndexAny(rawBody, " \t")
+	if spaceIdx < 0 {
 		// Command mode — no space yet.
 		matches := m.cmdRegistry.Lookup(trimmed, 8)
 		m.cmdSuggest.SetMatches(matches)
 		m.cmdSuggest.SetWidth(m.width - 2)
 		return
 	}
-	// Arg mode. Parse out the command name and the partial arg.
-	var name, partial string
-	if rawSpaceIdx >= 0 {
-		name = rawRest[:rawSpaceIdx]
-		partial = strings.TrimLeft(rawRest[rawSpaceIdx+1:], " \t")
+
+	// Arg mode. Split the body into (cmdName, rest-after-name).
+	name := rawBody[:spaceIdx]
+	rest := rawBody[spaceIdx+1:]
+
+	// Tokenize prior args (everything except the final in-
+	// progress token). The final token may be empty (trailing
+	// space → user just hit space, no partial yet).
+	var priorArgs []string
+	var partial string
+	if lastSpace := strings.LastIndexAny(rest, " \t"); lastSpace >= 0 {
+		// Split on every whitespace run before the final one.
+		head := rest[:lastSpace]
+		priorArgs = strings.Fields(head)
+		partial = rest[lastSpace+1:]
 	} else {
-		name = rest
+		// Exactly one arg so far — the current in-progress one.
+		partial = rest
 	}
-	cmd := m.cmdRegistry.Get(name)
-	if cmd == nil || len(cmd.Args) == 0 {
-		m.cmdSuggest.Hide()
-		return
-	}
-	// Drop any preceding already-typed args — we only complete
-	// the CURRENT token (the one the user is still typing),
-	// which is whatever comes after the last whitespace.
-	if lastSpace := strings.LastIndexAny(partial, " \t"); lastSpace >= 0 {
-		partial = partial[lastSpace+1:]
-	}
-	pool := m.argCompletionsForKind(cmd.Args[0].Kind)
+
+	pool := m.argCompletionsForContext(name, priorArgs)
 	if len(pool) == 0 {
 		m.cmdSuggest.Hide()
 		return
@@ -618,13 +740,101 @@ func (m *Model) refreshCmdSuggest() {
 		m.cmdSuggest.Hide()
 		return
 	}
-	// The prefix inserted on Tab-complete is "/cmd " (or
-	// "/cmd <earlier args> ") so the completion replaces only
-	// the last token. Reconstruct from the input bar value
-	// minus the current partial.
-	prefix := "/" + name + " "
+	// Prefix prepended on Tab-complete is everything up to
+	// (and including) the final whitespace. The completion
+	// replaces only the partial token at the end.
+	var prefix string
+	if idx := strings.LastIndexAny(raw, " \t"); idx >= 0 {
+		prefix = raw[:idx+1]
+	} else {
+		prefix = "/" + name + " "
+	}
 	m.cmdSuggest.SetArgMatches(ranked, prefix)
 	m.cmdSuggest.SetWidth(m.width - 2)
+}
+
+// buildShareBody constructs the chat message body for one /share
+// invocation. Returns ("", err) if the target is recognised but
+// the payload can't be built (e.g. friend not found, theme not
+// found, setup credentials missing).
+//
+// All output flows through InputSendMsg so the existing send
+// pipeline (friend vs slack, expandFriendMarkers, file parsing)
+// runs unchanged. In particular, [FRIEND:me] and [FRIEND:<id>]
+// markers are expanded by the send path, not by this function.
+func (m *Model) buildShareBody(target shareTarget, args []string) (string, error) {
+	switch target.name {
+	case "me", "profile":
+		// Send the local user's contact card marker — the
+		// existing expandFriendMarkers pass in InputSendMsg
+		// replaces it with the JSON or SLF2 hash based on
+		// ShareMyInfoFormat.
+		return "[FRIEND:me]", nil
+
+	case "setup":
+		// Export client_id / client_secret / app_token (no
+		// user token) as a compact hash and wrap it in a
+		// prefixed command line so the recipient sees what to
+		// do with it.
+		if m.cfg == nil {
+			return "", fmt.Errorf("no config loaded")
+		}
+		share := setup.Config{
+			ClientID:     m.cfg.ClientID,
+			ClientSecret: m.cfg.ClientSecret,
+			AppToken:     m.cfg.AppToken,
+		}
+		if share.IsEmpty() {
+			return "", fmt.Errorf("no workspace credentials configured yet — run /setup first")
+		}
+		hash, err := setup.Encode(share)
+		if err != nil {
+			return "", fmt.Errorf("encode hash: %w", err)
+		}
+		return "To set up the same workspace, run:\n`slackers setup " + hash + "`", nil
+
+	case "friend":
+		// Look up the friend by the provided second arg and
+		// emit a [FRIEND:<userID>] marker. expandFriendMarkers
+		// in the send path resolves it to the friend's
+		// contact card hash/JSON.
+		if m.friendStore == nil {
+			return "", fmt.Errorf("friend store not available")
+		}
+		needle := strings.ToLower(strings.TrimSpace(args[1]))
+		var match *friends.Friend
+		for _, f := range m.friendStore.All() {
+			if strings.ToLower(f.UserID) == needle ||
+				strings.ToLower(f.SlackerID) == needle ||
+				strings.ToLower(f.Name) == needle ||
+				strings.ToLower(f.Email) == needle {
+				f := f
+				match = &f
+				break
+			}
+		}
+		if match == nil {
+			return "", fmt.Errorf("no friend matched: %s", args[1])
+		}
+		// Reference the friend by UserID so expandFriendMarkers
+		// finds them in the store.
+		return "[FRIEND:" + match.UserID + "]", nil
+
+	case "theme":
+		// Export the named theme's JSON as a code block so the
+		// recipient can paste it into their own themes dir.
+		name := strings.TrimSpace(args[1])
+		t, ok := theme.FindByName(name)
+		if !ok {
+			return "", fmt.Errorf("theme not found: %s", name)
+		}
+		raw, err := json.MarshalIndent(t, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("marshal theme: %w", err)
+		}
+		return "Here's the `" + t.Name + "` theme:\n```\n" + string(raw) + "\n```", nil
+	}
+	return "", fmt.Errorf("unhandled share target: %s", target.name)
 }
 
 // buildSetupShareResult constructs the output for `/setup share`.

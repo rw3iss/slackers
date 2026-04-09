@@ -42,6 +42,49 @@ above the input showing the top fuzzy matches.
   press right-arrow to select a snippet, `c` to copy it. The
   user OAuth token (`xoxp-`) is excluded from shared output.
 
+### Sharing (sends directly to the current chat)
+
+- `/share me` / `/share profile` — send your own contact card
+  (a `[FRIEND:me]` marker, expanded to JSON or SLF2 hash by
+  the send pipeline based on Share Format)
+- `/share setup` — send your workspace setup credentials as a
+  one-line `slackers setup <hash>` snippet (no user token)
+- `/share friend <name|id>` — send a specific friend's contact
+  card (resolved by display name, email, user id, or slacker id)
+- `/share theme <name>` — send a theme's JSON in a code block
+
+If the target is missing or invalid (or requires a second arg
+that wasn't supplied), `/share` surfaces an error in the status
+bar and does **not** send anything.
+
+## Intellisense / argument look-ahead
+
+When you type a slash command and then a space, the suggestion
+popup switches from command completion to argument completion.
+It knows which arg the command expects based on the command's
+declared `ArgSpec.Kind`:
+
+| Arg kind | Pool |
+|---|---|
+| help topic | the 9 embedded help topics |
+| theme name | every installed theme (cached so typing is instant) |
+| friend id | your friend list with online/offline status |
+| channel id | every channel + friend chat |
+| share target | me, profile, setup, friend, theme |
+
+Some commands have **context-aware** second args — `/share
+friend <name>` pulls the friend list for its second slot,
+`/share theme <name>` pulls the theme list. Typing the first arg
+then a space automatically switches the popup to the right
+pool for the NEXT slot.
+
+**Up / Down arrow** keys navigate the popup whenever the input
+starts with `/`, without ever falling through to the input
+history scroll. **Tab** completes the highlighted suggestion
+into the input bar, replacing only the current partial token
+so earlier args stay intact. **Enter** runs the command with
+the selected completion applied.
+
 ### Friends & P2P
 
 - `/friends` — list friends in the Output view
