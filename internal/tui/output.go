@@ -71,6 +71,13 @@ type outputItem struct {
 	// happens at render time by re-running the regex, so we
 	// don't need to track byte positions here.
 	snippets []outputSnippet
+	// startRow / endRow are the absolute line range this item
+	// occupies in the fully rendered content. Populated by
+	// rebuildRender and consumed by the hybrid arrow-nav
+	// algorithm in moveItem so it knows whether the next
+	// selectable item is currently visible in the viewport.
+	startRow int
+	endRow   int
 }
 
 // outputSnippet is one code block / inline code span parsed out
@@ -345,56 +352,129 @@ type outputCopiedMsg struct {
 	msg string
 }
 
-// moveItem advances the cursor over selectable items, skipping
-// non-selectable ones. delta=+1 moves down, -1 moves up.
+// moveItem is the hybrid arrow-nav handler for the Output pane.
+//
+// Each arrow press resolves to EXACTLY ONE of three outcomes:
+//
+//  1. **Select** the next/prev selectable item if its first row
+//     is currently visible in the viewport. Scrolls the
+//     viewport as needed so the newly-selected item's last row
+//     is also in view.
+//
+//  2. **Scroll** the viewport by one line in the arrow direction
+//     if no selectable item in that direction is within the
+//     visible window. The selection stays put (or remains
+//     unset if the user hadn't selected anything yet). The
+//     next press re-evaluates — once the scroll brings a new
+//     item into view, the following arrow press will select
+//     it instead of scrolling further.
+//
+//  3. **No-op** at the very ends: if scrolling would push past
+//     the top or bottom of the content, the press is ignored.
+//
+// This lets the user "walk" arrows through a long Output view
+// without ever getting stuck — the same keystroke seamlessly
+// transitions from "select next" to "scroll to reveal" back to
+// "select next" without the user having to switch keys
+// (Up/Down vs PgUp/PgDn).
 func (o *OutputViewModel) moveItem(delta int) {
 	if len(o.items) == 0 {
+		// Empty pane — scroll does nothing useful either.
 		return
 	}
-	// First move from "no selection" → first selectable.
-	if o.selectedItem < 0 {
-		if delta > 0 {
-			for i := 0; i < len(o.items); i++ {
-				if o.items[i].selectable {
-					o.selectedItem = i
-					o.selectedSnippet = -1
-					o.rebuildRender()
-					return
-				}
-			}
-		} else {
-			for i := len(o.items) - 1; i >= 0; i-- {
-				if o.items[i].selectable {
-					o.selectedItem = i
-					o.selectedSnippet = -1
-					o.rebuildRender()
-					return
-				}
+	top := o.viewport.YOffset
+	bottom := top + o.viewport.Height - 1
+
+	// Find the next selectable item in the requested direction.
+	// For down (+1): first selectable whose index > selectedItem
+	// (or >= 0 when nothing is selected).
+	// For up (-1): last selectable whose index < selectedItem
+	// (or == the last selectable when nothing is selected).
+	nextIdx := -1
+	if delta > 0 {
+		start := o.selectedItem + 1
+		if o.selectedItem < 0 {
+			start = 0
+		}
+		for i := start; i < len(o.items); i++ {
+			if o.items[i].selectable {
+				nextIdx = i
+				break
 			}
 		}
-		return
+	} else {
+		start := o.selectedItem - 1
+		if o.selectedItem < 0 {
+			start = len(o.items) - 1
+		}
+		for i := start; i >= 0; i-- {
+			if o.items[i].selectable {
+				nextIdx = i
+				break
+			}
+		}
 	}
-	// Walk to the next/previous selectable item, wrapping around
-	// when we run off the end. Limit the walk to two full passes
-	// so an items slice with zero selectables never spins.
-	step := delta
-	idx := o.selectedItem + step
-	for attempts := 0; attempts < len(o.items)*2; attempts++ {
-		if idx < 0 {
-			idx = len(o.items) - 1
-			continue
-		}
-		if idx >= len(o.items) {
-			idx = 0
-			continue
-		}
-		if o.items[idx].selectable {
-			o.selectedItem = idx
+
+	if nextIdx >= 0 {
+		it := &o.items[nextIdx]
+		// Is the next item's first row currently in the
+		// visible window? If yes → select it.
+		if it.startRow >= top && it.startRow <= bottom {
+			o.selectedItem = nextIdx
 			o.selectedSnippet = -1
 			o.rebuildRender()
+			// If the tail of the selected item runs past
+			// the bottom, nudge the viewport so the whole
+			// thing is visible.
+			o.ensureSelectionVisible()
 			return
 		}
-		idx += step
+		// Next item exists but isn't visible yet — fall
+		// through to scroll logic so the user can walk
+		// towards it.
+	}
+
+	// Scroll the viewport by one line in the arrow direction.
+	// This also covers the "no next selectable at all" case:
+	// the user can still scroll past the last selected item to
+	// see trailing text.
+	if delta > 0 {
+		maxOffset := o.viewport.TotalLineCount() - o.viewport.Height
+		if maxOffset < 0 {
+			maxOffset = 0
+		}
+		if top < maxOffset {
+			o.viewport.SetYOffset(top + 1)
+		}
+	} else {
+		if top > 0 {
+			o.viewport.SetYOffset(top - 1)
+		}
+	}
+}
+
+// ensureSelectionVisible nudges the viewport so the currently
+// selected item's startRow..endRow range sits inside the
+// visible window. Only scrolls when the item is off-screen, so
+// pressing "select next item already visible" doesn't cause a
+// jarring auto-scroll.
+func (o *OutputViewModel) ensureSelectionVisible() {
+	if o.selectedItem < 0 || o.selectedItem >= len(o.items) {
+		return
+	}
+	it := &o.items[o.selectedItem]
+	top := o.viewport.YOffset
+	bottom := top + o.viewport.Height - 1
+	if it.startRow < top {
+		o.viewport.SetYOffset(it.startRow)
+		return
+	}
+	if it.endRow > bottom {
+		newTop := it.endRow - o.viewport.Height + 1
+		if newTop < 0 {
+			newTop = 0
+		}
+		o.viewport.SetYOffset(newTop)
 	}
 }
 
@@ -412,12 +492,20 @@ func (o *OutputViewModel) rebuildRender() {
 		Bold(true)
 
 	var b strings.Builder
+	// rowCount tracks how many lines we've written so far so
+	// each item can record its [startRow, endRow] in the final
+	// rendered content. The hybrid arrow-nav algorithm consults
+	// these ranges to decide whether the next selectable item
+	// is currently visible in the viewport.
+	rowCount := 0
 	for i := range o.items {
 		it := &o.items[i]
 		isSel := i == o.selectedItem
 		if i > 0 {
 			b.WriteString("\n")
+			rowCount++
 		}
+		it.startRow = rowCount
 		if it.title != "" {
 			if isSel {
 				b.WriteString("▶ ")
@@ -427,6 +515,7 @@ func (o *OutputViewModel) rebuildRender() {
 				b.WriteString(titleStyle.Render(it.title))
 			}
 			b.WriteString("\n")
+			rowCount++
 		}
 		rendered := renderItemText(it, isSel, o.selectedSnippet, dimStyle, snippetStyle, snippetSelStyle)
 		for _, line := range strings.Split(rendered, "\n") {
@@ -437,6 +526,11 @@ func (o *OutputViewModel) rebuildRender() {
 			b.WriteString(prefix)
 			b.WriteString(line)
 			b.WriteString("\n")
+			rowCount++
+		}
+		it.endRow = rowCount - 1
+		if it.endRow < it.startRow {
+			it.endRow = it.startRow
 		}
 	}
 	o.viewport.SetContent(strings.TrimRight(b.String(), "\n"))

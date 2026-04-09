@@ -469,6 +469,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.channels.selected = 0
 				}
 				m.channels.ensureVisible()
+			} else if m.outputActive {
+				// Output pane is replacing the messages view.
+				// Route wheel scroll to the output viewport.
+				m.focus = types.FocusMessages
+				m.updateFocus()
+				for i := 0; i < lines; i++ {
+					m.outputView, _ = m.outputView.Update(msg)
+				}
 			} else {
 				m.focus = types.FocusMessages
 				m.updateFocus()
@@ -497,6 +505,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.channels.selected = len(m.channels.rows) - 1
 				}
 				m.channels.ensureVisible()
+			} else if m.outputActive {
+				// Output pane is replacing the messages view.
+				// Route wheel scroll to the output viewport.
+				m.focus = types.FocusMessages
+				m.updateFocus()
+				for i := 0; i < lines; i++ {
+					m.outputView, _ = m.outputView.Update(msg)
+				}
 			} else {
 				m.focus = types.FocusMessages
 				m.updateFocus()
