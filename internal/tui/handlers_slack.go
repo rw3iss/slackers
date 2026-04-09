@@ -334,6 +334,12 @@ func (m *Model) setChannelHeader() {
 	if m.currentCh == nil {
 		return
 	}
+	// Switching channels always closes the output view —
+	// the user is going back to chat content. Every channel
+	// switch (sidebar click, Ctrl-N next unread, /go command,
+	// search-result jump, friend chat open) routes through
+	// setChannelHeader, so this single line covers them all.
+	m.outputActive = false
 	prefix := "#"
 	if m.currentCh.IsFriend {
 		prefix = ""

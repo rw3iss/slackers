@@ -372,6 +372,36 @@ func (m *ChannelListModel) displayLineMap() []int {
 	return lines
 }
 
+// ChannelByRow looks up the channel (or header) at the given Y row
+// in the sidebar viewport WITHOUT mutating the cursor position
+// (m.selected). Used by right-click handling so popping the
+// channel context menu doesn't visually shift the sidebar
+// highlight off the user's currently active channel.
+//
+// Returns the same triple as SelectByRow: (channel, isChannel, headerKey).
+func (m *ChannelListModel) ChannelByRow(y int) (*types.Channel, bool, string) {
+	if y < 0 {
+		return nil, false, ""
+	}
+	targetLine := m.scrollOff + y
+	lines := m.displayLineMap()
+	if targetLine < 0 || targetLine >= len(lines) {
+		return nil, false, ""
+	}
+	rowIdx := lines[targetLine]
+	if rowIdx < 0 {
+		return nil, false, ""
+	}
+	row := m.rows[rowIdx]
+	if row.isHeader {
+		return nil, false, row.headerKey
+	}
+	if row.channel != nil {
+		return row.channel, true, ""
+	}
+	return nil, false, ""
+}
+
 // SelectByRow selects the row at the given Y position within the sidebar viewport
 // (i.e. screen Y minus the sidebar's top border). Returns the selected channel
 // (nil for headers), whether a channel was clicked, and the header key if a

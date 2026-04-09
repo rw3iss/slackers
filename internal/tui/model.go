@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rw3iss/slackers/internal/commands"
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/friends"
@@ -47,6 +48,9 @@ const (
 	overlayEmojiPicker
 	overlayMsgOptions
 	overlaySidebarOptions
+	overlayFriendCardOptions
+	overlayContactCardView
+	overlayCommandList
 	overlayAbout
 	overlayThemePicker
 	overlayThemeEditor
@@ -257,6 +261,22 @@ type Model struct {
 	emojiPicker      EmojiPickerModel
 	msgOptions       MsgOptionsModel
 	sidebarOptions   SidebarOptionsModel
+	friendCardOpts   FriendCardOptionsModel
+	contactCardView  ContactCardViewModel
+	commandList      CommandListModel
+	outputView       OutputViewModel
+	cmdSuggest       CmdSuggestModel
+	cmdRegistry      *commands.Registry
+
+	// outputActive replaces the messages pane in renderBaseView
+	// with the OutputViewModel content. It's a *pane state* (not
+	// an overlay) so Tab still cycles focus, sidebar clicks still
+	// switch channels (which auto-close the output), and the
+	// input bar still accepts new commands and chat messages.
+	// Set by applyCommandResult when a command returns Body, and
+	// cleared by channel switches, message sends, and Esc on the
+	// messages pane.
+	outputActive bool
 
 	// Reactions
 	reactMsgID string // message ID for pending reaction
@@ -264,6 +284,19 @@ type Model struct {
 	// Pending message deletion confirmation. When non-empty, the next y/Enter
 	// confirms deleting that message; any other key cancels.
 	pendingDeleteMsgID string
+
+	// Pending friend removal confirmation. When non-empty, the
+	// next y/Enter confirms removing that friend from the local
+	// store; any other key cancels. The current chat history view
+	// for that friend (if open) is intentionally left on screen
+	// until the user navigates away.
+	pendingFriendRemoveID string
+
+	// Pending friend chat-history clear confirmation. When
+	// non-empty, the next y/Enter wipes the on-disk encrypted
+	// history for that friend and refreshes the message view.
+	// Used by /clear-history.
+	pendingClearFriendHistoryID string
 
 	// Pending copy-to-clipboard confirmation for a large file. When
 	// non-nil, the next y/Enter kicks off the actual copy; any other
@@ -614,7 +647,7 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	mv.SetReplyFormat(rf)
 	mv.SetItemSpacing(cfg.MessageItemSpacing)
 
-	return Model{
+	m := Model{
 		channels:           ch,
 		messages:           mv,
 		input:              inp,
@@ -648,10 +681,17 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 			_ = ns.Load()
 			return ns
 		}(),
-		slackSvc:  slackSvc,
-		socketSvc: socketSvc,
-		eventChan: make(chan slackpkg.SocketEvent, 100),
+		slackSvc:   slackSvc,
+		socketSvc:  socketSvc,
+		eventChan:  make(chan slackpkg.SocketEvent, 100),
+		cmdSuggest: NewCmdSuggest(),
 	}
+	// Build the slash-command registry once before the splash
+	// screen so the trie is fully cached for the typing hot path.
+	// Custom emotes / commands.json files would also be merged
+	// here in the future — left as a no-op for now.
+	m.cmdRegistry = m.buildCommandRegistry()
+	return m
 }
 
 // Init returns the initial commands to run at startup.
@@ -811,6 +851,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Pending friend-removal confirmation: y/Enter confirm,
+		// anything else cancels. The current chat history view
+		// (if the user is currently viewing the friend being
+		// removed) is left untouched on screen — they can keep
+		// reading until they navigate away.
+		if m.pendingFriendRemoveID != "" {
+			s := msg.String()
+			if s == "y" || s == "Y" || s == "enter" {
+				uid := m.pendingFriendRemoveID
+				m.pendingFriendRemoveID = ""
+				return m, m.confirmFriendRemoval(uid)
+			}
+			m.pendingFriendRemoveID = ""
+			m.warning = "Remove friend cancelled"
+			return m, nil
+		}
+
+		// Pending /clear-history confirmation.
+		if m.pendingClearFriendHistoryID != "" {
+			s := msg.String()
+			if s == "y" || s == "Y" || s == "enter" {
+				uid := m.pendingClearFriendHistoryID
+				m.pendingClearFriendHistoryID = ""
+				return m, m.confirmClearFriendHistory(uid)
+			}
+			m.pendingClearFriendHistoryID = ""
+			m.warning = "Clear history cancelled"
+			return m, nil
+		}
+
 		// Pending friend-card import/merge prompt: y=import, m=merge,
 		// r=replace, anything else cancels.
 		if m.pendingFriendCard != nil {
@@ -908,6 +978,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Shortcuts" row.
 			return m, func() tea.Msg {
 				return ShortcutsEditorOpenMsg{}
+			}
+
+		case key.Matches(msg, m.keymap.CommandList):
+			// Open the slash-command browser. Same path the
+			// /commands command takes — toggles open if already
+			// open so the binding can dismiss the overlay too.
+			if m.overlay == overlayCommandList {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			return m, func() tea.Msg {
+				return CommandListOpenMsg{}
 			}
 
 		case key.Matches(msg, m.keymap.Settings):
@@ -1226,6 +1308,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sidebarOptions, cmd = m.sidebarOptions.Update(msg)
 			return m, cmd
 		}
+		if m.overlay == overlayFriendCardOptions {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.friendCardOpts, cmd = m.friendCardOpts.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayContactCardView {
+			var cmd tea.Cmd
+			m.contactCardView, cmd = m.contactCardView.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayCommandList {
+			var cmd tea.Cmd
+			m.commandList, cmd = m.commandList.Update(msg)
+			return m, cmd
+		}
 
 		// Normal key handling (no overlay)
 		switch {
@@ -1240,6 +1341,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keymap.Escape):
+			// 0. If the output pane is active and focus is on
+			// messages, Esc closes the output and returns to
+			// the chat. Esc on the input bar follows the
+			// existing input handling further down.
+			if m.outputActive && m.focus == types.FocusMessages {
+				m.outputActive = false
+				return m, nil
+			}
 			// 1. Exit any active selection mode first.
 			if m.messages.InReactMode() {
 				m.messages.ExitReactMode()
@@ -1257,6 +1366,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == types.FocusInput {
 				if m.input.Value() == "" {
 					m.input.ClearEscapeOnce()
+					m.cmdSuggest.Hide()
+					return m, nil
+				}
+				// If the slash-command suggestion popup is up,
+				// the first Esc dismisses it without touching
+				// the input — matches the popup-aware Esc case
+				// in the FocusInput key branch above (which
+				// only fires while the popup is visible).
+				if m.cmdSuggest.Visible() {
+					m.cmdSuggest.Hide()
 					return m, nil
 				}
 				// Treat the second esc as "save+clear" if either the
@@ -1269,6 +1388,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					config.SaveDebounced(m.cfg)
 					m.input.Reset()
 					m.input.ClearEscapeOnce()
+					m.cmdSuggest.Hide()
 					m.resizeComponents()
 					m.warning = "Draft saved to history"
 				} else {
@@ -1461,10 +1581,79 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.channels, cmd = m.channels.Update(msg)
 			cmds = append(cmds, cmd)
 		case types.FocusMessages:
+			// When the output pane is active, keys land in the
+			// output viewport (scroll, esc to close) instead of
+			// the chat view. Tab still cycles focus normally
+			// because Tab is handled higher up the switch and
+			// returns before we reach this branch.
+			if m.outputActive {
+				var cmd tea.Cmd
+				m.outputView, cmd = m.outputView.Update(msg)
+				cmds = append(cmds, cmd)
+				break
+			}
 			var cmd tea.Cmd
 			m.messages, cmd = m.messages.Update(msg)
 			cmds = append(cmds, cmd)
 		case types.FocusInput:
+			// Slash-command suggestion popup integration. When
+			// the popup is visible, certain keys belong to the
+			// popup instead of the textarea:
+			//
+			//   Up / Down — move the highlight in the popup
+			//   Tab       — complete the highlighted command
+			//               into the input bar (with trailing
+			//               space) so the user can fill in args
+			//   Enter     — RUN the highlighted command directly
+			//               (with whatever args the user has
+			//               already typed after the command name).
+			//               Without this case, Enter falls through
+			//               to InputSendMsg which calls
+			//               registry.Run(input) on the literal
+			//               input value — which is just "/" while
+			//               the popup is showing all commands, and
+			//               results in "Unknown command: /".
+			//
+			// Esc dismisses the popup but leaves the input alone.
+			if m.cmdRegistry != nil && m.cmdSuggest.Visible() {
+				switch msg.String() {
+				case "up":
+					m.cmdSuggest.Move(-1)
+					return m, nil
+				case "down":
+					m.cmdSuggest.Move(1)
+					return m, nil
+				case "tab":
+					if sel := m.cmdSuggest.Selected(); sel != nil {
+						m.input.Reset()
+						m.input.InsertAtCursor("/" + sel.Name + " ")
+						m.refreshCmdSuggest()
+						return m, nil
+					}
+				case "enter":
+					if sel := m.cmdSuggest.Selected(); sel != nil {
+						// Build the full command line: /<name>
+						// followed by any args the user has
+						// already typed after the command name.
+						line := "/" + sel.Name
+						val := strings.TrimSpace(m.input.Value())
+						if i := strings.IndexAny(val, " \t"); i >= 0 {
+							line += " " + strings.TrimSpace(val[i+1:])
+						}
+						m.input.PushHistory(val)
+						m.cfg.InputHistory = m.input.History()
+						config.SaveDebounced(m.cfg)
+						m.input.Reset()
+						m.cmdSuggest.Hide()
+						m.resizeComponents()
+						res := m.cmdRegistry.Run(line)
+						return m, m.applyCommandResult(res)
+					}
+				case "esc":
+					m.cmdSuggest.Hide()
+					return m, nil
+				}
+			}
 			prevHeight := m.input.DisplayHeight()
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
@@ -1473,6 +1662,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.input.DisplayHeight() != prevHeight {
 				m.resizeComponents()
 			}
+			// Refresh / hide the suggestion popup based on the
+			// post-update input value.
+			m.refreshCmdSuggest()
 		}
 
 		return m, tea.Batch(cmds...)
@@ -2104,19 +2296,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		card := msg.Card
 		card.Multiaddr = strings.TrimSpace(card.Multiaddr)
 		// Self-check: clicking your own card shouldn't offer to
-		// import it as a new friend. Detect by SlackerID,
-		// PublicKey, or Multiaddr against the local identity.
-		ownPub := ""
-		if m.secureMgr != nil {
-			ownPub = m.secureMgr.OwnPublicKeyBase64()
-		}
-		ownMaddr := ""
-		if m.p2pNode != nil {
-			ownMaddr = m.p2pNode.Multiaddr()
-		}
-		if (m.cfg != nil && card.SlackerID != "" && card.SlackerID == m.cfg.SlackerID) ||
-			(ownPub != "" && card.PublicKey == ownPub) ||
-			(ownMaddr != "" && card.Multiaddr == ownMaddr) {
+		// import it as a new friend. Centralised in isOwnCard so
+		// the right-click context menu uses the same rules.
+		if m.isOwnCard(card) {
 			m.warning = "That's your own contact card — nothing to import."
 			return m, nil
 		}
@@ -2458,7 +2640,143 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return FriendsConfigOpenMsg{FriendID: friendID}
 			}
+		case SidebarActionRemoveFriend:
+			// Stage the removal behind a y/Enter confirmation
+			// prompt. The actual delete + sidebar refresh happens
+			// in confirmFriendRemoval once the user confirms.
+			friendID := msg.UserID
+			if friendID == "" {
+				friendID = strings.TrimPrefix(msg.ChannelID, "friend:")
+			}
+			if friendID == "" || m.friendStore == nil {
+				return m, nil
+			}
+			f := m.friendStore.Get(friendID)
+			name := friendID
+			if f != nil && f.Name != "" {
+				name = f.Name
+			}
+			m.pendingFriendRemoveID = friendID
+			m.warning = "Remove friend " + name + "? y=yes, any other key=cancel"
+			return m, nil
 		}
+		return m, nil
+
+	case FriendCardOptionsSelectMsg:
+		// Right-click → context menu choice on a friend pill.
+		// Always close the popup first; each branch decides where
+		// to navigate next.
+		m.overlay = overlayNone
+		card := msg.Card
+		switch msg.Action {
+		case FriendCardActionAddFriend:
+			// Reuse the existing left-click pipeline so conflict
+			// detection (already-exists prompt, merge/replace) and
+			// the post-add P2P handshake all run unchanged.
+			return m, func() tea.Msg { return FriendCardClickedMsg{Card: card} }
+
+		case FriendCardActionViewFriendProfile:
+			// Resolve the local friend record and jump to its
+			// Edit Friend page in the Friends Config overlay.
+			var friendID string
+			if m.friendStore != nil {
+				if existing := m.friendStore.FindByCard(card); existing != nil {
+					friendID = existing.UserID
+				}
+			}
+			if friendID == "" {
+				m.warning = "Friend lookup failed"
+				return m, nil
+			}
+			return m, func() tea.Msg { return FriendsConfigOpenMsg{FriendID: friendID} }
+
+		case FriendCardActionViewContactInfo:
+			// Always open the temporary contact-card view modal,
+			// regardless of whether the card matches an existing
+			// friend or your own identity. The view itself decides
+			// which action buttons to show:
+			//   self     → no actions, read-only
+			//   existing → Merge / Overwrite / Cancel (with diff)
+			//   neither  → Add as new friend / Cancel
+			var existing *friends.Friend
+			isSelf := m.isOwnCard(card)
+			if !isSelf && m.friendStore != nil {
+				existing = m.friendStore.FindByCard(card)
+			}
+			m.contactCardView = NewContactCardView(card, existing, isSelf)
+			m.contactCardView.SetSize(m.width, m.height)
+			m.overlay = overlayContactCardView
+			return m, nil
+
+		case FriendCardActionCopyContactInfo:
+			// Marshal the card to single-line JSON and put it on
+			// the system clipboard. The friendsconfig package
+			// already exports a working copyToClipboard helper that
+			// shells out to pbcopy / xclip / xsel / wl-copy as
+			// appropriate, so reuse it here.
+			raw, err := json.Marshal(card)
+			if err != nil {
+				m.warning = "Copy failed: " + err.Error()
+				return m, nil
+			}
+			if !copyToClipboard(string(raw)) {
+				m.warning = "Copy failed: no system clipboard tool found"
+				return m, nil
+			}
+			m.warning = "Copied contact info to clipboard"
+			return m, nil
+		}
+		return m, nil
+
+	case ContactCardImportMsg:
+		// "Import as new friend" pressed inside the temporary
+		// contact card view. Close the modal and re-enter the
+		// standard click flow so all the existing self-check /
+		// conflict prompts run.
+		m.overlay = overlayNone
+		card := msg.Card
+		return m, func() tea.Msg { return FriendCardClickedMsg{Card: card} }
+
+	case ContactCardMergeMsg:
+		m.overlay = overlayNone
+		return m, m.applyFriendCard(msg.Card, true, false)
+
+	case ContactCardOverwriteMsg:
+		m.overlay = overlayNone
+		return m, m.applyFriendCard(msg.Card, false, true)
+
+	case ContactCardCloseMsg:
+		m.overlay = overlayNone
+		return m, nil
+
+	case CommandListOpenMsg:
+		m.commandList = NewCommandList(m.cmdRegistry.All())
+		m.commandList.SetSize(m.width, m.height)
+		m.overlay = overlayCommandList
+		return m, nil
+
+	case CommandListCloseMsg:
+		m.overlay = overlayNone
+		return m, nil
+
+	case CommandListSelectMsg:
+		// Insert "/<name> " into the input bar so the user can
+		// add arguments. Closing the overlay restores focus.
+		m.overlay = overlayNone
+		m.input.Reset()
+		m.input.InsertAtCursor("/" + msg.Name + " ")
+		m.focus = types.FocusInput
+		m.updateFocus()
+		return m, nil
+
+	case OutputCloseMsg:
+		m.outputActive = false
+		return m, nil
+
+	case openSettingsMsg:
+		m.settings = NewSettingsModel(m.cfg, m.version)
+		m.settings.SetSize(m.width, m.height)
+		m.overlay = overlaySettings
 		return m, nil
 
 	case ReplyToMessageMsg:
@@ -2745,6 +3063,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case InputSendMsg:
 		text := msg.Text
+		// Slash command interception. If the input starts with
+		// "/" and resolves to a registered command (or even if it
+		// doesn't — we surface a clear error), route through the
+		// command runner instead of sending the text as a chat
+		// message. The user gets either a status-bar update, an
+		// Output view, or a follow-up tea.Cmd dispatched.
+		if strings.HasPrefix(strings.TrimSpace(text), "/") && m.cmdRegistry != nil {
+			m.input.PushHistory(text)
+			m.cfg.InputHistory = m.input.History()
+			config.SaveDebounced(m.cfg)
+			m.input.Reset()
+			m.cmdSuggest.Hide()
+			m.resizeComponents()
+			res := m.cmdRegistry.Run(text)
+			return m, m.applyCommandResult(res)
+		}
+		// Sending a regular chat message implicitly closes the
+		// output pane — the user wants to see the chat with
+		// their newly-sent message, not a stale /help / /friends
+		// listing.
+		if text != "" && m.outputActive {
+			m.outputActive = false
+		}
 		if text != "" && m.currentCh != nil {
 			m.input.PushHistory(text)
 			m.cfg.InputHistory = m.input.History()
@@ -4003,6 +4344,13 @@ func (m Model) viewInner() string {
 	case overlaySidebarOptions:
 		base := m.renderBaseView()
 		return m.sidebarOptions.View(base)
+	case overlayFriendCardOptions:
+		base := m.renderBaseView()
+		return m.friendCardOpts.View(base)
+	case overlayContactCardView:
+		return m.contactCardView.View()
+	case overlayCommandList:
+		return m.commandList.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the
@@ -4016,7 +4364,15 @@ func (m Model) viewInner() string {
 // indicator is visible in every view state that falls through to the
 // base (including when a popup like msgOptions is stacked on top).
 func (m Model) renderBaseView() string {
-	msgView := m.messages.View()
+	var msgView string
+	if m.outputActive {
+		// Output pane state — replaces the messages view with
+		// the OutputViewModel content. Sidebar, input bar, and
+		// status line all stay rendered as normal.
+		msgView = m.outputView.View()
+	} else {
+		msgView = m.messages.View()
+	}
 	var topRow string
 	showSidebar := !m.fullMode || m.focus == types.FocusSidebar
 	if showSidebar {
@@ -4027,7 +4383,20 @@ func (m Model) renderBaseView() string {
 	}
 	inputBar := m.input.View()
 	statusLine := m.renderStatusBar()
-	base := lipgloss.JoinVertical(lipgloss.Left, topRow, inputBar, statusLine)
+	// Render the slash-command suggestion popup directly above
+	// the input bar when active. The popup floats inline (it's
+	// part of the vertical layout, not an overlay) so it doesn't
+	// have to deal with z-ordering against the message pane.
+	var suggest string
+	if m.cmdSuggest.Visible() {
+		suggest = m.cmdSuggest.View()
+	}
+	var base string
+	if suggest != "" {
+		base = lipgloss.JoinVertical(lipgloss.Left, topRow, suggest, inputBar, statusLine)
+	} else {
+		base = lipgloss.JoinVertical(lipgloss.Left, topRow, inputBar, statusLine)
+	}
 
 	// Notifications indicator overlay.
 	if x0, _, y, visible := m.notificationsButtonClickArea(); visible {
@@ -4035,7 +4404,6 @@ func (m Model) renderBaseView() string {
 	}
 	return base
 }
-
 
 func (m *Model) buildChannelIndex() {
 	m.channelIndex = make(map[string]channelInfo, len(m.channels.channels))
@@ -4437,10 +4805,13 @@ func (m *Model) buildSidebarOptionsItems(ch types.Channel) []sidebarOptionsItem 
 		{"Hide Channel", SidebarActionHide},
 		{"Rename Channel", SidebarActionRename},
 	}
-	// Friend channels: contact card viewer.
+	// Friend channels: contact card viewer + remove option.
 	if ch.IsFriend {
 		items = append(items, sidebarOptionsItem{
 			label: "View Contact Info", action: SidebarActionViewContact,
+		})
+		items = append(items, sidebarOptionsItem{
+			label: "Remove Friend", action: SidebarActionRemoveFriend,
 		})
 		return items
 	}
@@ -4488,4 +4859,3 @@ func (m *Model) friendPingTickCmd() tea.Cmd {
 		return friendPingTickMsg{}
 	})
 }
-

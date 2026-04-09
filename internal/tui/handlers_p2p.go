@@ -633,3 +633,60 @@ func (m *Model) applyFriendCard(card friends.ContactCard, merge, replace bool) t
 
 	return nil
 }
+
+// confirmFriendRemoval deletes a friend from the local store and
+// refreshes the sidebar's friend section. The current chat history
+// view (if the user is currently viewing the friend being removed)
+// is intentionally NOT cleared — they can keep reading until they
+// navigate away. The next time they leave the friend chat, the
+// channel will be gone and they won't be able to come back to it.
+//
+// Also drops any pending friend-request notification for the
+// removed peer so the notifications panel doesn't stay stale.
+func (m *Model) confirmFriendRemoval(userID string) tea.Cmd {
+	if m.friendStore == nil || userID == "" {
+		return nil
+	}
+	f := m.friendStore.Get(userID)
+	name := userID
+	if f != nil && f.Name != "" {
+		name = f.Name
+	}
+	m.friendStore.Remove(userID)
+	if err := m.friendStore.Save(); err != nil {
+		m.warning = "Removed in memory but failed to persist: " + err.Error()
+	} else {
+		m.warning = "Removed friend " + name
+	}
+	// Refresh the sidebar friend section. The currently-open
+	// friend chat is left on screen for reference until the user
+	// navigates away.
+	m.channels.SetFriendChannels(m.buildFriendChannels())
+	if m.notifStore != nil {
+		m.notifStore.ClearFriendRequest(userID)
+	}
+	return nil
+}
+
+// isOwnCard reports whether a contact card represents the local
+// user. Matches by SlackerID, PublicKey, or Multiaddr against the
+// values exposed by the local config / secure manager / P2P node, in
+// that priority order. Used by both the left-click import flow and
+// the right-click context menu so own cards consistently get the
+// "view only" treatment instead of being offered for friending.
+func (m *Model) isOwnCard(card friends.ContactCard) bool {
+	if m.cfg != nil && card.SlackerID != "" && card.SlackerID == m.cfg.SlackerID {
+		return true
+	}
+	if m.secureMgr != nil {
+		if pub := m.secureMgr.OwnPublicKeyBase64(); pub != "" && card.PublicKey == pub {
+			return true
+		}
+	}
+	if m.p2pNode != nil {
+		if maddr := m.p2pNode.Multiaddr(); maddr != "" && card.Multiaddr == maddr {
+			return true
+		}
+	}
+	return false
+}

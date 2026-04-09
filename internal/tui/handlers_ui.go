@@ -17,6 +17,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rw3iss/slackers/internal/config"
+	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/types"
 )
 
@@ -80,6 +81,10 @@ func (m *Model) resizeComponents() {
 
 	m.channels.SetSize(sidebarWidth, topHeight)
 	m.messages.SetSize(msgWidth, topHeight)
+	// Keep the output pane sized to the same slot as the messages
+	// pane so toggling between them is seamless after a window
+	// resize.
+	m.outputView.SetSize(msgWidth, topHeight)
 	m.input.SetSize(m.width - 2)
 }
 
@@ -143,6 +148,16 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.sidebarOptions, cmd = m.sidebarOptions.Update(msg)
 		return m, cmd
+	case overlayFriendCardOptions:
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if !m.friendCardOpts.ClickInside(msg.X, msg.Y) {
+				m.overlay = overlayNone
+				return m, nil
+			}
+		}
+		var cmd tea.Cmd
+		m.friendCardOpts, cmd = m.friendCardOpts.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -150,6 +165,13 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 // handleMouse processes mouse click and scroll events.
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	x, y := msg.X, msg.Y
+	// Log every right-click that reaches the messages-pane handler so
+	// we can prove the build under test contains the friend-pill
+	// detection code (and tell the difference between "code not in
+	// build" and "code ran but missed").
+	if msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress {
+		debug.Log("[handle-mouse] right-click press at (%d,%d) overlay=%d", x, y, m.overlay)
+	}
 
 	// Handle drag for sidebar resize.
 	if m.dragging {
@@ -180,7 +202,58 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// menu; right-click on the sidebar opens a channel context
 		// menu with Hide / Rename / Invite / View Contact Info.
 		if msg.Button == tea.MouseButtonRight {
+			// Messages pane right-click. The priority order is
+			// item-first, message-fallback:
+			//
+			//   1. Friend-card pill → opens its own context menu
+			//      (Add Friend / View / Copy). The hit-test is the
+			//      precise pill rectangle, not the whole line.
+			//   2. Reaction badge → no item-specific menu yet, but
+			//      the click is *consumed* so the parent message
+			//      menu doesn't pop over the badge. Right-click on
+			//      a reaction is therefore a no-op for now.
+			//   3. File row → same as reactions: consumed, no menu.
+			//   4. Anywhere else inside a message → falls through
+			//      to MessageAtClick and shows the parent message
+			//      options menu (React / Reply / Edit / Delete).
+			//
+			// Without this prioritisation, right-clicking the
+			// friend pill (which sits inside the message body)
+			// always raised the parent message menu instead of
+			// the friend menu, because the message-body line was
+			// matched first.
 			if y < m.inputTop && x >= m.sidebarWidth+1 {
+				msgPaneX := x - m.sidebarWidth - 2
+				debug.Log("[right-click] screen=(%d,%d) sidebar=%d msgPaneX=%d inputTop=%d",
+					x, y, m.sidebarWidth, msgPaneX, m.inputTop)
+
+				// 1. Friend card pill.
+				if card := m.messages.FriendCardAtClick(msgPaneX, y); card != nil {
+					isSelf := m.isOwnCard(*card)
+					isFriend := false
+					if !isSelf && m.friendStore != nil {
+						isFriend = m.friendStore.FindByCard(*card) != nil
+					}
+					minX := m.sidebarWidth + 2
+					m.friendCardOpts = NewFriendCardOptions(*card, isFriend, isSelf, x+1, y, minX)
+					m.friendCardOpts.SetSize(m.width, m.height)
+					m.overlay = overlayFriendCardOptions
+					return m, nil
+				}
+
+				// 2. Reaction badge — consume the click so the
+				// parent message menu doesn't open over it. No
+				// item-specific menu exists yet.
+				if reactMsgID, _ := m.messages.ReactionAtClick(msgPaneX, y); reactMsgID != "" {
+					return m, nil
+				}
+
+				// 3. File row — same treatment.
+				if file := m.messages.FileAtClick(y); file != nil {
+					return m, nil
+				}
+
+				// 4. Fall through: parent message options menu.
 				msgID, preview := m.messages.MessageAtClick(y)
 				if msgID != "" {
 					// Popup minimum X is the chat history left edge.
@@ -196,13 +269,18 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			// Sidebar right-click: identify the row and open the
-			// sidebar context menu.
+			// sidebar context menu. Uses ChannelByRow (non-mutating)
+			// rather than SelectByRow so the right-click does NOT
+			// move the sidebar cursor — the user's currently
+			// active channel stays highlighted, and the menu
+			// captures the right-clicked channel ID/UserID
+			// independently for action dispatch.
 			if !m.fullMode && y < m.inputTop && x < m.sidebarWidth+1 {
 				viewportY := y - 1
 				if viewportY < 0 {
 					return m, nil
 				}
-				ch, isChannel, _ := m.channels.SelectByRow(viewportY)
+				ch, isChannel, _ := m.channels.ChannelByRow(viewportY)
 				if isChannel && ch != nil {
 					items := m.buildSidebarOptionsItems(*ch)
 					if len(items) == 0 {
@@ -460,6 +538,13 @@ func (m *Model) updateFocus() {
 	m.channels.SetFocused(m.focus == types.FocusSidebar)
 	m.messages.SetFocused(m.focus == types.FocusMessages)
 	m.input.SetFocused(m.focus == types.FocusInput)
+	// Output pane shares the messages-pane focus slot — when the
+	// user Tabs to "messages" and the output is active, the
+	// output pane gets the active border (and its key handler
+	// receives scroll/esc events). Tabbing away (to input or
+	// sidebar) clears the active border so the visual cue
+	// matches where keystrokes actually go.
+	m.outputView.SetFocused(m.focus == types.FocusMessages && m.outputActive)
 	// When leaving the sidebar, reset selection to the current channel.
 	if m.focus != types.FocusSidebar && m.currentCh != nil {
 		m.channels.SelectByID(m.currentCh.ID)

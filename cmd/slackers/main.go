@@ -70,6 +70,11 @@ var rootCmd = &cobra.Command{
 				fmt.Fprintf(os.Stderr, "warning: could not init debug log: %v\n", err)
 			} else {
 				defer debug.Close()
+				// Startup banner with a unique marker so we can
+				// verify which build is actually running. If you
+				// don't see "BUILD-MARKER-FRIENDPILL" in the log
+				// after launching, you're running a stale binary.
+				debug.Log("=== slackers starting (BUILD-MARKER-FRIENDPILL v1) ===")
 			}
 		}
 

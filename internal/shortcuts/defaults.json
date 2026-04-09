@@ -39,5 +39,6 @@
   "friend_details": ["alt+i"],
   "notifications": ["alt+n"],
   "share_my_info": ["alt+m"],
-  "shortcuts_editor": ["alt+k"]
+  "shortcuts_editor": ["alt+k"],
+  "command_list": ["alt+c"]
 }

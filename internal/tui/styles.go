@@ -120,23 +120,24 @@ var (
 	// always reflect the active palette. Reference these directly
 	// inside render loops instead of calling lipgloss.NewStyle()
 	// per frame / per message / per reaction.
-	MessagePendingStyle       lipgloss.Style // "⏳ pending" badge on unsent friend messages
-	MessageHighlightBgStyle   lipgloss.Style // fixed 236 background for flagged/highlight lines
-	MessageSelectBgStyle      lipgloss.Style // fixed 237 background used by react-mode selection
-	MessageDateSepStyle       lipgloss.Style // date separator row
-	MessageFileStyle          lipgloss.Style // idle file attachment row
-	MessageFileSelectedStyle  lipgloss.Style // file row when in select-mode and highlighted
-	MessageFileUploadingStyle lipgloss.Style // "uploading…" muted italic
-	MessageThreadRuleStyle    lipgloss.Style // thread-box top rule
-	MessageReplyLabelStyle    lipgloss.Style // "X replies" label on inline reply rows
-	MessageReactionStyle      lipgloss.Style // unselected reaction badge
-	MessageReactionSelStyle   lipgloss.Style // selected reaction badge
-	MessageHeaderHintStyle    lipgloss.Style // muted italic hint in the message-pane header
-	MessageHeaderSecureStyle  lipgloss.Style // fixed "#00ff00" "secure p2p" indicator
-	MessageHeaderDateStyle    lipgloss.Style // "Today" style date in the header
-	MessageHeaderHighlight    lipgloss.Style // highlight color used for header info banners
-	MessageCogStyle           lipgloss.Style // "⚙" cog in friend chat header
-	FriendCardPillStyle       lipgloss.Style // styled pill rendered in place of [FRIEND:…] markers
+	MessagePendingStyle         lipgloss.Style // "⏳ pending" badge on unsent friend messages
+	MessageHighlightBgStyle     lipgloss.Style // fixed 236 background for flagged/highlight lines
+	MessageSelectBgStyle        lipgloss.Style // fixed 237 background used by react-mode selection
+	MessageDateSepStyle         lipgloss.Style // date separator row
+	MessageFileStyle            lipgloss.Style // idle file attachment row
+	MessageFileSelectedStyle    lipgloss.Style // file row when in select-mode and highlighted
+	MessageFileUploadingStyle   lipgloss.Style // "uploading…" muted italic
+	MessageThreadRuleStyle      lipgloss.Style // thread-box top rule
+	MessageReplyLabelStyle      lipgloss.Style // "X replies" label on inline reply rows
+	MessageReactionStyle        lipgloss.Style // unselected reaction badge
+	MessageReactionSelStyle     lipgloss.Style // selected reaction badge
+	MessageHeaderHintStyle      lipgloss.Style // muted italic hint in the message-pane header
+	MessageHeaderSecureStyle    lipgloss.Style // fixed "#00ff00" "secure p2p" indicator
+	MessageHeaderDateStyle      lipgloss.Style // "Today" style date in the header
+	MessageHeaderHighlight      lipgloss.Style // highlight color used for header info banners
+	MessageCogStyle             lipgloss.Style // "⚙" cog in friend chat header
+	FriendCardPillStyle         lipgloss.Style // styled pill rendered in place of [FRIEND:…] markers
+	FriendCardPillSelectedStyle lipgloss.Style // pill highlighted when cursor is on it in select mode
 
 	// Emoji picker hot-path styles.
 	EmojiActiveBgStyle     lipgloss.Style // tab highlight background for the active category
@@ -332,6 +333,16 @@ func rebuildDerivedStyles() {
 	FriendCardPillStyle = lipgloss.NewStyle().
 		Foreground(ColorAccent).
 		Background(lipgloss.Color("236")).
+		Bold(true).
+		Padding(0, 1)
+	// FriendCardPillSelectedStyle is the highlighted version of the
+	// pill rendered when the user has cycled the in-message
+	// selection cursor onto a contact card. Inverts the foreground
+	// onto a brighter background so the cursor location is
+	// unambiguous against neighbouring pills and message text.
+	FriendCardPillSelectedStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("0")).
+		Background(ColorAccent).
 		Bold(true).
 		Padding(0, 1)
 

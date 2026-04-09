@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/format"
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/types"
@@ -242,6 +243,14 @@ type MessageViewModel struct {
 	contextMessages []types.Message
 	contextTarget   int
 	contextChannel  string
+
+	// Per-message render state used by rewriteFriendCards to know
+	// which contact-card pill it's currently substituting and
+	// whether that pill is the one selected in react/select mode.
+	// Reset to (renderingMsgIdx=-1, renderingCardCounter=0) at the
+	// start of every parent message in renderMessageList.
+	renderingMsgIdx    int
+	renderingCardCount int
 }
 
 // NewMessageView creates a new message view model.
@@ -973,9 +982,19 @@ func (m *MessageViewModel) rewriteFriendCards(line string, lineIdx int) string {
 		return line
 	}
 	pillStyle := FriendCardPillStyle
+	pillSelectedStyle := FriendCardPillSelectedStyle
 	if m.friendCards == nil {
 		m.friendCards = make(map[string]friends.ContactCard)
 	}
+	// Determine whether the message currently being rendered owns
+	// the cursor selection in react/select mode, and if so which
+	// card index is highlighted. The renderingCardCount is
+	// incremented per substituted pill in this message — see the
+	// reset in renderMessageList at the top of every parent.
+	selKind, selIdx := m.selectedItemKind()
+	cardSelectedInMsg := m.reactMode &&
+		m.renderingMsgIdx == m.reactIdx &&
+		selKind == ItemCard
 	out := line
 	idx := 0
 	for {
@@ -1016,7 +1035,18 @@ func (m *MessageViewModel) rewriteFriendCards(line string, lineIdx int) string {
 		}
 		label := friendCardDisplayName(card)
 		pillText := "👤 Friend: " + label
-		pillRendered := pillStyle.Render(pillText)
+		// Pick the selected vs idle pill style based on whether
+		// the current substitution corresponds to the cursor in
+		// react/select mode. The per-message render counter
+		// (renderingCardCount) is incremented for every pill
+		// emitted from the same parent message, regardless of
+		// which body line they sit on.
+		style := pillStyle
+		if cardSelectedInMsg && selIdx == m.renderingCardCount {
+			style = pillSelectedStyle
+		}
+		m.renderingCardCount++
+		pillRendered := style.Render(pillText)
 		// Compute the click hit area for this pill in the *rewritten* line.
 		// We need to know what column the pill ends up at after the
 		// substitution. Walk the visible width of out[:matchStart].
@@ -1060,19 +1090,38 @@ func friendCardDisplayName(card friends.ContactCard) string {
 
 // FriendCardAtClick returns the cached friend card whose pill was
 // clicked at (paneX, paneY) in the messages pane. The coordinates
-// match the same scheme as ReactionAtClick.
+// match the same scheme as ReactionAtClick — pane-relative X / Y
+// after the caller has stripped the sidebar offset.
+//
+// The hit-test is intentionally generous: ±3 cells horizontally and
+// ±1 row vertically. The leading 👤 emoji is a wide glyph and
+// different terminals report its bounding box differently — Konsole
+// puts it on the line above its actual cell, others split it across
+// the boundary. Better to over-match here than to fall through to
+// the parent message menu (which is what was happening on right
+// click before).
 func (m *MessageViewModel) FriendCardAtClick(x, y int) *friends.ContactCard {
 	contentX := x - 2
 	absLine := y - 2 + m.viewport.YOffset
+	const xBuffer = 3
 	for _, h := range m.friendCardHits {
-		if h.line != absLine {
+		dy := h.line - absLine
+		if dy < -1 || dy > 1 {
 			continue
 		}
-		if contentX >= h.startCol && contentX < h.endCol {
+		if contentX >= h.startCol-xBuffer && contentX < h.endCol+xBuffer {
+			debug.Log("[friend-pill] hit: click=(%d,%d) absLine=%d hit.line=%d cols=[%d,%d) → %s",
+				x, y, absLine, h.line, h.startCol, h.endCol, h.cardKey)
 			if card, ok := m.friendCards[h.cardKey]; ok {
 				return &card
 			}
 		}
+	}
+	debug.Log("[friend-pill] miss: click=(%d,%d) contentX=%d absLine=%d hits=%d",
+		x, y, contentX, absLine, len(m.friendCardHits))
+	for i, h := range m.friendCardHits {
+		debug.Log("[friend-pill]   hit[%d]: line=%d cols=[%d,%d) key=%s",
+			i, h.line, h.startCol, h.endCol, h.cardKey)
 	}
 	return nil
 }
@@ -1209,6 +1258,154 @@ func (m *MessageViewModel) ExitReactMode() {
 		m.reactMode = false
 		m.rebuildContent()
 	}
+}
+
+// SelectedItemKind classifies the intra-message item currently
+// highlighted in select/react mode. The integer index inside the
+// message is returned alongside via SelectedItemKindAndIdx().
+type SelectedItemKind int
+
+const (
+	ItemNone SelectedItemKind = iota
+	ItemCard
+	ItemFile
+	ItemReaction
+	ItemReplyList
+)
+
+// messageContactCards parses every decodable [FRIEND:<blob>] marker
+// in the given message text and returns the resulting cards in
+// document order. Placeholder references ([FRIEND:#fc-N]) are
+// skipped — they only exist after a render-time collapse pass.
+//
+// Used by select-mode navigation to enumerate the selectable
+// contact cards inside a parent message without depending on the
+// renderer's transient friendCardHits map.
+func messageContactCards(text string) []friends.ContactCard {
+	if !strings.Contains(text, "[FRIEND:") {
+		return nil
+	}
+	matches := inboundFriendMarkerPattern.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	out := make([]friends.ContactCard, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		inner := match[1]
+		if strings.HasPrefix(inner, "#") {
+			continue
+		}
+		if c, err := friends.ParseAnyContactCard(inner); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// itemCounts returns the number of selectable items per category
+// for the given parent message and whether the inline reply list
+// virtual element should be present at the end.
+func (m *MessageViewModel) itemCounts(msg *types.Message) (cards, files, reactions int, hasReplyList bool) {
+	if msg == nil {
+		return 0, 0, 0, false
+	}
+	cards = len(messageContactCards(msg.Text))
+	files = len(msg.Files)
+	reactions = len(msg.Reactions)
+	hasReplyList = !m.threadMode && m.replyFormat == "inline" &&
+		len(msg.Replies) > 0 && m.expandedReplies[msg.MessageID]
+	return
+}
+
+// totalSubElems returns the total number of selectable items inside
+// a parent message. This is the upper bound for left/right cycling
+// through reactionSelIdx in select mode.
+func (m *MessageViewModel) totalSubElems(msg *types.Message) int {
+	cards, files, reactions, hasReplyList := m.itemCounts(msg)
+	n := cards + files + reactions
+	if hasReplyList {
+		n++
+	}
+	return n
+}
+
+// selectedItemKind interprets the current reactionSelIdx against the
+// selected parent message and returns which kind of item is
+// highlighted plus the local index inside that category. Returns
+// (ItemNone, -1) when nothing is selected.
+//
+// The reactionSelIdx field name is kept for backward compatibility
+// with the older reaction-only navigation; in the new model it
+// indexes into a combined list:
+//
+//	[ cards | files | reactions | replyList? ]
+//
+// so a value of e.g. cards + 1 means "the second file".
+func (m *MessageViewModel) selectedItemKind() (SelectedItemKind, int) {
+	sel := m.SelectedMessage()
+	if sel == nil || m.reactionSelIdx < 0 {
+		return ItemNone, -1
+	}
+	idx := m.reactionSelIdx
+	cards, files, reactions, hasReplyList := m.itemCounts(sel)
+	if idx < cards {
+		return ItemCard, idx
+	}
+	idx -= cards
+	if idx < files {
+		return ItemFile, idx
+	}
+	idx -= files
+	if idx < reactions {
+		return ItemReaction, idx
+	}
+	idx -= reactions
+	if hasReplyList && idx == 0 {
+		return ItemReplyList, 0
+	}
+	return ItemNone, -1
+}
+
+// SelectedContactCard returns the contact card currently highlighted
+// in select mode, or nil if the selection isn't on a card.
+func (m *MessageViewModel) SelectedContactCard() *friends.ContactCard {
+	sel := m.SelectedMessage()
+	if sel == nil {
+		return nil
+	}
+	kind, idx := m.selectedItemKind()
+	if kind != ItemCard {
+		return nil
+	}
+	cards := messageContactCards(sel.Text)
+	if idx < 0 || idx >= len(cards) {
+		return nil
+	}
+	c := cards[idx]
+	return &c
+}
+
+// SelectedFileInItem returns the file currently highlighted in
+// select mode (the new in-react-mode file selection — distinct from
+// the older standalone file-pick selectMode). Returns nil if the
+// current selection isn't on a file.
+func (m *MessageViewModel) SelectedFileInItem() *types.FileInfo {
+	sel := m.SelectedMessage()
+	if sel == nil {
+		return nil
+	}
+	kind, idx := m.selectedItemKind()
+	if kind != ItemFile {
+		return nil
+	}
+	if idx < 0 || idx >= len(sel.Files) {
+		return nil
+	}
+	f := sel.Files[idx]
+	return &f
 }
 
 // InReactMode returns whether select (formerly react) mode is active.
@@ -1489,17 +1686,13 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 		if m.reactMode {
 			view := m.viewMessages()
 			sel := m.SelectedMessage()
-			// Whether the parent has an inline reply list (a virtual sub-element after reactions).
-			// Disabled in thread mode since replies are first-class items there.
-			hasInlineReplies := !m.threadMode && sel != nil && m.replyFormat == "inline" && len(sel.Replies) > 0 && m.expandedReplies[sel.MessageID]
-			subElems := 0
-			if sel != nil {
-				subElems = len(sel.Reactions)
-				if hasInlineReplies {
-					subElems++ // virtual "reply list" element
-				}
-			}
-			onReplyList := sel != nil && hasInlineReplies && m.reactionSelIdx == len(sel.Reactions)
+			// Total selectable sub-elements inside the parent
+			// message: contact cards, file rows, reactions, and an
+			// optional "reply list" virtual element. The combined
+			// list is walked left/right via reactionSelIdx.
+			subElems := m.totalSubElems(sel)
+			selKind, _ := m.selectedItemKind()
+			onReplyList := selKind == ItemReplyList
 
 			switch keyMsg.String() {
 			case "up":
@@ -1566,7 +1759,11 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					} else {
 						m.reactionSelIdx--
 					}
-					if !(hasInlineReplies && m.reactionSelIdx == len(sel.Reactions)) {
+					// Recompute kind after the move; clear nested
+					// reply state unless we landed on the reply
+					// list virtual element.
+					newKind, _ := m.selectedItemKind()
+					if newKind != ItemReplyList {
 						m.replyIdx = -1
 						m.replyReactionSelIdx = -1
 					}
@@ -1592,7 +1789,8 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					} else {
 						m.reactionSelIdx++
 					}
-					if !(hasInlineReplies && m.reactionSelIdx == len(sel.Reactions)) {
+					newKind, _ := m.selectedItemKind()
+					if newKind != ItemReplyList {
 						m.replyIdx = -1
 						m.replyReactionSelIdx = -1
 					}
@@ -1628,14 +1826,45 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					}
 				}
 				// Parent reaction selected → toggle it.
-				if sel != nil && m.reactionSelIdx >= 0 && m.reactionSelIdx < len(sel.Reactions) {
-					emoji := sel.Reactions[m.reactionSelIdx].Emoji
-					msgID := sel.MessageID
+				if sel != nil {
+					if kind, idx := m.selectedItemKind(); kind == ItemReaction && idx >= 0 && idx < len(sel.Reactions) {
+						emoji := sel.Reactions[idx].Emoji
+						msgID := sel.MessageID
+						m.reactMode = false
+						m.reactionSelIdx = -1
+						m.rebuildContent()
+						return m, func() tea.Msg {
+							return ToggleReactionMsg{MessageID: msgID, Emoji: emoji}
+						}
+					}
+				}
+				// Card selected → emit View Contact Info (Enter
+				// is the natural "open" key — matches how Enter
+				// on a reaction toggles it). The user can also
+				// press a/v/c for explicit actions.
+				if card := m.SelectedContactCard(); card != nil {
+					c := *card
 					m.reactMode = false
 					m.reactionSelIdx = -1
 					m.rebuildContent()
 					return m, func() tea.Msg {
-						return ToggleReactionMsg{MessageID: msgID, Emoji: emoji}
+						return FriendCardOptionsSelectMsg{
+							Action: FriendCardActionViewContactInfo,
+							Card:   c,
+						}
+					}
+				}
+				// File selected → trigger download via the same
+				// FilesListDownloadMsg path the all-files browser
+				// uses (the model handler resolves the destination
+				// folder and kicks off startDownload).
+				if file := m.SelectedFileInItem(); file != nil {
+					f := *file
+					m.reactMode = false
+					m.reactionSelIdx = -1
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return FilesListDownloadMsg{File: f}
 					}
 				}
 				// Enter on a parent message:
@@ -1707,6 +1936,72 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				return m, func() tea.Msg {
 					return EditMessageRequestMsg{MessageID: msgID}
 				}
+			case "a":
+				// 'a' = Add Friend on the currently-selected
+				// contact card (if any). Routes through the same
+				// FriendCardOptionsSelectMsg dispatch the
+				// right-click menu uses, so the existing
+				// conflict / merge / replace flow runs unchanged.
+				if card := m.SelectedContactCard(); card != nil {
+					c := *card
+					m.reactMode = false
+					m.reactionSelIdx = -1
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return FriendCardOptionsSelectMsg{
+							Action: FriendCardActionAddFriend,
+							Card:   c,
+						}
+					}
+				}
+				return m, nil
+			case "v":
+				// 'v' = View Contact Info on the currently
+				// selected card. Opens the temporary contact
+				// card view modal (the model decides between
+				// new / existing / self).
+				if card := m.SelectedContactCard(); card != nil {
+					c := *card
+					m.reactMode = false
+					m.reactionSelIdx = -1
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return FriendCardOptionsSelectMsg{
+							Action: FriendCardActionViewContactInfo,
+							Card:   c,
+						}
+					}
+				}
+				return m, nil
+			case "c":
+				// 'c' has two distinct meanings depending on
+				// what's selected:
+				//   - card: Copy Contact Info (JSON to clipboard)
+				//   - file: copy file contents to clipboard via
+				//     the existing FileCopyRequestMsg flow
+				// Falls through to no-op when neither.
+				if card := m.SelectedContactCard(); card != nil {
+					c := *card
+					m.reactMode = false
+					m.reactionSelIdx = -1
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return FriendCardOptionsSelectMsg{
+							Action: FriendCardActionCopyContactInfo,
+							Card:   c,
+						}
+					}
+				}
+				if file := m.SelectedFileInItem(); file != nil {
+					f := *file
+					m.reactMode = false
+					m.reactionSelIdx = -1
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return FileCopyRequestMsg{File: f}
+					}
+				}
+				return m, nil
 			case "esc":
 				// Esc unwinds: reply-reaction → reply → reactionSelIdx → exit react mode.
 				if onReplyList && m.replyReactionSelIdx >= 0 {
@@ -2032,6 +2327,12 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 	fileIdx := 0 // tracks which selectable file we're at
 
 	for i, msg := range msgs {
+		// Reset per-message render state used by rewriteFriendCards
+		// to know which contact-card pill it's currently emitting
+		// and whether it's the one selected by the cursor.
+		m.renderingMsgIdx = i
+		m.renderingCardCount = 0
+
 		name := msg.UserName
 		if name == "" {
 			if dn, ok := m.users[msg.UserID]; ok {
@@ -2073,8 +2374,8 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		// Highlight selected message in select mode.
 		if m.reactMode && i == m.reactIdx {
 			selectHighlight := MessageSelectBgStyle
+			cards, files, _, hasInlineReplies := m.itemCounts(&msg)
 			hasReactions := len(msg.Reactions) > 0
-			hasInlineReplies := !m.threadMode && m.replyFormat == "inline" && len(msg.Replies) > 0 && m.expandedReplies[msg.MessageID]
 			// Only authors can edit or delete their own messages,
 			// so hide the "e: edit" / "d: delete" hints when the
 			// local user isn't the author.
@@ -2082,16 +2383,38 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			if m.isMyMessage(msg) {
 				authorHint = "  e: edit  d: delete"
 			}
+			// Item-specific hint takes priority when the cursor
+			// has cycled onto a card or file inside the message.
+			// Otherwise we show the default reply / react / nav
+			// hints (with the new card/file mention if any are
+			// available to navigate to).
 			var hint string
-			switch {
-			case hasReactions && hasInlineReplies:
-				hint = " [Enter: reply  r: react" + authorHint + "  ←/→: reactions/replies  ↓: into replies]"
-			case hasReactions:
-				hint = " [Enter: reply  r: react" + authorHint + "  ←/→: select reaction]"
-			case hasInlineReplies:
-				hint = " [Enter: reply  r: react" + authorHint + "  →: select reply list  ↓: into replies]"
+			selKind, _ := m.selectedItemKind()
+			switch selKind {
+			case ItemCard:
+				hint = " [a: add friend  v: view info  c: copy info  ←/→: navigate]"
+			case ItemFile:
+				hint = " [Enter: download  c: copy contents  ←/→: navigate]"
 			default:
-				hint = " [Enter: reply  r: react" + authorHint + "]"
+				navParts := []string{}
+				if cards > 0 || files > 0 {
+					navParts = append(navParts, "items")
+				}
+				if hasReactions {
+					navParts = append(navParts, "reactions")
+				}
+				if hasInlineReplies {
+					navParts = append(navParts, "replies")
+				}
+				navHint := ""
+				if len(navParts) > 0 {
+					navHint = "  ←/→: " + strings.Join(navParts, "/")
+				}
+				replyDownHint := ""
+				if hasInlineReplies {
+					replyDownHint = "  ↓: into replies"
+				}
+				hint = " [Enter: reply  r: react" + authorHint + navHint + replyDownHint + "]"
 			}
 			headerLine = selectHighlight.Render(headerLine + hint)
 		}
@@ -2154,21 +2477,40 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			}
 		}
 
-		// Render file attachments.
+		// Render file attachments. The "selected" highlight fires
+		// for two distinct cursor sources:
+		//   1. The standalone file-pick selectMode (Ctrl-Up / 'f')
+		//   2. React/select mode when the cursor has cycled onto
+		//      this file row inside the parent message (the new
+		//      arrow-key navigation)
+		//
+		// The visual cursor "> " + selected style is enough to
+		// communicate which file is active — keyboard hints
+		// (Enter / c) live in the parent message header next to
+		// the username. Don't decorate the file label itself; we
+		// don't want the file row to mutate or grow when selected.
 		uploadingStyle := MessageFileUploadingStyle
-		for _, f := range msg.Files {
-			isSelected := m.selectMode && fileIdx == m.selectIdx
+		for fi, f := range msg.Files {
+			pickSelected := m.selectMode && fileIdx == m.selectIdx
+			reactSelected := false
+			if m.reactMode && i == m.reactIdx {
+				kind, idx := m.selectedItemKind()
+				if kind == ItemFile && idx == fi {
+					reactSelected = true
+				}
+			}
+			isSelected := pickSelected || reactSelected
 			sizeStr := formatFileSize(f.Size)
 			switch {
 			case f.Uploading && isSelected:
 				lines = append(lines, fileSelectedStyle.Render(
-					fmt.Sprintf("  > [FILE:%s] (%s) uploading… — c: cancel", f.Name, sizeStr)))
+					fmt.Sprintf("  > [FILE:%s] (%s) uploading…", f.Name, sizeStr)))
 			case f.Uploading:
 				lines = append(lines, uploadingStyle.Render(
 					fmt.Sprintf("  [FILE:%s] (%s) uploading…", f.Name, sizeStr)))
 			case isSelected:
 				lines = append(lines, fileSelectedStyle.Render(
-					fmt.Sprintf("  > [FILE:%s] (%s) — Enter to download", f.Name, sizeStr)))
+					fmt.Sprintf("  > [FILE:%s] (%s)", f.Name, sizeStr)))
 			default:
 				lines = append(lines, fileStyle.Render(
 					fmt.Sprintf("  [FILE:%s] (%s)", f.Name, sizeStr)))

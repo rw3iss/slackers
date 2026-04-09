@@ -48,6 +48,7 @@ type KeyMap struct {
 	Notifications    key.Binding
 	ShareMyInfo      key.Binding
 	ShortcutsEditor  key.Binding
+	CommandList      key.Binding
 }
 
 // binding creates a key.Binding from a ShortcutMap action name.
@@ -106,6 +107,7 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		Notifications:    binding(sm, "notifications", "alt+n", "notifications view"),
 		ShareMyInfo:      binding(sm, "share_my_info", "alt+m", "insert [FRIEND:me]"),
 		ShortcutsEditor:  binding(sm, "shortcuts_editor", "alt+k", "edit keyboard shortcuts"),
+		CommandList:      binding(sm, "command_list", "alt+c", "open the command list"),
 	}
 }
 

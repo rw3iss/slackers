@@ -17,6 +17,7 @@ const (
 	SidebarActionRename
 	SidebarActionInvite
 	SidebarActionViewContact
+	SidebarActionRemoveFriend
 )
 
 // SidebarOptionsSelectMsg signals which option the user chose from
