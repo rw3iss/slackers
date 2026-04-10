@@ -1,11 +1,10 @@
 package tui
 
-// Emotes List overlay — full-screen browser of every registered
-// emote. Opened by /emotes or its keybinding. Has a filter input
-// at the top, two sections (System / Custom), and renders each
-// row as "/command — preview text". Enter inserts the highlighted
-// emote's command into the input bar. 'e' edits, 'n' creates
-// new, 'd' deletes (custom only, with confirmation).
+// Emotes List overlay — browseable list of every registered emote.
+// Three focus zones cycled by Tab:
+//   0 = search filter input
+//   1 = emote list (arrow nav, e/n/d shortcuts)
+//   2 = "Create New Emote" button at the bottom
 
 import (
 	"strings"
@@ -30,24 +29,22 @@ type EmoteListModel struct {
 	store         *emotes.Store
 	systemEmotes  []emotes.Emote
 	customEmotes  []emotes.Emote
-	allFiltered   []emoteRow // combined filtered list for rendering
+	allFiltered   []emoteRow
 	filter        textinput.Model
 	list          SelectableList
 	width, height int
 	confirmDelete bool
 	deleteTarget  string
+	focus         int // 0=search, 1=list, 2=create button
 }
 
-// emoteRow is one row in the combined filtered list. It carries
-// the section header flag so the renderer can draw group labels.
 type emoteRow struct {
 	isHeader bool
-	label    string        // header text or "/command"
-	preview  string        // abbreviated emote text
-	emote    *emotes.Emote // nil for headers
+	label    string
+	preview  string
+	emote    *emotes.Emote
 }
 
-// NewEmoteList builds the overlay from the emote store.
 func NewEmoteList(store *emotes.Store) EmoteListModel {
 	ti := textinput.New()
 	ti.Placeholder = "Filter emotes..."
@@ -58,6 +55,7 @@ func NewEmoteList(store *emotes.Store) EmoteListModel {
 	m := EmoteListModel{
 		store:  store,
 		filter: ti,
+		focus:  0, // start on search
 	}
 	m.rebuildList()
 	return m
@@ -68,15 +66,12 @@ func (m *EmoteListModel) SetSize(w, h int) {
 	m.height = h
 }
 
-// rebuildList regenerates the filtered display rows from the
-// store's system and custom emote lists.
 func (m *EmoteListModel) rebuildList() {
 	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
 	m.systemEmotes = m.store.Defaults()
 	m.customEmotes = m.store.Custom()
 
 	m.allFiltered = nil
-	// System emotes section.
 	var sysRows []emoteRow
 	for _, e := range m.systemEmotes {
 		if q != "" && !strings.Contains(strings.ToLower(e.Command), q) &&
@@ -88,17 +83,12 @@ func (m *EmoteListModel) rebuildList() {
 			preview = preview[:47] + "..."
 		}
 		e := e
-		sysRows = append(sysRows, emoteRow{
-			label:   "/" + e.Command,
-			preview: preview,
-			emote:   &e,
-		})
+		sysRows = append(sysRows, emoteRow{label: "/" + e.Command, preview: preview, emote: &e})
 	}
 	if len(sysRows) > 0 {
 		m.allFiltered = append(m.allFiltered, emoteRow{isHeader: true, label: "System Emotes"})
 		m.allFiltered = append(m.allFiltered, sysRows...)
 	}
-	// Custom emotes section.
 	var cusRows []emoteRow
 	for _, e := range m.customEmotes {
 		if q != "" && !strings.Contains(strings.ToLower(e.Command), q) &&
@@ -110,11 +100,7 @@ func (m *EmoteListModel) rebuildList() {
 			preview = preview[:47] + "..."
 		}
 		e := e
-		cusRows = append(cusRows, emoteRow{
-			label:   "/" + e.Command,
-			preview: preview,
-			emote:   &e,
-		})
+		cusRows = append(cusRows, emoteRow{label: "/" + e.Command, preview: preview, emote: &e})
 	}
 	if len(cusRows) > 0 {
 		m.allFiltered = append(m.allFiltered, emoteRow{isHeader: true, label: "Custom Emotes"})
@@ -123,8 +109,6 @@ func (m *EmoteListModel) rebuildList() {
 	m.list.SetCount(len(m.allFiltered))
 }
 
-// selectedEmote returns the emote at the current cursor, or nil
-// if the cursor is on a header or out of range.
 func (m *EmoteListModel) selectedEmote() *emotes.Emote {
 	idx := m.list.Current()
 	if idx < 0 || idx >= len(m.allFiltered) {
@@ -133,10 +117,19 @@ func (m *EmoteListModel) selectedEmote() *emotes.Emote {
 	return m.allFiltered[idx].emote
 }
 
+func (m *EmoteListModel) cycleFocus(delta int) {
+	m.focus = (m.focus + delta + 3) % 3
+	if m.focus == 0 {
+		m.filter.Focus()
+	} else {
+		m.filter.Blur()
+	}
+}
+
 func (m EmoteListModel) Update(msg tea.Msg) (EmoteListModel, tea.Cmd) {
 	switch v := msg.(type) {
 	case tea.KeyMsg:
-		// Confirmation mode for delete.
+		// Delete confirmation mode — takes priority over everything.
 		if m.confirmDelete {
 			switch v.String() {
 			case "y", "Y":
@@ -155,60 +148,103 @@ func (m EmoteListModel) Update(msg tea.Msg) (EmoteListModel, tea.Cmd) {
 			}
 		}
 
-		switch v.String() {
-		case "esc":
+		// Esc always closes.
+		if v.String() == "esc" {
 			return m, func() tea.Msg { return EmoteListCloseMsg{} }
-		case "enter":
-			if e := m.selectedEmote(); e != nil {
-				cmd := e.Command
-				return m, func() tea.Msg { return EmoteListSelectMsg{Command: cmd} }
-			}
+		}
+
+		// Tab cycles focus: search → list → create button.
+		if v.String() == "tab" {
+			m.cycleFocus(1)
 			return m, nil
-		case "e":
-			// Edit selected emote.
-			if e := m.selectedEmote(); e != nil {
-				cmd := e.Command
-				return m, func() tea.Msg { return EmoteEditRequestMsg{Command: cmd} }
-			}
+		}
+		if v.String() == "shift+tab" {
+			m.cycleFocus(-1)
 			return m, nil
-		case "n":
-			// New emote.
-			return m, func() tea.Msg { return EmoteEditRequestMsg{} }
-		case "d":
-			// Delete (custom only).
-			if e := m.selectedEmote(); e != nil && e.IsCustom {
-				m.confirmDelete = true
-				m.deleteTarget = e.Command
+		}
+
+		// --- Focus 0: search input ---
+		if m.focus == 0 {
+			switch v.String() {
+			case "down":
+				// Down from search → focus the list.
+				m.cycleFocus(1)
+				return m, nil
+			case "enter":
+				// Enter from search → focus the list.
+				m.cycleFocus(1)
+				return m, nil
+			default:
+				// All other keys go to the filter input.
+				var cmd tea.Cmd
+				m.filter, cmd = m.filter.Update(msg)
+				m.rebuildList()
+				return m, cmd
+			}
+		}
+
+		// --- Focus 1: emote list ---
+		if m.focus == 1 {
+			switch v.String() {
+			case "enter":
+				if e := m.selectedEmote(); e != nil {
+					cmd := e.Command
+					return m, func() tea.Msg { return EmoteListSelectMsg{Command: cmd} }
+				}
+				return m, nil
+			case "e":
+				if e := m.selectedEmote(); e != nil {
+					cmd := e.Command
+					return m, func() tea.Msg { return EmoteEditRequestMsg{Command: cmd} }
+				}
+				return m, nil
+			case "d":
+				if e := m.selectedEmote(); e != nil && e.IsCustom {
+					m.confirmDelete = true
+					m.deleteTarget = e.Command
+					return m, nil
+				}
+				return m, nil
+			case "up", "k":
+				// If at the top of the list, move focus to search.
+				if m.list.Current() <= 0 || m.firstNonHeaderIdx() == m.list.Current() {
+					m.cycleFocus(-1)
+					return m, nil
+				}
+				m.moveSkippingHeaders(-1)
+				return m, nil
+			case "down", "j":
+				// If at the bottom, move focus to create button.
+				if m.list.Current() >= len(m.allFiltered)-1 || m.lastNonHeaderIdx() == m.list.Current() {
+					m.cycleFocus(1)
+					return m, nil
+				}
+				m.moveSkippingHeaders(1)
+				return m, nil
+			case "pgup", "pgdown", "home", "end":
+				if m.list.HandleKey(v) {
+					m.skipToNonHeader(1)
+				}
 				return m, nil
 			}
 			return m, nil
 		}
-		// Navigation keys go to SelectableList, skipping headers.
-		if v.String() == "up" || v.String() == "k" {
-			m.moveSkippingHeaders(-1)
-			return m, nil
-		}
-		if v.String() == "down" || v.String() == "j" {
-			m.moveSkippingHeaders(1)
-			return m, nil
-		}
-		if v.String() == "pgup" || v.String() == "pgdown" || v.String() == "home" || v.String() == "end" {
-			if m.list.HandleKey(v) {
-				// After page nav, skip to the nearest non-header.
-				m.skipToNonHeader(1)
+
+		// --- Focus 2: create button ---
+		if m.focus == 2 {
+			switch v.String() {
+			case "enter", " ":
+				return m, func() tea.Msg { return EmoteEditRequestMsg{} }
+			case "up":
+				m.cycleFocus(-1)
+				return m, nil
 			}
 			return m, nil
 		}
-		// Everything else goes to the filter input.
-		var cmd tea.Cmd
-		m.filter, cmd = m.filter.Update(msg)
-		m.rebuildList()
-		return m, cmd
 	}
 	return m, nil
 }
 
-// moveSkippingHeaders moves the cursor by delta, skipping header rows.
 func (m *EmoteListModel) moveSkippingHeaders(delta int) {
 	n := len(m.allFiltered)
 	if n == 0 {
@@ -224,7 +260,6 @@ func (m *EmoteListModel) moveSkippingHeaders(delta int) {
 	}
 }
 
-// skipToNonHeader ensures the cursor isn't sitting on a header.
 func (m *EmoteListModel) skipToNonHeader(dir int) {
 	n := len(m.allFiltered)
 	idx := m.list.Current()
@@ -236,27 +271,48 @@ func (m *EmoteListModel) skipToNonHeader(dir int) {
 	}
 }
 
+func (m *EmoteListModel) firstNonHeaderIdx() int {
+	for i, r := range m.allFiltered {
+		if !r.isHeader {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *EmoteListModel) lastNonHeaderIdx() int {
+	for i := len(m.allFiltered) - 1; i >= 0; i-- {
+		if !m.allFiltered[i].isHeader {
+			return i
+		}
+	}
+	return -1
+}
+
 func (m EmoteListModel) View() string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 	cmdStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
+	selBtnStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
+	errStyle := lipgloss.NewStyle().Foreground(ColorHighlight)
 
 	var b strings.Builder
 
-	// Filter bar.
-	b.WriteString("  " + m.filter.View())
+	// Filter bar — highlighted when focused.
+	filterPrefix := "  "
+	if m.focus == 0 {
+		filterPrefix = selBtnStyle.Render("▶ ")
+	}
+	b.WriteString(filterPrefix + m.filter.View())
 	b.WriteString("\n\n")
 
 	if m.confirmDelete {
-		b.WriteString(titleStyle.Render("  Delete /" + m.deleteTarget + "? y=yes, any key=cancel"))
-		b.WriteString("\n\n")
+		b.WriteString(errStyle.Render("  Delete /"+m.deleteTarget+"? y=yes, any key=cancel") + "\n\n")
 	}
 
 	if len(m.allFiltered) == 0 {
 		b.WriteString(dimStyle.Render("  No emotes match your filter."))
 	} else {
-		// Compute longest command name for column alignment.
 		maxCmdW := 0
 		for _, r := range m.allFiltered {
 			if !r.isHeader && len(r.label) > maxCmdW {
@@ -265,8 +321,7 @@ func (m EmoteListModel) View() string {
 		}
 		maxCmdW += 2
 
-		// Window around cursor.
-		visible := 20
+		visible := 18
 		cur := m.list.Current()
 		start := 0
 		end := len(m.allFiltered)
@@ -284,33 +339,39 @@ func (m EmoteListModel) View() string {
 		for i := start; i < end; i++ {
 			r := m.allFiltered[i]
 			if r.isHeader {
-				b.WriteString("\n")
-				b.WriteString(headerStyle.Render("  " + r.label))
-				b.WriteString("\n")
+				b.WriteString("\n" + headerStyle.Render("  "+r.label) + "\n")
 				continue
 			}
 			cursor := "  "
-			style := ChannelItemStyle
-			if i == cur {
-				cursor = "> "
-				style = ChannelSelectedStyle
+			if m.focus == 1 && i == cur {
+				cursor = selBtnStyle.Render("> ")
 			}
 			padded := r.label + strings.Repeat(" ", maxCmdW-len(r.label))
 			row := cursor + cmdStyle.Render(padded) + " " + dimStyle.Render(r.preview)
-			// If selected and the emote is custom, show a tag.
-			if r.emote != nil && r.emote.IsCustom && i == cur {
-				row += "  " + style.Render("[custom]")
+			if r.emote != nil && r.emote.IsCustom && m.focus == 1 && i == cur {
+				row += "  " + dimStyle.Render("[custom]")
 			}
-			b.WriteString(row)
-			b.WriteString("\n")
+			b.WriteString(row + "\n")
 		}
 	}
 
-	footer := "Enter: insert" + HintSep + "e: edit" + HintSep + "n: new" + HintSep + "d: delete (custom)" + HintSep + FooterHintClose
+	// Create New Emote button.
+	b.WriteString("\n")
+	createLabel := "  Create New Emote"
+	if m.focus == 2 {
+		createLabel = selBtnStyle.Render("▶ Create New Emote")
+	}
+	b.WriteString(createLabel + "\n")
+
+	hints := "Tab: cycle focus"
+	if m.focus == 1 {
+		hints += HintSep + "Enter: insert" + HintSep + "e: edit" + HintSep + "d: delete"
+	}
+	hints += HintSep + FooterHintClose
 
 	scaffold := OverlayScaffold{
 		Title:       "Emotes",
-		Footer:      footer,
+		Footer:      hints,
 		Width:       m.width,
 		Height:      m.height,
 		MaxBoxWidth: 85,
