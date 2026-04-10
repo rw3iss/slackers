@@ -410,8 +410,14 @@ func checkNewMessagesBgCmd(svc slackpkg.SlackService, lastSeen map[string]string
 
 // ---- Friend subsystem --------------------------------------------------
 
-// loadFriendsCmd loads friend channels and pings each friend for online status.
-func loadFriendsCmd(store *friends.FriendStore, p2p *secure.P2PNode) tea.Cmd {
+// loadFriendsCmd loads friend channels from the store and builds
+// the sidebar entries. It does NOT dial friends — that's handled
+// by the startup ping cycle (friendPingCmdWithCurrent) which runs
+// immediately after FriendsLoadedMsg. Dialing here would trigger
+// libp2p's dial backoff when the friend is offline, which then
+// blocks the ping cycle's attempt a moment later, adding a 5-30
+// second delay before the first successful connection.
+func loadFriendsCmd(store *friends.FriendStore, _ /* p2p */ *secure.P2PNode) tea.Cmd {
 	return func() tea.Msg {
 		if store == nil {
 			return FriendsLoadedMsg{}
@@ -428,13 +434,11 @@ func loadFriendsCmd(store *friends.FriendStore, p2p *secure.P2PNode) tea.Cmd {
 				UserID:   f.UserID,
 			}
 			channels = append(channels, ch)
-			if p2p != nil && f.Multiaddr != "" {
-				_ = p2p.ConnectToPeer(f.UserID, f.Multiaddr)
-				if p2p.IsConnected(f.UserID) {
-					online[f.UserID] = true
-					store.SetOnline(f.UserID, true)
-				}
-			}
+			// Don't dial here — the startup ping cycle
+			// (dispatched right after FriendsLoadedMsg)
+			// handles all connections. The peerLookup
+			// callback on the P2P node resolves inbound
+			// connections from friends we haven't dialed yet.
 		}
 		return FriendsLoadedMsg{Channels: channels, Online: online}
 	}
