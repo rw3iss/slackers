@@ -1832,7 +1832,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			prevHeight := m.input.DisplayHeight()
 			var cmd tea.Cmd
-			m.input, cmd = m.input.Update(msg)
+			// Use origMsg (pre-normalization) so the textarea
+			// receives capital letters as typed. The
+			// normalizeShortcutKey pass lowercases plain ASCII
+			// for shortcut matching, but text input needs the
+			// original case.
+			m.input, cmd = m.input.Update(origMsg)
 			cmds = append(cmds, cmd)
 			// Resize layout if input height changed.
 			if m.input.DisplayHeight() != prevHeight {
