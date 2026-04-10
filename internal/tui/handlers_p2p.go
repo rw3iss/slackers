@@ -222,10 +222,32 @@ func (m *Model) appendFriendMessage(userID string, msg types.Message) {
 // message view. Used by both the keyboard Enter handler and the mouse
 // click handler.
 func (m *Model) loadFriendHistory(friendUserID string) {
-	// Opening the chat is the user's signal that they want to talk
-	// to this friend — try to (re)connect now and refresh the
-	// inactivity clock so the watchdog won't immediately drop us.
+	// Opening / clicking a friend is the user's signal that they
+	// want to talk to this person — try to (re)connect now, ping
+	// for a fresh status update, and refresh the sidebar + header
+	// so the online/away/offline indicator is current, not stale
+	// from the last periodic ping cycle.
 	m.connectFriend(friendUserID)
+	// Async status probe: connect (if needed), check connection
+	// state, and immediately update the friend store + sidebar.
+	// This runs in a goroutine so it doesn't block the UI while
+	// the 3-second dial timeout runs.
+	if m.p2pNode != nil && m.friendStore != nil {
+		go func() {
+			f := m.friendStore.Get(friendUserID)
+			if f == nil || f.Multiaddr == "" {
+				return
+			}
+			// Best-effort dial — if already connected this is
+			// nearly instant (libp2p short-circuits).
+			_ = m.p2pNode.ConnectToPeer(friendUserID, f.Multiaddr)
+			on := m.p2pNode.IsConnected(friendUserID)
+			m.friendStore.SetOnline(friendUserID, on)
+			if on {
+				m.friendStore.UpdateLastOnline(friendUserID)
+			}
+		}()
+	}
 	if m.friendHistory != nil {
 		pairKey := ""
 		if m.friendStore != nil {
