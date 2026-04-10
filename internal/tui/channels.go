@@ -826,9 +826,13 @@ func (m ChannelListModel) View() string {
 	// border — growing upward from there.
 	if awayFooterLines > 0 {
 		renderedLines := strings.Count(content, "\n") + 1
-		// Total rows available inside the border = m.height - 2.
-		// We need: renderedLines + gap + footerLines = totalRows.
-		totalRows := m.height - 2
+		// Total rows available inside the border. The pane's
+		// lipgloss style uses Height(m.height) which includes
+		// the 2 border rows. The actual content area is
+		// m.height - 2 rows, but lipgloss adds one implicit
+		// trailing newline, so we use (m.height - 1) to push
+		// the footer flush against the bottom border.
+		totalRows := m.height - 1
 		gap := totalRows - renderedLines - awayFooterLines
 		if gap < 0 {
 			gap = 0
