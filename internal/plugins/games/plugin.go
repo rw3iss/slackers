@@ -6,6 +6,13 @@ import (
 	"github.com/rw3iss/slackers/internal/plugins"
 )
 
+// GameStartRequest is returned as a Result.Cmd by the /games
+// command when the user picks a specific game. The Model checks
+// for this type and opens the game overlay.
+type GameStartRequest struct {
+	Name string
+}
+
 // GamesPlugin provides mini-games accessible via /games.
 type GamesPlugin struct {
 	appAPI api.API
@@ -42,26 +49,27 @@ func (p *GamesPlugin) Commands() []*commands.Command {
 			Description: "Play mini games (snake, tetris)",
 			Usage:       "/games [game-name]",
 			Args: []commands.ArgSpec{
-				{Name: "game", Kind: commands.ArgString, Optional: true, Help: "snake or tetris"},
+				{Name: "game", Kind: commands.ArgGameName, Optional: true, Help: "snake or tetris"},
 			},
 			Run: func(ctx *commands.Context) commands.Result {
-				gameName := "menu"
+				gameName := ""
 				if len(ctx.Args) > 0 {
 					gameName = ctx.Args[0]
 				}
 				switch gameName {
-				case "snake":
+				case "snake", "tetris":
 					return commands.Result{
-						Status:    commands.StatusOK,
-						Title:     "Snake",
-						Body:      NewSnakeGame().RenderFrame(),
-						StatusBar: "Snake game loaded! (Note: Full interactive mode coming in next update)",
+						Status: commands.StatusOK,
+						Cmd:    GameStartRequest{Name: gameName},
 					}
-				case "menu", "":
+				case "", "menu":
 					return commands.Result{
 						Status: commands.StatusOK,
 						Title:  "Mini Games",
-						Body:   "Available games:\n\n  snake   — Classic snake game\n  tetris  — Block stacking puzzle\n\nUsage: /games <name>",
+						Sections: []commands.Section{
+							{Text: "snake  — Classic snake game", Selectable: true, Title: "snake"},
+							{Text: "tetris — Block stacking puzzle (coming soon)", Selectable: true, Title: "tetris"},
+						},
 					}
 				default:
 					return commands.Result{

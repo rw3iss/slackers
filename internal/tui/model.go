@@ -67,6 +67,7 @@ const (
 	overlayThemeColorPicker
 	overlayNotifications
 	overlayPlugins
+	overlayGame
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -486,8 +487,9 @@ type Model struct {
 	// use to interact with the app. Created once in NewModel, shared
 	// with all plugins. The Model drains its cmdQueue on every Update.
 	apiHost       *api.Host
-	pluginManager *plugins.Manager
+	pluginManager  *plugins.Manager
 	pluginsOverlay PluginsModel
+	gameOverlay    GameOverlayModel
 }
 
 // NewModel creates a new root TUI model.
@@ -1553,6 +1555,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayPlugins {
 			var cmd tea.Cmd
 			m.pluginsOverlay, cmd = m.pluginsOverlay.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayGame {
+			var cmd tea.Cmd
+			m.gameOverlay, cmd = m.gameOverlay.Update(msg)
 			return m, cmd
 		}
 
@@ -3153,6 +3160,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PluginsCloseMsg:
 		m.overlay = overlayNone
 		return m, nil
+
+	case GameOverlayOpenMsg:
+		m.gameOverlay = NewGameOverlay(msg.GameName)
+		m.gameOverlay.SetSize(m.width, m.height)
+		m.overlay = overlayGame
+		m.warning = "Game: " + msg.GameName + " — Ctrl+Q to quit"
+		return m, m.gameOverlay.TickCmd()
+
+	case GameOverlayCloseMsg:
+		m.overlay = overlayNone
+		m.warning = ""
+		return m, nil
+
+	case gameTickMsg:
+		if m.overlay != overlayGame {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.gameOverlay, cmd = m.gameOverlay.Update(msg)
+		return m, cmd
 
 	case PluginToggleMsg:
 		info := m.pluginManager.Get(msg.Name)
@@ -5273,6 +5300,8 @@ func (m Model) viewInner() string {
 		return m.remoteBrowser.View()
 	case overlayPlugins:
 		return m.pluginsOverlay.View()
+	case overlayGame:
+		return m.gameOverlay.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the

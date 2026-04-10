@@ -117,6 +117,29 @@ func (m *Model) argCompletionsForKind(kind commands.ArgKind) []argCandidate {
 			})
 		}
 		return out
+
+	case commands.ArgGameName:
+		// Hardcoded for now — in the future, dynamically from plugin registry.
+		games := []struct{ name, desc string }{
+			{"snake", "Classic snake game"},
+			{"tetris", "Block stacking puzzle"},
+		}
+		out := make([]argCandidate, len(games))
+		for i, g := range games {
+			out[i] = argCandidate{Name: g.name, Description: g.desc}
+		}
+		return out
+
+	case commands.ArgPluginName:
+		if m.pluginManager == nil {
+			return nil
+		}
+		list := m.pluginManager.List()
+		out := make([]argCandidate, len(list))
+		for i, p := range list {
+			out[i] = argCandidate{Name: p.Name, Description: p.Version + " — " + p.State.String()}
+		}
+		return out
 	}
 	return nil
 }

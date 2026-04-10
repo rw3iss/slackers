@@ -126,6 +126,12 @@ func (g *SnakeGame) Tick() {
 	}
 }
 
+// Score returns the current score.
+func (g *SnakeGame) Score() int { return g.score }
+
+// IsGameOver returns whether the game has ended.
+func (g *SnakeGame) IsGameOver() bool { return g.gameOver }
+
 // SetDirection changes the snake's direction.
 func (g *SnakeGame) SetDirection(d Direction) {
 	// Prevent 180-degree turns.

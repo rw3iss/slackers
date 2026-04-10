@@ -29,6 +29,7 @@ import (
 	"github.com/rw3iss/slackers/internal/config"
 	_ "github.com/rw3iss/slackers/internal/emotes"
 	"github.com/rw3iss/slackers/internal/friends"
+	gamesPlugin "github.com/rw3iss/slackers/internal/plugins/games"
 	"github.com/rw3iss/slackers/internal/setup"
 	"github.com/rw3iss/slackers/internal/theme"
 	"github.com/rw3iss/slackers/internal/types"
@@ -635,7 +636,7 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Usage:       "/plugin <action> [name]",
 		Args: []commands.ArgSpec{
 			{Name: "action", Kind: commands.ArgString, Help: "enable, disable, uninstall, or info"},
-			{Name: "name", Kind: commands.ArgString, Optional: true, Help: "plugin name"},
+			{Name: "name", Kind: commands.ArgPluginName, Optional: true, Help: "plugin name"},
 		},
 		Run: func(ctx *commands.Context) commands.Result {
 			m := ctx.Host.(*Model)
@@ -915,6 +916,12 @@ func (m *Model) applyCommandResult(res commands.Result) tea.Cmd {
 		// Allow plain func() tea.Msg as a convenience.
 		if fn, ok := res.Cmd.(func() tea.Msg); ok {
 			return tea.Cmd(fn)
+		}
+		// Plugin game start request — convert to overlay message.
+		if req, ok := res.Cmd.(gamesPlugin.GameStartRequest); ok {
+			return func() tea.Msg {
+				return GameOverlayOpenMsg{GameName: req.Name}
+			}
 		}
 	}
 	return nil
