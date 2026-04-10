@@ -136,6 +136,20 @@ func (m *Model) cancelUpload(key string) {
 						break
 					}
 				}
+				// If the message is now empty (no text AND no
+				// files remaining), delete it from the history
+				// entirely so the user doesn't see a ghost
+				// header with no content.
+				if strings.TrimSpace(msgs[i].Text) == "" && len(msgs[i].Files) == 0 {
+					msgs = append(msgs[:i], msgs[i+1:]...)
+					m.friendMessages[m.currentCh.UserID] = msgs
+					m.messages.RemoveMessage(msgID)
+					if m.friendHistory != nil {
+						go m.friendHistory.Save(m.currentCh.UserID)
+					}
+					m.warning = "Upload cancelled"
+					return
+				}
 				break
 			}
 			m.friendMessages[m.currentCh.UserID] = msgs

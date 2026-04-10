@@ -3417,6 +3417,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					displayText = cleanText
 				}
+				// If the friend is offline, mark the message as
+				// Pending right away. Text-only messages get their
+				// Pending flag set by FriendSendResultMsg after
+				// the send attempt fails, but file-only messages
+				// don't dispatch a sendFriendMessageCmd so the
+				// result never arrives.
+				friendOffline := m.p2pNode != nil && !m.p2pNode.IsConnected(peerUID)
 				localMsg := types.Message{
 					MessageID: p2pLocalMsgID,
 					UserID:    "me",
@@ -3425,6 +3432,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Timestamp: time.Now(),
 					Files:     fileInfos,
 					ReplyTo:   replyToID,
+					Pending:   friendOffline,
 				}
 				// Register each file in uploadCancels with a nil cancel
 				// func — cancellation for P2P uploads is dispatched

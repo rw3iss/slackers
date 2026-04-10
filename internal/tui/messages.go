@@ -942,6 +942,22 @@ func (m *MessageViewModel) SetFileUploaded(messageID, fileID string) bool {
 	return false
 }
 
+// RemoveMessage removes a message (by ID) from the current view
+// and re-renders. Used when a file-only message has its last file
+// cancelled, leaving an empty ghost entry that should be cleaned
+// up rather than displayed as a bare header with no content.
+func (m *MessageViewModel) RemoveMessage(messageID string) bool {
+	for i := range m.messages {
+		if m.messages[i].MessageID == messageID {
+			m.messages = append(m.messages[:i], m.messages[i+1:]...)
+			delete(m.formattedTextCache, messageID)
+			m.rebuildContent()
+			return true
+		}
+	}
+	return false
+}
+
 // RemoveFile removes a file (by ID) from a message and re-renders.
 // Used when a user cancels an upload before it completes.
 func (m *MessageViewModel) RemoveFile(messageID, fileID string) bool {
