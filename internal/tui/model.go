@@ -3597,6 +3597,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ChannelID: m.currentCh.ID,
 				Files:     slackFileInfos,
 			}
+			debug.Log("[tui] optimistic append: id=%s text=%q ch=%s",
+				localMsgID, cleanSlackText, m.currentCh.ID)
 			m.messages.AppendMessage(localMsg)
 
 			// Kick off background uploads for any files. Each upload
