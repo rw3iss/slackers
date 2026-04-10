@@ -472,20 +472,22 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 					},
 				}
 			}
-			// No channel — show in Output view. For setup,
-			// show both JSON + hash as selectable sections so
-			// the user can pick which to copy. For other
-			// targets, show the body as a selectable section.
-			if target.name == "setup" {
+			// No channel — show in Output view with selectable
+			// sections so the user can arrow-select + copy.
+			switch target.name {
+			case "setup":
 				return m.buildShareSetupOutput()
-			}
-			return commands.Result{
-				Status: commands.StatusOK,
-				Title:  "Share: " + target.name,
-				Sections: []commands.Section{
-					{Text: body, Selectable: true},
-				},
-				StatusBar: "No channel selected — select an item and press 'c' to copy",
+			case "me", "profile":
+				return m.buildShareProfileOutput()
+			default:
+				return commands.Result{
+					Status: commands.StatusOK,
+					Title:  "Share: " + target.name,
+					Sections: []commands.Section{
+						{Text: body, Selectable: true},
+					},
+					StatusBar: "No channel selected — select an item and press 'c' to copy",
+				}
 			}
 		},
 	})
@@ -779,6 +781,63 @@ func (m *Model) refreshCmdSuggest() {
 	}
 	m.cmdSuggest.SetArgMatches(ranked, prefix)
 	m.cmdSuggest.SetWidth(m.width - 2)
+}
+
+// buildShareProfileOutput returns a multi-section Output view with
+// the local user's full contact card JSON as a selectable item.
+// Used by /share me and /share profile when no channel is selected.
+func (m *Model) buildShareProfileOutput() commands.Result {
+	pubKey := ""
+	if m.secureMgr != nil {
+		pubKey = m.secureMgr.OwnPublicKeyBase64()
+	}
+	multiaddr := ""
+	if m.p2pNode != nil {
+		multiaddr = m.p2pNode.Multiaddr()
+	}
+	slackerID := ""
+	myName := ""
+	myEmail := ""
+	if m.cfg != nil {
+		slackerID = m.cfg.SlackerID
+		myName = m.cfg.MyName
+		myEmail = m.cfg.MyEmail
+	}
+	card := friends.MyContactCard(slackerID, myName, myEmail, pubKey, multiaddr)
+	pretty, err := json.MarshalIndent(card, "", "  ")
+	if err != nil {
+		return commands.Result{
+			Status:    commands.StatusError,
+			StatusBar: "Failed to build profile: " + err.Error(),
+		}
+	}
+	// Also build the compact hash for a second selectable option.
+	hash, _ := friends.EncodeContactCard(card)
+
+	sections := []commands.Section{
+		{
+			Text:       "Your contact card. Select an item and press 'c' or Enter to copy.",
+			Selectable: false,
+		},
+		{
+			Title:      "JSON (full profile)",
+			Text:       string(pretty),
+			Selectable: true,
+		},
+	}
+	if hash != "" {
+		sections = append(sections, commands.Section{
+			Title:      "Hash (compact)",
+			Text:       hash,
+			Selectable: true,
+		})
+	}
+	return commands.Result{
+		Status:    commands.StatusOK,
+		Title:     "Share: profile",
+		Sections:  sections,
+		StatusBar: "Select an item and press 'c' to copy",
+	}
 }
 
 // buildShareSetupOutput returns a multi-section Output view result
