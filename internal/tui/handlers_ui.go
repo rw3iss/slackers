@@ -330,6 +330,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			// the top-centre of the message pane. Takes priority
 			// over the underlying row content since the button
 			// visually overlays it. Opens the notifications panel,
+			// Background game taskbar button.
+			if gx0, gx1, gy, gVisible := m.gameTaskbarClickArea(); gVisible && y == gy && x >= gx0 && x < gx1 {
+				if m.backgroundGame != nil {
+					gameName := m.backgroundGame.gameName
+					return m, func() tea.Msg { return GameOverlayOpenMsg{GameName: gameName} }
+				}
+			}
 			// matching the keyboard binding behaviour.
 			if nx0, nx1, ny, visible := m.notificationsButtonClickArea(); visible && y == ny && x >= nx0 && x < nx1 {
 				m.notifs = NewNotificationsOverlay(m.notifStore.All())

@@ -490,6 +490,10 @@ type Model struct {
 	pluginManager  *plugins.Manager
 	pluginsOverlay PluginsModel
 	gameOverlay    GameOverlayModel
+	// backgroundGame is non-nil when a game is running but hidden
+	// (user pressed Esc to return to chat). The game is paused
+	// and can be restored via /games or the taskbar indicator.
+	backgroundGame *GameOverlayModel
 }
 
 // NewModel creates a new root TUI model.
@@ -1128,6 +1132,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Game overlay takes FULL keyboard priority — intercept
+		// before any global shortcuts so Ctrl+S etc. route to the
+		// game, not to settings. Escape hides the game to background.
+		if m.overlay == overlayGame {
+			key := msg.String()
+			if key == "esc" {
+				// Hide game to background (pause + keep state).
+				m.gameOverlay.paused = true
+				bg := m.gameOverlay
+				m.backgroundGame = &bg
+				m.overlay = overlayNone
+				m.warning = "Game paused — type /games or click the taskbar to resume"
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.gameOverlay, cmd = m.gameOverlay.Update(msg)
+			return m, cmd
+		}
+
 		// Global shortcuts that work even in overlays. Quit is handled
 		// above so it works even in friend-config / color-picker.
 		switch {
@@ -1557,12 +1580,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pluginsOverlay, cmd = m.pluginsOverlay.Update(msg)
 			return m, cmd
 		}
-		if m.overlay == overlayGame {
-			var cmd tea.Cmd
-			m.gameOverlay, cmd = m.gameOverlay.Update(msg)
-			return m, cmd
-		}
-
 		// Normal key handling (no overlay)
 		switch {
 		case key.Matches(msg, m.keymap.Tab):
@@ -3162,14 +3179,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case GameOverlayOpenMsg:
+		// If a background game of the same type exists, restore it.
+		if m.backgroundGame != nil && m.backgroundGame.gameName == msg.GameName {
+			m.gameOverlay = *m.backgroundGame
+			m.backgroundGame = nil
+			m.gameOverlay.SetSize(m.width, m.height)
+			m.gameOverlay.paused = false
+			m.overlay = overlayGame
+			m.warning = "Game resumed — Esc: hide · Ctrl+Q: quit"
+			return m, m.gameOverlay.TickCmd()
+		}
+		// Close any existing background game of a different type.
+		m.backgroundGame = nil
 		m.gameOverlay = NewGameOverlay(msg.GameName, defaultGameSettings())
 		m.gameOverlay.SetSize(m.width, m.height)
 		m.overlay = overlayGame
-		m.warning = "Game: " + msg.GameName + " — Ctrl+Q to quit"
+		m.warning = "Game: " + msg.GameName + " — Esc: hide · Ctrl+Q: quit"
 		return m, m.gameOverlay.TickCmd()
 
 	case GameOverlayCloseMsg:
 		m.overlay = overlayNone
+		m.backgroundGame = nil // fully quit, don't keep in background
 		m.warning = ""
 		return m, nil
 
@@ -5372,6 +5402,18 @@ func (m Model) renderBaseView() string {
 	// Notifications indicator overlay.
 	if x0, _, y, visible := m.notificationsButtonClickArea(); visible {
 		base = overlayOnRow(base, y, x0, renderNotificationsButton(m.notifStore.Count()))
+	}
+	// Background game taskbar indicator.
+	if m.backgroundGame != nil {
+		btn := m.renderGameTaskbarButton()
+		btnW := lipgloss.Width(btn)
+		// Position at the right edge of the message pane, row 0.
+		paneEnd := m.width - 2
+		x := paneEnd - btnW
+		if x < 0 {
+			x = 0
+		}
+		base = overlayOnRow(base, 0, x, btn)
 	}
 	return base
 }
