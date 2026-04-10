@@ -796,15 +796,9 @@ func (m ChannelListModel) View() string {
 		}
 	}
 	awayFooterLines := len(awayFooterRendered)
-	// Reserve 1 extra row as a visual separator between the
-	// channel list and the footer.
-	awayReserve := 0
-	if awayFooterLines > 0 {
-		awayReserve = awayFooterLines + 1
-	}
 
-	// Apply scrolling. Reserve space for the away footer.
-	viewHeight := m.height - 2 - awayReserve
+	// Apply scrolling. Reserve space for the away footer lines.
+	viewHeight := m.height - 2 - awayFooterLines
 	if viewHeight < 1 {
 		viewHeight = 1
 	}
@@ -826,12 +820,19 @@ func (m ChannelListModel) View() string {
 	}
 
 	content := b.String()
-	// Append the away footer pinned at the bottom. Pad with
-	// newlines so the footer grows upward from the last row
-	// regardless of how many channel rows are visible above.
+	// Append the away footer pinned at the bottom. Pad the
+	// channel list content with exactly enough newlines so the
+	// footer's LAST line sits on the very last row inside the
+	// border — growing upward from there.
 	if awayFooterLines > 0 {
 		renderedLines := strings.Count(content, "\n") + 1
-		gap := viewHeight - renderedLines
+		// Total rows available inside the border = m.height - 2.
+		// We need: renderedLines + gap + footerLines = totalRows.
+		totalRows := m.height - 2
+		gap := totalRows - renderedLines - awayFooterLines
+		if gap < 0 {
+			gap = 0
+		}
 		for i := 0; i < gap; i++ {
 			content += "\n"
 		}
@@ -839,12 +840,9 @@ func (m ChannelListModel) View() string {
 			Foreground(ColorMuted).
 			Italic(true).
 			Bold(true)
-		content += "\n" // separator row
 		for i, line := range awayFooterRendered {
-			content += awayStyle.Render(" " + line)
-			if i < len(awayFooterRendered)-1 {
-				content += "\n"
-			}
+			content += "\n" + awayStyle.Render(" "+line)
+			_ = i
 		}
 	}
 
