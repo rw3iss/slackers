@@ -51,6 +51,8 @@ const (
 	overlayMsgOptions
 	overlaySidebarOptions
 	overlayAwayStatus
+	overlayEmoteList
+	overlayEmoteEdit
 	overlayFriendCardOptions
 	overlayContactCardView
 	overlayCommandList
@@ -293,6 +295,8 @@ type Model struct {
 	friendCardOpts   FriendCardOptionsModel
 	contactCardView  ContactCardViewModel
 	awayStatus       AwayStatusModel
+	emoteList        EmoteListModel
+	emoteEdit        EmoteEditModel
 	commandList      CommandListModel
 	outputView       OutputViewModel
 	cmdSuggest       CmdSuggestModel
@@ -1439,13 +1443,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.overlay = overlayNone
 				return m, nil
 			}
-			// Use origMsg (pre-normalization) so the textinput
-			// receives capital letters as typed — the
-			// normalizeShortcutKey pass lowercases them for
-			// shortcut matching, but text inputs need the
-			// original case. Same pattern as overlayFriendsConfig.
 			var cmd tea.Cmd
 			m.awayStatus, cmd = m.awayStatus.Update(origMsg)
+			return m, cmd
+		}
+		if m.overlay == overlayEmoteList {
+			var cmd tea.Cmd
+			m.emoteList, cmd = m.emoteList.Update(origMsg)
+			return m, cmd
+		}
+		if m.overlay == overlayEmoteEdit {
+			var cmd tea.Cmd
+			m.emoteEdit, cmd = m.emoteEdit.Update(origMsg)
 			return m, cmd
 		}
 
@@ -2970,6 +2979,64 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.settings = NewSettingsModel(m.cfg, m.version)
 		m.settings.SetSize(m.width, m.height)
 		m.overlay = overlaySettings
+		return m, nil
+
+	case EmoteListOpenMsg:
+		m.emoteList = NewEmoteList(m.emoteStore)
+		m.emoteList.SetSize(m.width, m.height)
+		m.overlay = overlayEmoteList
+		return m, nil
+
+	case EmoteListCloseMsg:
+		m.overlay = overlayNone
+		return m, nil
+
+	case EmoteListSelectMsg:
+		// Insert the emote command into the input bar so the
+		// user can add arguments or just press Enter to run.
+		m.overlay = overlayNone
+		m.input.Reset()
+		m.input.InsertAtCursor("/" + msg.Command + " ")
+		m.focus = types.FocusInput
+		m.updateFocus()
+		return m, nil
+
+	case EmoteEditRequestMsg:
+		// Open the edit overlay for an existing emote or new.
+		var existing *emotes.Emote
+		if msg.Command != "" && m.emoteStore != nil {
+			if e, ok := m.emoteStore.Get(msg.Command); ok {
+				existing = &e
+			}
+		}
+		m.emoteEdit = NewEmoteEdit(m.emoteStore, m.cmdRegistry, existing)
+		m.emoteEdit.SetSize(m.width, m.height)
+		m.overlay = overlayEmoteEdit
+		return m, nil
+
+	case EmoteEditSaveMsg:
+		// Rebuild the command registry so the trie and lookup
+		// reflect the new/updated emote. Then return to the
+		// emotes list so the user sees the change.
+		m.rebuildCommandRegistry()
+		m.emoteList = NewEmoteList(m.emoteStore)
+		m.emoteList.SetSize(m.width, m.height)
+		m.overlay = overlayEmoteList
+		m.warning = "Emote /" + msg.Command + " saved"
+		return m, nil
+
+	case EmoteEditCancelMsg:
+		// Return to the emotes list without saving.
+		m.emoteList = NewEmoteList(m.emoteStore)
+		m.emoteList.SetSize(m.width, m.height)
+		m.overlay = overlayEmoteList
+		return m, nil
+
+	case EmoteDeleteDoneMsg:
+		// Rebuild the command registry after deleting an emote.
+		m.rebuildCommandRegistry()
+		m.warning = "Emote /" + msg.Command + " deleted"
+		// The list already rebuilt itself in its Update handler.
 		return m, nil
 
 	case EmoteSendMsg:
@@ -4775,6 +4842,10 @@ func (m Model) viewInner() string {
 		return m.commandList.View()
 	case overlayAwayStatus:
 		return m.awayStatus.View()
+	case overlayEmoteList:
+		return m.emoteList.View()
+	case overlayEmoteEdit:
+		return m.emoteEdit.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the

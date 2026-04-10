@@ -571,6 +571,18 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		},
 	})
 
+	register(commands.Command{
+		Name:        "emotes",
+		Description: "Open the Emotes browser",
+		Usage:       "/emotes",
+		Run: func(ctx *commands.Context) commands.Result {
+			return commands.Result{
+				Status: commands.StatusOK,
+				Cmd:    func() tea.Msg { return EmoteListOpenMsg{} },
+			}
+		},
+	})
+
 	// ---- Emotes -------------------------------------------------------
 	// Register every emote from the merged dictionary as a
 	// KindEmote command. They show in the suggestion popup and
