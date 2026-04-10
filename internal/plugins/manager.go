@@ -270,6 +270,19 @@ func (m *Manager) EnabledPlugins() []Plugin {
 	return out
 }
 
+// RouteMessage delivers a P2P plugin message to the named plugin.
+// Returns true if a plugin handled it, false if the plugin wasn't
+// found or didn't consume the message.
+func (m *Manager) RouteMessage(pluginName, senderID, data string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, ok := m.plugins[pluginName]
+	if !ok || entry.state < StateEnabled {
+		return false
+	}
+	return entry.plugin.MessageFilter(senderID, data)
+}
+
 // updateIndex persists the enable/disable state change.
 func (m *Manager) updateIndex(name string, enabled bool) {
 	idx := LoadIndex(m.configDir)

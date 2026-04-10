@@ -63,6 +63,7 @@ const (
 	MsgTypeBrowseRequest     = "browse_request"    // request to list a remote shared folder
 	MsgTypeBrowseResponse    = "browse_response"   // response with directory listing JSON
 	MsgTypeFileRequestByPath = "file_request_path" // download a file by relative path from shared folder
+	MsgTypePlugin            = "plugin"             // plugin-to-plugin custom message
 
 	// Protocol for file transfers (separate from messaging).
 	P2PFileProtocol = protocol.ID("/slackers/file/1.0.0")
@@ -117,6 +118,10 @@ type P2PMessage struct {
 	// Browse request sort parameters (used by browse_request).
 	BrowseSortBy  string `json:"browse_sort_by,omitempty"`  // "name", "size", "modified", "type"
 	BrowseSortDir string `json:"browse_sort_dir,omitempty"` // "asc" or "desc"
+
+	// Plugin message fields (used by MsgTypePlugin).
+	PluginName string `json:"plugin_name,omitempty"`
+	PluginData string `json:"plugin_data,omitempty"` // JSON payload
 }
 
 // P2PNode manages the libp2p host and peer connections.
@@ -829,6 +834,17 @@ func (n *P2PNode) BroadcastStatus(statusType, statusMsg, sharedFolder string) {
 		stream.Write(data)
 		stream.Close()
 	}
+}
+
+// SendPluginMessage sends a custom plugin message to a specific peer.
+func (n *P2PNode) SendPluginMessage(slackUserID, pluginName, data string) error {
+	msg := P2PMessage{
+		Type:       MsgTypePlugin,
+		Timestamp:  time.Now().Unix(),
+		PluginName: pluginName,
+		PluginData: data,
+	}
+	return n.SendMessage(slackUserID, msg)
 }
 
 // BroadcastDisconnect sends a disconnect message to all connected

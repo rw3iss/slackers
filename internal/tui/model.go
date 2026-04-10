@@ -689,6 +689,13 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 					Text:      "__browse_response__",
 					Multiaddr: msg.Text, // JSON payload
 				}
+			case secure.MsgTypePlugin:
+				p2pChan <- P2PReceivedMsg{
+					SenderID:  peerSlackID,
+					Text:      "__plugin__",
+					PubKey:    msg.PluginName, // reuse for routing
+					Multiaddr: msg.PluginData, // reuse for payload
+				}
 			case secure.MsgTypeEmote:
 				// Emote messages: if the sender included the raw
 				// template + their display name, expand $receiver
@@ -4313,6 +4320,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.overlay == overlayRemoteBrowser && m.remoteBrowser.peerUID == msg.SenderID {
 					m.remoteBrowser.ApplyResult(resp)
 				}
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
+		// Handle plugin message from a friend.
+		if msg.Text == "__plugin__" {
+			pluginName := msg.PubKey
+			pluginData := msg.Multiaddr
+			if m.pluginManager != nil && pluginName != "" {
+				m.pluginManager.RouteMessage(pluginName, msg.SenderID, pluginData)
 			}
 			if m.p2pChan != nil {
 				return m, waitForP2PMsg(m.p2pChan)

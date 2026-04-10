@@ -32,6 +32,12 @@ type Plugin interface {
 	// Shortcuts returns custom keyboard shortcuts the plugin wants.
 	// Map of action name → key bindings. Return nil if unused.
 	Shortcuts() map[string][]string
+
+	// MessageFilter handles an incoming P2P plugin message.
+	// Called when a friend sends a message addressed to this plugin.
+	// Return true if the message was handled. senderID is the friend's
+	// user ID, data is the JSON payload.
+	MessageFilter(senderID, data string) bool
 }
 
 // PluginState tracks a plugin's lifecycle state.
