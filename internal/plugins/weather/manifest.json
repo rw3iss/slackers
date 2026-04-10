@@ -1,0 +1,6 @@
+{
+  "name": "weather",
+  "version": "1.0.0",
+  "author": "slackers",
+  "description": "Weather forecast viewer using wttr.in"
+}

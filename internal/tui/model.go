@@ -24,6 +24,8 @@ import (
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/notifications"
 	"github.com/rw3iss/slackers/internal/plugins"
+	gamesPlugin "github.com/rw3iss/slackers/internal/plugins/games"
+	weatherPlugin "github.com/rw3iss/slackers/internal/plugins/weather"
 	"github.com/rw3iss/slackers/internal/secure"
 	"github.com/rw3iss/slackers/internal/setup"
 	"github.com/rw3iss/slackers/internal/shortcuts"
@@ -833,9 +835,11 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	// stable interface that plugins can depend on.
 	m.apiHost = api.NewHost(version, cfg, slackSvc, friendStore, p2pNode, nil)
 
-	// Create the plugin manager and init all registered plugins.
+	// Create the plugin manager and register built-in plugins.
 	pluginDir := filepath.Join(config.DefaultConfigDir(), "plugins")
 	m.pluginManager = plugins.NewManager(pluginDir)
+	m.pluginManager.Register(gamesPlugin.New())
+	m.pluginManager.Register(weatherPlugin.New())
 
 	// Load emote dictionary (embedded defaults + user custom).
 	m.emoteStore = emotes.NewStore(config.DefaultConfigDir())
