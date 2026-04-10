@@ -49,14 +49,19 @@ var (
 
 // NewSnakeGame creates a new snake game with default dimensions.
 func NewSnakeGame() *SnakeGame {
+	return NewSnakeGameSized(defaultWidth, defaultHeight)
+}
+
+// NewSnakeGameSized creates a snake game with custom dimensions.
+func NewSnakeGameSized(w, h int) *SnakeGame {
 	g := &SnakeGame{
-		width:  defaultWidth,
-		height: defaultHeight,
+		width:  w,
+		height: h,
 		dir:    DirRight,
-		canvas: ui.NewCanvas("snake", defaultWidth, defaultHeight),
+		canvas: ui.NewCanvas("snake", w, h),
 	}
 	// Initial snake in the center.
-	cx, cy := defaultWidth/2, defaultHeight/2
+	cx, cy := w/2, h/2
 	g.snake = []Point{
 		{cx, cy},
 		{cx - 1, cy},

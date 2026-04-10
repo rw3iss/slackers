@@ -3162,7 +3162,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case GameOverlayOpenMsg:
-		m.gameOverlay = NewGameOverlay(msg.GameName)
+		m.gameOverlay = NewGameOverlay(msg.GameName, defaultGameSettings())
 		m.gameOverlay.SetSize(m.width, m.height)
 		m.overlay = overlayGame
 		m.warning = "Game: " + msg.GameName + " — Ctrl+Q to quit"
