@@ -1363,6 +1363,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Normal key handling (no overlay)
 		switch {
 		case key.Matches(msg, m.keymap.Tab):
+			// When the command suggestion popup is visible and
+			// focus is on the input, Tab completes the
+			// highlighted suggestion instead of cycling focus.
+			// This guard runs BEFORE the default focus-cycle so
+			// the popup gets first shot at Tab.
+			if m.focus == types.FocusInput && m.cmdSuggest.Visible() {
+				// Command mode completion.
+				if sel := m.cmdSuggest.Selected(); sel != nil {
+					m.input.Reset()
+					m.input.InsertAtCursor("/" + sel.Name + " ")
+					m.refreshCmdSuggest()
+					return m, nil
+				}
+				// Arg mode completion.
+				if arg := m.cmdSuggest.SelectedArg(); arg != nil {
+					val := m.input.Value()
+					if i := strings.LastIndexAny(val, " \t"); i >= 0 {
+						val = val[:i+1]
+					}
+					m.input.Reset()
+					m.input.InsertAtCursor(val + quoteArgIfNeeded(arg.Name))
+					m.refreshCmdSuggest()
+					return m, nil
+				}
+			}
 			m.cycleFocusForward()
 			m.updateFocus()
 			return m, nil
@@ -1668,41 +1693,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			}
-			// Esc dismisses the popup but leaves the input alone.
+			// Esc dismisses the popup; Tab + Up/Down are handled
+			// earlier in the global switch (the isSlash guard for
+			// arrows and the Tab guard for completion). Only Enter
+			// and Esc remain here since they're not routed at the
+			// global level.
 			if m.cmdRegistry != nil && m.cmdSuggest.Visible() {
 				switch msg.String() {
-				case "up":
-					m.cmdSuggest.Move(-1)
-					return m, nil
-				case "down":
-					m.cmdSuggest.Move(1)
-					return m, nil
-				case "tab":
-					// Command mode: complete the command name
-					// with a trailing space so the user can
-					// start typing args.
-					if sel := m.cmdSuggest.Selected(); sel != nil {
-						m.input.Reset()
-						m.input.InsertAtCursor("/" + sel.Name + " ")
-						m.refreshCmdSuggest()
-						return m, nil
-					}
-					// Arg mode: complete the highlighted arg
-					// value, preserving any prior tokens. The
-					// current partial (whatever comes after
-					// the last whitespace) is REPLACED; earlier
-					// args / the command prefix are preserved.
-					if arg := m.cmdSuggest.SelectedArg(); arg != nil {
-						val := m.input.Value()
-						// Drop the in-progress partial token.
-						if i := strings.LastIndexAny(val, " \t"); i >= 0 {
-							val = val[:i+1]
-						}
-						m.input.Reset()
-						m.input.InsertAtCursor(val + quoteArgIfNeeded(arg.Name))
-						m.refreshCmdSuggest()
-						return m, nil
-					}
 				case "enter":
 					// Command mode: run the selected command
 					// with whatever args are currently typed.
