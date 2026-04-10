@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -439,40 +440,91 @@ func loadFriendsCmd(store *friends.FriendStore, p2p *secure.P2PNode) tea.Cmd {
 	}
 }
 
-// friendPingCmdWithCurrent pings every friend for liveness and knows
-// which friend the user is currently viewing — that connection is
-// (re)dialed proactively if it dropped, so the active chat stays
-// connected. Other friends remain observe-only.
-func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, currentFriend string) tea.Cmd {
+// friendPingCmdWithCurrent pings every friend for liveness and
+// knows which friend the user is currently viewing — that
+// connection is (re)dialed proactively if it dropped, so the
+// active chat stays connected. Other friends remain observe-only.
+//
+// Friends are batched in groups of 5 to avoid overwhelming the
+// network or the libp2p host. Each batch of 5 runs concurrently
+// (one goroutine per friend in the batch); batches are processed
+// sequentially. This caps the number of simultaneous dial
+// attempts at 5 regardless of friend count, keeping latency
+// bounded and resource usage predictable even at 50+ friends.
+//
+// localStatus / localAwayMsg carry the local user's current
+// status, piggybacked on each ping so the remote peer learns
+// our state without a separate broadcast.
+func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, currentFriend, localStatus, localAwayMsg string) tea.Cmd {
 	return func() tea.Msg {
 		if store == nil || p2p == nil {
 			return FriendPingMsg{}
 		}
-		online := make(map[string]bool)
-		for _, f := range store.All() {
+		all := store.All()
+		// Filter to friends with a multiaddr — there's nothing
+		// to ping without one.
+		type pingTarget struct {
+			userID    string
+			multiaddr string
+		}
+		var targets []pingTarget
+		for _, f := range all {
 			if f.Multiaddr == "" {
 				continue
 			}
-			before := p2p.IsConnected(f.UserID)
-			// Active chat: re-dial if the underlying libp2p
-			// connection dropped (e.g. NAT eviction). Log the
-			// result regardless of current-friend status so the
-			// debug trace shows each friend's state per tick.
-			if currentFriend != "" && f.UserID == currentFriend && !before {
-				if err := p2p.ConnectToPeer(f.UserID, f.Multiaddr); err != nil {
-					debug.Log("[friend-ping] re-dial failed uid=%s err=%v", f.UserID, err)
-				}
-			}
-			on := p2p.IsConnected(f.UserID)
-			if on != before {
-				debug.Log("[friend-ping] uid=%s state %v → %v", f.UserID, before, on)
-			}
-			online[f.UserID] = on
-			store.SetOnline(f.UserID, on)
-			if on {
-				store.UpdateLastOnline(f.UserID)
-			}
+			targets = append(targets, pingTarget{f.UserID, f.Multiaddr})
 		}
-		return FriendPingMsg{Online: online}
+
+		online := make(map[string]bool, len(targets))
+		status := make(map[string]FriendStatusInfo, len(targets))
+		var mu sync.Mutex
+
+		// Process in batches of 5.
+		const batchSize = 5
+		for i := 0; i < len(targets); i += batchSize {
+			end := i + batchSize
+			if end > len(targets) {
+				end = len(targets)
+			}
+			batch := targets[i:end]
+			var wg sync.WaitGroup
+			wg.Add(len(batch))
+			for _, t := range batch {
+				go func(uid, maddr string) {
+					defer wg.Done()
+					before := p2p.IsConnected(uid)
+					// Active chat: re-dial if dropped.
+					if currentFriend != "" && uid == currentFriend && !before {
+						if err := p2p.ConnectToPeer(uid, maddr); err != nil {
+							debug.Log("[friend-ping] re-dial failed uid=%s err=%v", uid, err)
+						}
+					}
+					on := p2p.IsConnected(uid)
+					if on != before {
+						debug.Log("[friend-ping] uid=%s state %v → %v", uid, before, on)
+					}
+					store.SetOnline(uid, on)
+					if on {
+						store.UpdateLastOnline(uid)
+					}
+					// Build status info from the friend store's
+					// current AwayStatus/AwayMessage (populated
+					// by incoming status_update messages or prior
+					// pong responses).
+					f := store.Get(uid)
+					info := FriendStatusInfo{Online: on}
+					if f != nil {
+						info.AwayStatus = f.AwayStatus
+						info.AwayMessage = f.AwayMessage
+					}
+					mu.Lock()
+					online[uid] = on
+					status[uid] = info
+					mu.Unlock()
+				}(t.userID, t.multiaddr)
+			}
+			wg.Wait()
+		}
+		return FriendPingMsg{Online: online, Status: status}
 	}
 }

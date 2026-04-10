@@ -91,6 +91,7 @@ var helpLayout = []helpSection{
 			{"settings", "Open settings", ""},
 			{"shortcuts_editor", "Open the keyboard shortcuts editor", ""},
 			{"command_list", "Open the slash-command browser (also: /commands)", ""},
+			{"away_status", "Set your away status and message", ""},
 			{"notifications", "Open the notifications view (unread, reactions, friend requests)", ""},
 			{"befriend", "Send friend request to current DM user", ""},
 			{"emoji_picker", "Open emoji picker (insert emoji)", ""},

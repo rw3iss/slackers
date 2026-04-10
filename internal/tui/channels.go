@@ -49,6 +49,10 @@ type ChannelListModel struct {
 	height       int
 	itemSpacing  int // empty lines after each item / header (0..3)
 
+	// friendStatus carries per-friend online/away state SEPARATE
+	// from the unread map. Keyed by channel ID ("friend:<uid>").
+	friendStatus map[string]FriendDisplayStatus
+
 	// bulkUpdate > 0 suspends the automatic buildRows() call at
 	// the end of every setter. BeginBulk / EndBulk wrap a chunk
 	// of setters (used by ChannelsLoadedMsg which applies
@@ -56,6 +60,21 @@ type ChannelListModel struct {
 	// in a single message) so the sidebar is only rebuilt once
 	// at the end instead of once per setter.
 	bulkUpdate int
+}
+
+// FriendDisplayStatus tracks a friend's online/away state for
+// the sidebar renderer. Separate from the unread map so "online"
+// and "has unread messages" are distinct visual indicators.
+type FriendDisplayStatus struct {
+	Online      bool
+	AwayStatus  string // "online", "away", "back", "offline", ""
+	AwayMessage string
+}
+
+// SetFriendStatus replaces the friend status map. Called by the
+// model after FriendPingMsg and FriendStatusUpdateMsg.
+func (m *ChannelListModel) SetFriendStatus(statuses map[string]FriendDisplayStatus) {
+	m.friendStatus = statuses
 }
 
 // BeginBulkUpdate suspends automatic buildRows() calls until a
@@ -803,12 +822,25 @@ func (m ChannelListModel) renderItem(ch types.Channel, rowIdx int, maxLen int, i
 	switch {
 	case rowIdx == m.selected:
 		style = ChannelSelectedStyle
-	case ch.IsFriend && m.unread[ch.ID]:
-		// Online friend (unread = online indicator) in green.
-		style = lipgloss.NewStyle().Foreground(ColorStatusOn)
 	case ch.IsFriend:
-		// Offline friend in muted.
-		style = lipgloss.NewStyle().Foreground(ColorMuted)
+		// Three-state friend rendering using the dedicated
+		// friendStatus map (separate from unread):
+		//   green       = online (status "online" or "back")
+		//   italic/dim  = away
+		//   muted       = offline / unknown
+		fs := m.friendStatus[ch.ID]
+		switch {
+		case fs.Online && fs.AwayStatus == "away":
+			style = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+		case fs.Online:
+			style = lipgloss.NewStyle().Foreground(ColorStatusOn)
+		default:
+			style = lipgloss.NewStyle().Foreground(ColorMuted)
+		}
+		// Unread badge for friends is separate from online.
+		if m.unread[ch.ID] {
+			name = "* " + name
+		}
 	case m.unread[ch.ID]:
 		name = "* " + name
 		style = ChannelUnreadStyle

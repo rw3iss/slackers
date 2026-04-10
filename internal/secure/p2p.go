@@ -58,6 +58,7 @@ const (
 	MsgTypeEditAck        = "edit_ack"        // ack from peer that the edit succeeded
 	MsgTypeProfileSync    = "profile_sync"    // sender announces their current contact card JSON
 	MsgTypeRequestPending = "request_pending" // asks the peer to scan its history and resend any pending messages addressed to us
+	MsgTypeStatusUpdate   = "status_update"   // sender announces a status change (online/offline/away/back)
 
 	// Protocol for file transfers (separate from messaging).
 	P2PFileProtocol = protocol.ID("/slackers/file/1.0.0")
@@ -88,6 +89,13 @@ type P2PMessage struct {
 	// Reaction fields (only used for reaction type).
 	TargetMsgID   string `json:"target_msg_id,omitempty"`
 	ReactionEmoji string `json:"reaction_emoji,omitempty"`
+
+	// Status fields (used by status_update, ping, and pong).
+	// Piggyback local status on pings so remote peers learn our
+	// state without a separate broadcast. Status types:
+	// "online", "offline", "away", "back".
+	StatusType    string `json:"status_type,omitempty"`
+	StatusMessage string `json:"status_message,omitempty"`
 }
 
 // P2PNode manages the libp2p host and peer connections.
@@ -682,7 +690,55 @@ func (n *P2PNode) handleFileRequest(s network.Stream) {
 	}
 }
 
-// BroadcastDisconnect sends a disconnect message to all connected peers.
+// BroadcastStatus sends a status update to all connected peers.
+// statusType is one of "online", "offline", "away", "back".
+// statusMsg is an optional human-readable message (e.g. "BRB
+// lunch" for away).
+//
+// The broadcast iterates every known peer; if the peer is
+// already connected, the status is sent immediately over a
+// new stream. If not connected, we skip rather than dial — the
+// status will be exchanged on the next ping cycle (which
+// piggybacks local status on the ping message) or when the peer
+// connects to us.
+//
+// Errors per-peer are silently swallowed so one unreachable
+// friend doesn't break the broadcast to others.
+func (n *P2PNode) BroadcastStatus(statusType, statusMsg string) {
+	n.mu.RLock()
+	peers := make(map[string]peer.ID)
+	for uid, pid := range n.peerMap {
+		peers[uid] = pid
+	}
+	n.mu.RUnlock()
+
+	msg := P2PMessage{
+		Type:          MsgTypeStatusUpdate,
+		Timestamp:     time.Now().Unix(),
+		StatusType:    statusType,
+		StatusMessage: statusMsg,
+	}
+	for _, pid := range peers {
+		if n.host.Network().Connectedness(pid) != network.Connected {
+			continue
+		}
+		stream, err := n.host.NewStream(n.ctx, pid, P2PProtocol)
+		if err != nil {
+			continue
+		}
+		data, _ := json.Marshal(msg)
+		data = append(data, '\n')
+		stream.Write(data)
+		stream.Close()
+	}
+}
+
+// BroadcastDisconnect sends a disconnect message to all connected
+// peers. Kept as a convenience alias for backward compatibility
+// with call sites that predate BroadcastStatus; internally it
+// sends a MsgTypeDisconnect (not MsgTypeStatusUpdate) so older
+// peers that don't understand status_update still shut down
+// cleanly.
 func (n *P2PNode) BroadcastDisconnect() {
 	n.mu.RLock()
 	peers := make(map[string]peer.ID)

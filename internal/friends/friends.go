@@ -23,6 +23,12 @@ type Friend struct {
 	LastOnline     int64  `json:"last_online,omitempty"`
 	ConnectionType string `json:"connection_type,omitempty"` // "p2p", "e2e", ""
 	Online         bool   `json:"-"`
+	// AwayStatus is the friend's current status: "online", "away",
+	// "back", "offline", or empty (not yet known). Runtime-only —
+	// refreshed by the ping cycle and status_update messages, not
+	// persisted to disk.
+	AwayStatus  string `json:"-"`
+	AwayMessage string `json:"-"` // optional status text (e.g. "BRB lunch")
 }
 
 // ContactCard is the shareable JSON format for exchanging friend info.
@@ -221,6 +227,31 @@ func (s *FriendStore) SetOnline(userID string, online bool) {
 	}
 }
 
+// SetStatus updates a friend's away/online status and optional
+// message. statusType is one of "online", "offline", "away",
+// "back". The Online bool is derived from the status automatically:
+// "online"/"back" → true, "offline" → false, "away" → stays true
+// (they're reachable, just busy). Thread-safe.
+func (s *FriendStore) SetStatus(userID, statusType, message string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx, ok := s.byUserID[userID]
+	if !ok || idx >= len(s.friends) {
+		return
+	}
+	s.friends[idx].AwayStatus = statusType
+	s.friends[idx].AwayMessage = message
+	switch statusType {
+	case "online", "back":
+		s.friends[idx].Online = true
+		s.friends[idx].AwayMessage = "" // clear away message on return
+	case "offline":
+		s.friends[idx].Online = false
+	case "away":
+		s.friends[idx].Online = true // reachable, just away
+	}
+}
+
 func (s *FriendStore) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -237,6 +268,8 @@ func (s *FriendStore) Update(f Friend) error {
 	}
 	// Preserve runtime-only fields.
 	f.Online = s.friends[idx].Online
+	f.AwayStatus = s.friends[idx].AwayStatus
+	f.AwayMessage = s.friends[idx].AwayMessage
 	s.friends[idx] = f
 	// UserID is the map key; Update can't change it, but in case
 	// a buggy caller passes a different one, the record at idx

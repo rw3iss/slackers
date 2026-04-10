@@ -668,6 +668,26 @@ func (m *Model) confirmFriendRemoval(userID string) tea.Cmd {
 	return nil
 }
 
+// updateFriendStatusDisplay builds the friend status map from the
+// current friend store and pushes it to the sidebar renderer.
+// Called after every FriendPingMsg, FriendStatusUpdateMsg, and
+// disconnect to keep the three-state sidebar indicators in sync.
+func (m *Model) updateFriendStatusDisplay() {
+	if m.friendStore == nil {
+		return
+	}
+	statuses := make(map[string]FriendDisplayStatus)
+	for _, f := range m.friendStore.All() {
+		chID := "friend:" + f.UserID
+		statuses[chID] = FriendDisplayStatus{
+			Online:      f.Online,
+			AwayStatus:  f.AwayStatus,
+			AwayMessage: f.AwayMessage,
+		}
+	}
+	m.channels.SetFriendStatus(statuses)
+}
+
 // isOwnCard reports whether a contact card represents the local
 // user. Matches by SlackerID, PublicKey, or Multiaddr against the
 // values exposed by the local config / secure manager / P2P node, in

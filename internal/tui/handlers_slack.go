@@ -407,6 +407,13 @@ func (m *Model) secureIndicator() string {
 	if m.currentCh.IsFriend && m.friendStore != nil {
 		f := m.friendStore.Get(m.currentCh.UserID)
 		if f != nil {
+			if f.Online && f.AwayStatus == "away" {
+				label := " 🔒 secure p2p (AWAY"
+				if f.AwayMessage != "" {
+					label += ": " + f.AwayMessage
+				}
+				return label + ")"
+			}
 			if f.Online {
 				return " 🔒 secure p2p"
 			}

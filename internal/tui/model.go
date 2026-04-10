@@ -49,6 +49,7 @@ const (
 	overlayEmojiPicker
 	overlayMsgOptions
 	overlaySidebarOptions
+	overlayAwayStatus
 	overlayFriendCardOptions
 	overlayContactCardView
 	overlayCommandList
@@ -178,9 +179,30 @@ type FriendsLoadedMsg struct {
 // friendPingTickMsg triggers a friend online check.
 type friendPingTickMsg struct{}
 
-// FriendPingMsg carries online status for friends.
+// FriendStatusInfo carries a single friend's status as returned
+// by the ping cycle. Online is the connection state; AwayStatus
+// and AwayMessage are learned from the pong or a prior
+// status_update message.
+type FriendStatusInfo struct {
+	Online      bool
+	AwayStatus  string
+	AwayMessage string
+}
+
+// FriendPingMsg carries online + status info for all friends.
 type FriendPingMsg struct {
 	Online map[string]bool
+	Status map[string]FriendStatusInfo
+}
+
+// FriendStatusUpdateMsg is dispatched when a friend sends us a
+// status_update message (online/offline/away/back). The model
+// handler updates the friend store and refreshes the sidebar +
+// chat header.
+type FriendStatusUpdateMsg struct {
+	UserID  string
+	Status  string
+	Message string
 }
 
 // FriendSendResultMsg reports the outcome of a P2P text send to a
@@ -264,6 +286,7 @@ type Model struct {
 	sidebarOptions   SidebarOptionsModel
 	friendCardOpts   FriendCardOptionsModel
 	contactCardView  ContactCardViewModel
+	awayStatus       AwayStatusModel
 	commandList      CommandListModel
 	outputView       OutputViewModel
 	cmdSuggest       CmdSuggestModel
@@ -602,6 +625,17 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 				p2pChan <- P2PReceivedMsg{
 					SenderID: peerSlackID,
 					Text:     "__request_pending__",
+				}
+			case secure.MsgTypeStatusUpdate:
+				// Peer announces a status change (online/away/back/offline).
+				// PubKey carries the status type, Multiaddr carries
+				// the optional message — reusing existing P2PReceivedMsg
+				// fields to avoid adding new struct fields just for routing.
+				p2pChan <- P2PReceivedMsg{
+					SenderID:  peerSlackID,
+					Text:      "__status_update__",
+					PubKey:    msg.StatusType,
+					Multiaddr: msg.StatusMessage,
 				}
 			case secure.MsgTypeMessage:
 				p2pChan <- P2PReceivedMsg{
@@ -966,6 +1000,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.isAway {
 			m.isAway = false
 			m.warning = ""
+			// Broadcast "back" to friends so their sidebar updates.
+			if m.p2pNode != nil {
+				go m.p2pNode.BroadcastStatus("back", "")
+			}
 			if m.currentCh != nil {
 				return m, silentLoadHistoryCmd(m.slackSvc, m.currentCh.ID)
 			}
@@ -1013,9 +1051,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keymap.CommandList):
-			// Open the slash-command browser. Same path the
-			// /commands command takes — toggles open if already
-			// open so the binding can dismiss the overlay too.
 			if m.overlay == overlayCommandList {
 				m.overlay = overlayNone
 				return m, nil
@@ -1023,6 +1058,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return CommandListOpenMsg{}
 			}
+
+		case key.Matches(msg, m.keymap.AwayStatus):
+			if m.overlay == overlayAwayStatus {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			enabled := false
+			awayMsg := ""
+			if m.cfg != nil {
+				enabled = m.cfg.AwayEnabled
+				awayMsg = m.cfg.AwayMsg
+			}
+			m.awayStatus = NewAwayStatusModel(enabled, awayMsg)
+			m.awayStatus.SetSize(m.width, m.height)
+			m.overlay = overlayAwayStatus
+			return m, nil
 
 		case key.Matches(msg, m.keymap.Settings):
 			if m.overlay == overlaySettings {
@@ -1357,6 +1408,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayCommandList {
 			var cmd tea.Cmd
 			m.commandList, cmd = m.commandList.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayAwayStatus {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.awayStatus, cmd = m.awayStatus.Update(msg)
 			return m, cmd
 		}
 
@@ -2878,6 +2938,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlaySettings
 		return m, nil
 
+	case AwayStatusClosedMsg:
+		m.overlay = overlayNone
+		if m.cfg == nil {
+			return m, nil
+		}
+		prevEnabled := m.cfg.AwayEnabled
+		m.cfg.AwayEnabled = msg.Enabled
+		m.cfg.AwayMsg = msg.Message
+		config.SaveDebounced(m.cfg)
+		// Broadcast the status change to friends.
+		if m.p2pNode != nil {
+			if msg.Cleared || (!msg.Enabled && prevEnabled) {
+				// Turning off or clearing → "back"
+				go m.p2pNode.BroadcastStatus("back", "")
+				m.isAway = false
+				m.warning = "Away status cleared"
+			} else if msg.Enabled {
+				// Turning on → "away" with message
+				go m.p2pNode.BroadcastStatus("away", msg.Message)
+				m.isAway = true
+				if msg.Message != "" {
+					m.warning = "Away: " + msg.Message
+				} else {
+					m.warning = "Status set to away"
+				}
+			}
+		}
+		return m, nil
+
 	case ReplyToMessageMsg:
 		if msg.MessageID != "" {
 			replyText := fmt.Sprintf("[REPLY:%s] %q\n", msg.MessageID, msg.Preview)
@@ -3567,6 +3656,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.isAway && elapsed >= time.Duration(awayTimeout)*time.Second {
 				m.isAway = true
 				m.warning = "Away (idle)"
+				// Broadcast auto-away to friends.
+				if m.p2pNode != nil {
+					go m.p2pNode.BroadcastStatus("away", "idle")
+				}
 			}
 		}
 		return m, activityCheckCmd(m.cfg.AwayTimeout)
@@ -3589,8 +3682,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Text == "__disconnect__" {
 			if m.friendStore != nil {
 				m.friendStore.SetOnline(msg.SenderID, false)
+				m.friendStore.SetStatus(msg.SenderID, "offline", "")
 				m.friendStore.UpdateLastOnline(msg.SenderID)
 				m.channels.ClearUnread("friend:" + msg.SenderID)
+				m.channels.SetFriendChannels(m.buildFriendChannels())
+				if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
+					m.setChannelHeader()
+				}
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
+		// Handle status update from a friend (online/away/back/offline).
+		if msg.Text == "__status_update__" {
+			statusType := msg.PubKey   // reused field for routing
+			statusMsg := msg.Multiaddr // reused field for routing
+			if m.friendStore != nil {
+				m.friendStore.SetStatus(msg.SenderID, statusType, statusMsg)
+				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.updateFriendStatusDisplay()
+				if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
+					m.setChannelHeader()
+				}
 			}
 			if m.p2pChan != nil {
 				return m, waitForP2PMsg(m.p2pChan)
@@ -4241,6 +4357,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		// Startup broadcast: announce our status to all connected
+		// friends so they learn we're online right away instead of
+		// waiting for their next ping cycle to discover us. If the
+		// user has a persisted away status, broadcast that instead.
+		if m.p2pNode != nil {
+			startupStatus := "online"
+			startupMsg := ""
+			if m.cfg != nil && m.cfg.AwayEnabled {
+				startupStatus = "away"
+				startupMsg = m.cfg.AwayMsg
+			}
+			go m.p2pNode.BroadcastStatus(startupStatus, startupMsg)
+		}
 		return m, nil
 
 	case FriendRequestSentMsg:
@@ -4309,7 +4438,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentCh != nil && m.currentCh.IsFriend {
 			currentFriend = m.currentCh.UserID
 		}
-		return m, friendPingCmdWithCurrent(m.friendStore, m.p2pNode, currentFriend)
+		// Piggyback local away status on every ping so friends
+		// learn our state without a separate broadcast.
+		localStatus := "online"
+		localAwayMsg := ""
+		if m.cfg != nil && m.cfg.AwayEnabled {
+			localStatus = "away"
+			localAwayMsg = m.cfg.AwayMsg
+		}
+		return m, friendPingCmdWithCurrent(m.friendStore, m.p2pNode, currentFriend, localStatus, localAwayMsg)
 
 	case FriendSendResultMsg:
 		// Flip the history entry's Pending flag based on the
@@ -4344,10 +4481,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// friendPingCmd already updated friendStore online flags.
 		// Only rebuild the sidebar when a friend's online state
 		// actually *changed* this tick — previously this ran on
-		// every ping (default: every 5 s) regardless, thrashing
+		// every ping (default every 10 s) regardless, thrashing
 		// the channel list and re-sorting. Also refresh the
 		// message-pane header if the user is currently looking
 		// at a friend whose state flipped.
+		//
+		// The Status map carries per-friend AwayStatus/AwayMessage
+		// learned from the most recent status_update or pong.
+		// Update the store even when the status matches the
+		// current value — a friend might have changed their away
+		// message without toggling the status type.
 		var resendCmds []tea.Cmd
 		anyStateChanged := false
 		currentFriendFlipped := false
@@ -4361,7 +4504,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						currentFriendFlipped = true
 					}
 					if online && !prev {
-						// offline → online: pull any pending resends.
 						if cmd := m.resendPendingFriendMessagesCmd(uid); cmd != nil {
 							resendCmds = append(resendCmds, cmd)
 						}
@@ -4369,8 +4511,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		// Apply per-friend status from the ping results.
+		if len(msg.Status) > 0 && m.friendStore != nil {
+			for uid, info := range msg.Status {
+				if info.AwayStatus != "" {
+					m.friendStore.SetStatus(uid, info.AwayStatus, info.AwayMessage)
+					anyStateChanged = true
+				}
+			}
+		}
 		if anyStateChanged {
 			m.channels.SetFriendChannels(m.buildFriendChannels())
+			m.updateFriendStatusDisplay()
 		}
 		if currentFriendFlipped {
 			m.setChannelHeader()
@@ -4476,6 +4628,8 @@ func (m Model) viewInner() string {
 		return m.contactCardView.View()
 	case overlayCommandList:
 		return m.commandList.View()
+	case overlayAwayStatus:
+		return m.awayStatus.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the
@@ -4711,9 +4865,22 @@ func (m Model) renderStatusBar() string {
 		showConn = false
 	}
 
-	extra := ""
+	// Permanent "AWAY" indicator when the user has set a manual
+	// away status. Shown alongside the connection info so it's
+	// always visible.
+	awayIndicator := ""
+	if m.cfg != nil && m.cfg.AwayEnabled {
+		awayLabel := "AWAY"
+		if m.cfg.AwayMsg != "" {
+			awayLabel = "AWAY: " + m.cfg.AwayMsg
+		}
+		awayStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true).Bold(true)
+		awayIndicator = " | " + awayStyle.Render(awayLabel)
+	}
+
+	extra := awayIndicator
 	if m.warning != "" {
-		extra = " | " + lipgloss.NewStyle().Foreground(ColorHighlight).Render("! "+m.warning)
+		extra += " | " + lipgloss.NewStyle().Foreground(ColorHighlight).Render("! "+m.warning)
 	}
 	if m.err != nil {
 		extra += " | " + StatusDisconnected.Render(m.err.Error())
@@ -4993,7 +5160,7 @@ func (m *Model) buildSidebarOptionsItems(ch types.Channel) []sidebarOptionsItem 
 // users on slow networks can back the poll off without rebuilding.
 // A zero / missing value falls back to the 5s default.
 func (m *Model) friendPingTickCmd() tea.Cmd {
-	secs := 5
+	secs := 10
 	if m.cfg != nil && m.cfg.FriendPingSeconds > 0 {
 		secs = m.cfg.FriendPingSeconds
 	}

@@ -40,5 +40,6 @@
   "notifications": ["alt+n"],
   "share_my_info": ["alt+m"],
   "shortcuts_editor": ["alt+k"],
-  "command_list": ["alt+c"]
+  "command_list": ["alt+c"],
+  "away_status": ["alt+a"]
 }

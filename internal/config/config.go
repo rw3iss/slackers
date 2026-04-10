@@ -75,6 +75,15 @@ type Config struct {
 	// and obfuscated). "json" → raw single-line JSON (full profile,
 	// readable in plain text on the wire).
 	ShareMyInfoFormat string `json:"share_my_info_format,omitempty"`
+	// AwayEnabled, when true, means the user has manually set an
+	// away status. Distinct from the auto-away triggered by
+	// AwayTimeout — that one is transient and clears on keypress.
+	// This one persists until the user explicitly clears it from
+	// the Away Status panel. Broadcast to friends as
+	// MsgTypeStatusUpdate("away") on save.
+	AwayEnabled bool   `json:"away_enabled,omitempty"`
+	AwayMsg     string `json:"away_msg,omitempty"` // optional human-readable away message
+
 	// FriendPingSeconds controls how often the app polls friend
 	// connection state, propagates online/offline transitions in
 	// the sidebar, fires the profile-sync / request-pending pings
