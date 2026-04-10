@@ -622,8 +622,16 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 // The model handler routes it through the appropriate send path
 // (Slack or P2P) and creates a local optimistic Message with
 // IsEmote=true so the renderer applies the emote style.
+//
+// For P2P: Template + SenderName are sent over the wire so the
+// receiver can expand $receiver/$you to "you" locally. The
+// sender's local display uses FormattedText (pre-expanded with
+// the receiver's actual name). For Slack: only FormattedText is
+// used (no client-side expansion possible).
 type EmoteSendMsg struct {
-	FormattedText string
+	FormattedText string // fully expanded (sender sees this)
+	Template      string // raw template with $variables
+	SenderName    string // sender's display name
 }
 
 // executeEmote formats an emote template and returns a Result
@@ -667,10 +675,20 @@ func (m *Model) executeEmote(command string, ctx *commands.Context) commands.Res
 	if err != nil {
 		return commands.Result{Status: commands.StatusError, StatusBar: err.Error()}
 	}
+	// Look up the raw template so P2P receivers can expand
+	// $receiver to "you" on their screen.
+	template := ""
+	if e, ok := m.emoteStore.Get(command); ok {
+		template = e.Text
+	}
 	return commands.Result{
 		Status: commands.StatusOK,
 		Cmd: func() tea.Msg {
-			return EmoteSendMsg{FormattedText: formatted}
+			return EmoteSendMsg{
+				FormattedText: formatted,
+				Template:      template,
+				SenderName:    sender,
+			}
 		},
 	}
 }

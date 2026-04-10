@@ -651,13 +651,24 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 					Text:     "__ping__",
 				}
 			case secure.MsgTypeEmote:
-				// Emote messages use the same P2PReceivedMsg path
-				// as regular messages but with IsEmote=true so the
-				// handler creates a types.Message with the emote
-				// flag and the renderer applies EmoteMessageStyle.
+				// Emote messages: if the sender included the raw
+				// template + their display name, expand $receiver
+				// to "you" locally so the emote reads naturally
+				// on the receiver's screen (e.g. "Ryan hugs you."
+				// instead of "Ryan hugs Alice.").
+				emoteText := msg.Text // pre-expanded fallback
+				if msg.EmoteTemplate != "" && msg.SenderName != "" {
+					emoteText = emotes.ExpandTemplate(
+						msg.EmoteTemplate,
+						msg.SenderName, // $sender / $me
+						"you",          // $receiver / $you → "you" on receiver
+						"",             // $all
+						msg.Text,       // $text fallback (for /emote)
+					)
+				}
 				p2pChan <- P2PReceivedMsg{
 					SenderID:  peerSlackID,
-					Text:      msg.Text,
+					Text:      emoteText,
 					MsgID:     msg.MessageID,
 					ReplyToID: msg.ReplyToMsgID,
 					SentAt:    msg.Timestamp,
@@ -3040,11 +3051,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case EmoteSendMsg:
-		// Route the emote through the same send path as
-		// regular messages, but with IsEmote=true on the
-		// local Message struct so the renderer applies the
-		// emote style, and MsgTypeEmote on the P2P wire so
-		// the receiver knows to render it differently.
+		// Route the emote through the appropriate send path.
+		// For P2P: send the raw template + sender name so the
+		// receiver can expand $receiver to "you" locally. For
+		// Slack: send pre-expanded text (no client-side expansion).
 		if m.currentCh == nil {
 			m.warning = "No channel selected"
 			return m, nil
@@ -3053,17 +3063,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if text == "" {
 			return m, nil
 		}
-		// For P2P friend chats: send as MsgTypeEmote.
+		// For P2P friend chats: send template + sender name so
+		// the receiver expands $receiver to "you" on their screen.
 		if m.currentCh.IsFriend && m.p2pNode != nil {
 			peerUID := m.currentCh.UserID
 			msgID := generateMessageID()
 			m.connectFriend(peerUID)
 			friendMsg := secure.P2PMessage{
-				Type:      secure.MsgTypeEmote,
-				Text:      text,
-				SenderID:  peerUID,
-				Timestamp: time.Now().Unix(),
-				MessageID: msgID,
+				Type:          secure.MsgTypeEmote,
+				Text:          text, // pre-expanded for fallback
+				EmoteTemplate: msg.Template,
+				SenderName:    msg.SenderName,
+				SenderID:      peerUID,
+				Timestamp:     time.Now().Unix(),
+				MessageID:     msgID,
 			}
 			sendCmd := sendFriendMessageCmd(m.p2pNode, m.friendStore, peerUID, friendMsg)
 			friendOffline := !m.p2pNode.IsConnected(peerUID)

@@ -91,6 +91,14 @@ type P2PMessage struct {
 	TargetMsgID   string `json:"target_msg_id,omitempty"`
 	ReactionEmoji string `json:"reaction_emoji,omitempty"`
 
+	// Emote fields (only used for MsgTypeEmote). The template is
+	// the raw emote text with $variables still in place; the
+	// receiver expands them locally so $receiver becomes "you"
+	// on their screen instead of their own display name.
+	// SenderName carries the sender's display name for $sender.
+	EmoteTemplate string `json:"emote_template,omitempty"`
+	SenderName    string `json:"sender_name,omitempty"`
+
 	// Status fields (used by status_update, ping, and pong).
 	// Piggyback local status on pings so remote peers learn our
 	// state without a separate broadcast. Status types:
