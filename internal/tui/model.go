@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rw3iss/slackers/internal/api"
 	"github.com/rw3iss/slackers/internal/commands"
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/debug"
@@ -476,6 +477,11 @@ type Model struct {
 	fullMode     bool
 	dragging     bool // sidebar resize drag in progress
 	version      string
+
+	// Plugin API host — provides the stable API surface that plugins
+	// use to interact with the app. Created once in NewModel, shared
+	// with all plugins. The Model drains its cmdQueue on every Update.
+	apiHost *api.Host
 }
 
 // NewModel creates a new root TUI model.
@@ -812,6 +818,10 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		eventChan:  make(chan slackpkg.SocketEvent, 100),
 		cmdSuggest: NewCmdSuggest(),
 	}
+	// Create the plugin API host — wraps Model services into a
+	// stable interface that plugins can depend on.
+	m.apiHost = api.NewHost(version, cfg, slackSvc, friendStore, p2pNode, nil)
+
 	// Load emote dictionary (embedded defaults + user custom).
 	m.emoteStore = emotes.NewStore(config.DefaultConfigDir())
 	// Build the slash-command registry once before the splash
@@ -819,6 +829,7 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	// Emotes are registered as KindEmote commands so they appear
 	// in the suggestion popup and the Command List.
 	m.cmdRegistry = m.buildCommandRegistry()
+	m.apiHost.SetCmdRegistry(m.cmdRegistry)
 	return m
 }
 
