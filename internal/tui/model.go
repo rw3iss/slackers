@@ -53,6 +53,7 @@ const (
 	overlayAwayStatus
 	overlayEmoteList
 	overlayEmoteEdit
+	overlayRemoteBrowser
 	overlayFriendCardOptions
 	overlayContactCardView
 	overlayCommandList
@@ -72,6 +73,7 @@ const (
 	fbPurposeImportTheme                             // selecting a theme JSON to import
 	fbPurposeFriendImport                            // selecting a friend contact card JSON
 	fbPurposeFriendsImport                           // selecting a friends list JSON
+	fbPurposeShareFolder                             // selecting a folder to share with friends
 )
 
 // Custom message types for the TUI update loop.
@@ -297,6 +299,7 @@ type Model struct {
 	awayStatus       AwayStatusModel
 	emoteList        EmoteListModel
 	emoteEdit        EmoteEditModel
+	remoteBrowser    RemoteBrowserModel
 	commandList      CommandListModel
 	outputView       OutputViewModel
 	cmdSuggest       CmdSuggestModel
@@ -650,6 +653,18 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 					SenderID: peerSlackID,
 					Text:     "__ping__",
 				}
+			case secure.MsgTypeBrowseRequest:
+				p2pChan <- P2PReceivedMsg{
+					SenderID: peerSlackID,
+					Text:     "__browse_request__",
+					PubKey:   msg.Text, // relative path
+				}
+			case secure.MsgTypeBrowseResponse:
+				p2pChan <- P2PReceivedMsg{
+					SenderID:  peerSlackID,
+					Text:      "__browse_response__",
+					Multiaddr: msg.Text, // JSON payload
+				}
 			case secure.MsgTypeEmote:
 				// Emote messages: if the sender included the raw
 				// template + their display name, expand $receiver
@@ -720,6 +735,13 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 				}
 				return ""
 			})
+			// Wire the shared-folder path resolver so the
+			// file-by-path download handler can validate and
+			// serve files from the user's shared directory.
+			cfgRef := cfg
+			p2pNode.SharedFolderLookup = func(relativePath string) (string, error) {
+				return secure.ValidateSharedPath(cfgRef.SharedFolder, relativePath)
+			}
 		}
 	}
 
@@ -1466,6 +1488,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayEmoteEdit {
 			var cmd tea.Cmd
 			m.emoteEdit, cmd = m.emoteEdit.Update(origMsg)
+			return m, cmd
+		}
+		if m.overlay == overlayRemoteBrowser {
+			var cmd tea.Cmd
+			m.remoteBrowser, cmd = m.remoteBrowser.Update(msg)
 			return m, cmd
 		}
 
@@ -2845,6 +2872,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return FriendsConfigOpenMsg{FriendID: friendID}
 			}
+		case SidebarActionBrowseFiles:
+			friendID := msg.UserID
+			if friendID == "" {
+				friendID = strings.TrimPrefix(msg.ChannelID, "friend:")
+			}
+			if friendID == "" {
+				return m, nil
+			}
+			friendName := friendID
+			if m.friendStore != nil {
+				if f := m.friendStore.Get(friendID); f != nil && f.Name != "" {
+					friendName = f.Name
+				}
+			}
+			return m, func() tea.Msg {
+				return RemoteBrowseOpenMsg{PeerUID: friendID, PeerName: friendName}
+			}
 		case SidebarActionRemoveFriend:
 			// Stage the removal behind a y/Enter confirmation
 			// prompt. The actual delete + sidebar refresh happens
@@ -2991,6 +3035,65 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.settings.SetSize(m.width, m.height)
 		m.overlay = overlaySettings
 		return m, nil
+
+	case RemoteBrowseOpenMsg:
+		m.remoteBrowser = NewRemoteBrowser(msg.PeerUID, msg.PeerName)
+		m.remoteBrowser.SetSize(m.width, m.height)
+		m.overlay = overlayRemoteBrowser
+		// Send the initial browse request for the root.
+		if m.p2pNode != nil {
+			uid := msg.PeerUID
+			go func() {
+				req := secure.P2PMessage{
+					Type:      secure.MsgTypeBrowseRequest,
+					Text:      "", // root
+					SenderID:  uid,
+					Timestamp: time.Now().Unix(),
+				}
+				_ = m.p2pNode.SendMessage(uid, req)
+			}()
+		}
+		return m, nil
+
+	case RemoteBrowseCloseMsg:
+		m.overlay = overlayNone
+		return m, nil
+
+	case RemoteBrowseSendRequestMsg:
+		// The remote browser asks the model to send a browse
+		// request to the peer (it can't do this itself since
+		// it doesn't own the p2pNode).
+		if m.p2pNode != nil {
+			uid := msg.PeerUID
+			path := msg.Path
+			go func() {
+				req := secure.P2PMessage{
+					Type:      secure.MsgTypeBrowseRequest,
+					Text:      path,
+					SenderID:  uid,
+					Timestamp: time.Now().Unix(),
+				}
+				_ = m.p2pNode.SendMessage(uid, req)
+			}()
+		}
+		return m, nil
+
+	case RemoteBrowseDownloadMsg:
+		// Download a file from the friend's shared folder.
+		downloadPath := m.cfg.DownloadPath
+		if downloadPath == "" {
+			home, _ := os.UserHomeDir()
+			downloadPath = filepath.Join(home, "Downloads")
+		}
+		destPath := filepath.Join(downloadPath, msg.FileName)
+		m.warning = fmt.Sprintf("Downloading %s from %s...", msg.FileName, m.remoteBrowser.peerName)
+		uid := msg.PeerUID
+		relPath := msg.RelativePath
+		return m, func() tea.Msg {
+			ctx := context.Background()
+			err := m.p2pNode.DownloadFileByPath(ctx, uid, relPath, destPath)
+			return FileDownloadCompleteMsg{DestPath: destPath, Err: err}
+		}
 
 	case EmoteListOpenMsg:
 		m.emoteList = NewEmoteList(m.emoteStore)
@@ -3934,6 +4037,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Handle browse request: friend wants to list our shared folder.
+		if msg.Text == "__browse_request__" {
+			reqPath := msg.PubKey
+			senderID := msg.SenderID
+			if m.p2pNode != nil && m.cfg != nil && m.cfg.SharedFolder != "" {
+				go func() {
+					resp := m.handleBrowseRequest(reqPath)
+					raw, _ := json.Marshal(resp)
+					reply := secure.P2PMessage{
+						Type:      secure.MsgTypeBrowseResponse,
+						Text:      string(raw),
+						SenderID:  senderID,
+						Timestamp: time.Now().Unix(),
+					}
+					_ = m.p2pNode.SendMessage(senderID, reply)
+				}()
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
+		// Handle browse response: results from a friend's shared folder.
+		if msg.Text == "__browse_response__" {
+			var resp secure.BrowseResponse
+			if err := json.Unmarshal([]byte(msg.Multiaddr), &resp); err == nil {
+				if m.overlay == overlayRemoteBrowser && m.remoteBrowser.peerUID == msg.SenderID {
+					m.remoteBrowser.ApplyResult(resp)
+				}
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
 		// Handle incoming delete request: peer wants to delete one of THEIR messages.
 		// libp2p has already authenticated the sender at the transport layer, so
 		// we just verify the target message exists and belongs to a known friend
@@ -4859,6 +4999,8 @@ func (m Model) viewInner() string {
 		return m.emoteList.View()
 	case overlayEmoteEdit:
 		return m.emoteEdit.View()
+	case overlayRemoteBrowser:
+		return m.remoteBrowser.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the
@@ -5346,10 +5488,13 @@ func (m *Model) buildSidebarOptionsItems(ch types.Channel) []sidebarOptionsItem 
 		{"Hide Channel", SidebarActionHide},
 		{"Rename Channel", SidebarActionRename},
 	}
-	// Friend channels: contact card viewer + remove option.
+	// Friend channels: contact card viewer + browse + remove.
 	if ch.IsFriend {
 		items = append(items, sidebarOptionsItem{
 			label: "View Contact Info", action: SidebarActionViewContact,
+		})
+		items = append(items, sidebarOptionsItem{
+			label: "Browse Shared Files", action: SidebarActionBrowseFiles,
 		})
 		items = append(items, sidebarOptionsItem{
 			label: "Remove Friend", action: SidebarActionRemoveFriend,

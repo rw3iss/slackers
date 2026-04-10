@@ -12,6 +12,7 @@ package tui
 
 import (
 	"encoding/json"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -708,6 +709,40 @@ func (m *Model) updateFriendStatusDisplay() {
 		}
 	}
 	m.channels.SetFriendStatus(statuses)
+}
+
+// handleBrowseRequest reads the local shared folder and returns a
+// BrowseResponse. Called from the __browse_request__ handler in a
+// goroutine so os.ReadDir doesn't block the Update loop.
+func (m *Model) handleBrowseRequest(reqPath string) secure.BrowseResponse {
+	if m.cfg == nil || m.cfg.SharedFolder == "" {
+		return secure.BrowseResponse{Error: "no shared folder configured"}
+	}
+	absPath, err := secure.ValidateSharedPath(m.cfg.SharedFolder, reqPath)
+	if err != nil {
+		return secure.BrowseResponse{Error: err.Error()}
+	}
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		return secure.BrowseResponse{Error: "cannot read directory: " + err.Error()}
+	}
+	var out []secure.BrowseEntry
+	for _, e := range entries {
+		info, _ := e.Info()
+		var size int64
+		var modTime time.Time
+		if info != nil {
+			size = info.Size()
+			modTime = info.ModTime()
+		}
+		out = append(out, secure.BrowseEntry{
+			Name:    e.Name(),
+			Size:    size,
+			IsDir:   e.IsDir(),
+			ModTime: modTime,
+		})
+	}
+	return secure.BrowseResponse{Path: reqPath, Entries: out}
 }
 
 // isOwnCard reports whether a contact card represents the local

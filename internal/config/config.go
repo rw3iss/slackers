@@ -84,6 +84,12 @@ type Config struct {
 	AwayEnabled bool   `json:"away_enabled,omitempty"`
 	AwayMsg     string `json:"away_msg,omitempty"` // optional human-readable away message
 
+	// SharedFolder is the local directory shared with friends via
+	// the "Browse Shared Files" feature. Friends can remotely list
+	// the contents and download individual files. Empty means no
+	// folder is shared.
+	SharedFolder string `json:"shared_folder,omitempty"`
+
 	// FriendPingSeconds controls how often the app polls friend
 	// connection state, propagates online/offline transitions in
 	// the sidebar, fires the profile-sync / request-pending pings

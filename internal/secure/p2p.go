@@ -37,29 +37,32 @@ const (
 	P2PProtocol = protocol.ID("/slackers/msg/1.0.0")
 
 	// P2P message types.
-	MsgTypeMessage        = "message"
-	MsgTypePing           = "ping"
-	MsgTypePong           = "pong"
-	MsgTypeFriendRequest  = "friend_request"
-	MsgTypeFriendAccept   = "friend_accept"
-	MsgTypeFriendReject   = "friend_reject"
-	MsgTypeDisconnect     = "disconnect"
-	MsgTypeFileOffer      = "file_offer"      // sender offers a file
-	MsgTypeFileRequest    = "file_request"    // receiver requests the file data
-	MsgTypeFileData       = "file_data"       // sender sends file chunk (base64)
-	MsgTypeFileCancel     = "file_cancel"     // sender cancels a previously offered file
-	MsgTypeKeyRotate      = "key_rotate"      // sender proposes a new public key for this friendship
-	MsgTypeKeyRotateAck   = "key_rotate_ack"  // receiver accepts and returns its new public key
-	MsgTypeReaction       = "reaction"        // add an emoji reaction
-	MsgTypeReactionRemove = "reaction_remove" // remove an emoji reaction
-	MsgTypeDelete         = "delete"          // request to delete a message authored by sender
-	MsgTypeDeleteAck      = "delete_ack"      // ack from peer that the deletion succeeded
-	MsgTypeEdit           = "edit"            // request to edit a message authored by sender
-	MsgTypeEditAck        = "edit_ack"        // ack from peer that the edit succeeded
-	MsgTypeProfileSync    = "profile_sync"    // sender announces their current contact card JSON
-	MsgTypeRequestPending = "request_pending" // asks the peer to scan its history and resend any pending messages addressed to us
-	MsgTypeStatusUpdate   = "status_update"   // sender announces a status change (online/offline/away/back)
-	MsgTypeEmote          = "emote"           // text emote (/laugh, /wave, etc.) — renders with special style
+	MsgTypeMessage           = "message"
+	MsgTypePing              = "ping"
+	MsgTypePong              = "pong"
+	MsgTypeFriendRequest     = "friend_request"
+	MsgTypeFriendAccept      = "friend_accept"
+	MsgTypeFriendReject      = "friend_reject"
+	MsgTypeDisconnect        = "disconnect"
+	MsgTypeFileOffer         = "file_offer"        // sender offers a file
+	MsgTypeFileRequest       = "file_request"      // receiver requests the file data
+	MsgTypeFileData          = "file_data"         // sender sends file chunk (base64)
+	MsgTypeFileCancel        = "file_cancel"       // sender cancels a previously offered file
+	MsgTypeKeyRotate         = "key_rotate"        // sender proposes a new public key for this friendship
+	MsgTypeKeyRotateAck      = "key_rotate_ack"    // receiver accepts and returns its new public key
+	MsgTypeReaction          = "reaction"          // add an emoji reaction
+	MsgTypeReactionRemove    = "reaction_remove"   // remove an emoji reaction
+	MsgTypeDelete            = "delete"            // request to delete a message authored by sender
+	MsgTypeDeleteAck         = "delete_ack"        // ack from peer that the deletion succeeded
+	MsgTypeEdit              = "edit"              // request to edit a message authored by sender
+	MsgTypeEditAck           = "edit_ack"          // ack from peer that the edit succeeded
+	MsgTypeProfileSync       = "profile_sync"      // sender announces their current contact card JSON
+	MsgTypeRequestPending    = "request_pending"   // asks the peer to scan its history and resend any pending messages addressed to us
+	MsgTypeStatusUpdate      = "status_update"     // sender announces a status change (online/offline/away/back)
+	MsgTypeEmote             = "emote"             // text emote (/laugh, /wave, etc.) — renders with special style
+	MsgTypeBrowseRequest     = "browse_request"    // request to list a remote shared folder
+	MsgTypeBrowseResponse    = "browse_response"   // response with directory listing JSON
+	MsgTypeFileRequestByPath = "file_request_path" // download a file by relative path from shared folder
 
 	// Protocol for file transfers (separate from messaging).
 	P2PFileProtocol = protocol.ID("/slackers/file/1.0.0")
@@ -120,11 +123,16 @@ type P2PNode struct {
 	// remote peer ID (one we never dialed ourselves) to a local user
 	// ID by scanning the friend store's multiaddrs. Set by the model
 	// layer. Returns "" when the peer is not a known friend.
-	peerLookup  func(peerIDStr string) string
-	peerMap     map[string]peer.ID
-	slackMap    map[peer.ID]string
-	sharedFiles map[string]string // fileID -> local file path (files we've offered)
-	mu          sync.RWMutex
+	peerLookup func(peerIDStr string) string
+	// SharedFolderLookup resolves a relative path within the
+	// user's shared folder to an absolute local path. Returns an
+	// error if the path escapes the shared root or no folder is
+	// shared. Set by the model layer.
+	SharedFolderLookup func(relativePath string) (string, error)
+	peerMap            map[string]peer.ID
+	slackMap           map[peer.ID]string
+	sharedFiles        map[string]string // fileID -> local file path (files we've offered)
+	mu                 sync.RWMutex
 }
 
 // SetPeerLookup wires the friend-store lookup used by the incoming
@@ -661,6 +669,47 @@ func (n *P2PNode) DownloadFileFromPeer(ctx context.Context, slackUserID, fileID,
 	return nil
 }
 
+// DownloadFileByPath requests a file from a friend's shared folder
+// by relative path (rather than by pre-registered file ID). The
+// server validates that the path is within the shared root and
+// streams the file back over the /slackers/file/1.0.0 protocol.
+func (n *P2PNode) DownloadFileByPath(ctx context.Context, slackUserID, relativePath, destPath string) error {
+	n.mu.RLock()
+	peerID, ok := n.peerMap[slackUserID]
+	n.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("peer %s not connected", slackUserID)
+	}
+	stream, err := n.host.NewStream(ctx, peerID, P2PFileProtocol)
+	if err != nil {
+		return fmt.Errorf("opening file stream: %w", err)
+	}
+	defer stream.Close()
+	req := P2PMessage{Type: MsgTypeFileRequestByPath, Text: relativePath}
+	data, _ := json.Marshal(req)
+	data = append(data, '\n')
+	if _, err := stream.Write(data); err != nil {
+		return fmt.Errorf("sending file request: %w", err)
+	}
+	dir := filepath.Dir(destPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", destPath, err)
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, stream); err != nil {
+		os.Remove(destPath)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("receiving file: %w", err)
+	}
+	return nil
+}
+
 // handleFileRequest processes incoming file download requests on the file protocol.
 func (n *P2PNode) handleFileRequest(s network.Stream) {
 	defer s.Close()
@@ -673,6 +722,24 @@ func (n *P2PNode) handleFileRequest(s network.Stream) {
 
 	var req P2PMessage
 	if err := json.Unmarshal(line, &req); err != nil {
+		return
+	}
+
+	// Path-based download from the shared folder.
+	if req.Type == MsgTypeFileRequestByPath && req.Text != "" {
+		if n.SharedFolderLookup == nil {
+			return
+		}
+		localPath, err := n.SharedFolderLookup(req.Text)
+		if err != nil {
+			return
+		}
+		f, err := os.Open(localPath)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		io.Copy(s, f)
 		return
 	}
 
