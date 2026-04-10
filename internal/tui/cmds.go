@@ -455,7 +455,7 @@ func loadFriendsCmd(store *friends.FriendStore, p2p *secure.P2PNode) tea.Cmd {
 // localStatus / localAwayMsg carry the local user's current
 // status, piggybacked on each ping so the remote peer learns
 // our state without a separate broadcast.
-func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, currentFriend, localStatus, localAwayMsg string) tea.Cmd {
+func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _ /* currentFriend */, localStatus, localAwayMsg string) tea.Cmd {
 	return func() tea.Msg {
 		if store == nil || p2p == nil {
 			return FriendPingMsg{}
@@ -493,10 +493,15 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, c
 				go func(uid, maddr string) {
 					defer wg.Done()
 					before := p2p.IsConnected(uid)
-					// Active chat: re-dial if dropped.
-					if currentFriend != "" && uid == currentFriend && !before {
+					// Always try to connect if not already
+					// connected — this covers startup (where
+					// no friends are connected yet) and
+					// reconnection after NAT eviction / idle
+					// timeout. The 3-second dial timeout keeps
+					// each attempt bounded.
+					if !before {
 						if err := p2p.ConnectToPeer(uid, maddr); err != nil {
-							debug.Log("[friend-ping] re-dial failed uid=%s err=%v", uid, err)
+							debug.Log("[friend-ping] dial failed uid=%s err=%v", uid, err)
 						}
 					}
 					on := p2p.IsConnected(uid)

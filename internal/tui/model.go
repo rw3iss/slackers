@@ -3716,12 +3716,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			// For pings and status_updates, reply with OUR
-			// current status so the sender learns it right away
-			// (instead of waiting for their next ping cycle to
-			// reach us). Fire-and-forget in a goroutine so the
-			// Update loop doesn't block on the stream write.
-			if (msg.Text == "__status_update__" || msg.Text == "__ping__") && m.p2pNode != nil {
+			// For pings (NOT status_updates), reply with OUR
+			// current status so the sender learns it right away.
+			// We must NOT reply to status_update — that creates
+			// an infinite loop (A sends → B replies → A replies
+			// → B replies → ...). Status updates are one-way
+			// announcements; only pings get a response.
+			if msg.Text == "__ping__" && m.p2pNode != nil {
 				localStatus := "online"
 				localMsg := ""
 				if m.cfg != nil && m.cfg.AwayEnabled {
