@@ -2664,7 +2664,12 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			// local user isn't the author.
 			authorHint := ""
 			if m.isMyMessage(msg) {
-				authorHint = "  e: edit  d: delete"
+				if msg.IsEmote {
+					// Emotes can be deleted but not edited.
+					authorHint = "  d: delete"
+				} else {
+					authorHint = "  e: edit  d: delete"
+				}
 			}
 			// Item-specific hint takes priority when the cursor
 			// has cycled onto a sub-item inside the message.
@@ -2706,6 +2711,14 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			headerLine = selectHighlight.Render(headerLine + hint)
 		}
 
+		// Pick the body text style based on whether this is an
+		// emote action or a regular message. Emotes render in
+		// italic + the theme's emote color (purple-ish).
+		bodyTextStyle := MessageTextStyle
+		if msg.IsEmote {
+			bodyTextStyle = EmoteMessageStyle
+		}
+
 		text := m.formatText(msg.MessageID, msg.Text)
 		// Collapse long [FRIEND:<json|hash>] markers into short
 		// [FRIEND:#fc-N] reference tokens *before* word-wrapping,
@@ -2742,7 +2755,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				lines = append(lines, "")
 			}
 			for _, tl := range textLines {
-				rendered := highlightBg.Render("  " + MessageTextStyle.Render(tl))
+				rendered := highlightBg.Render("  " + bodyTextStyle.Render(tl))
 				rendered = m.rewriteFriendCards(rendered, len(lines))
 				rendered = m.rewriteCodeSnippets(rendered, len(lines))
 				lines = append(lines, rendered)
@@ -2756,7 +2769,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				lines = append(lines, "")
 			}
 			for _, tl := range textLines {
-				rendered := "  " + MessageTextStyle.Render(tl)
+				rendered := "  " + bodyTextStyle.Render(tl)
 				rendered = m.rewriteFriendCards(rendered, len(lines))
 				rendered = m.rewriteCodeSnippets(rendered, len(lines))
 				lines = append(lines, rendered)

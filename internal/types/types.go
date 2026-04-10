@@ -58,6 +58,11 @@ type Message struct {
 	// comes back online, any Pending messages are re-sent in order
 	// and the flag is cleared on success.
 	Pending bool `json:"pending,omitempty"`
+	// IsEmote marks a message as an emote action (/laugh, /wave).
+	// Rendered with EmoteMessageStyle (italic, purple-ish) and
+	// cannot be edited (only deleted). Reactions and replies
+	// still work normally.
+	IsEmote bool `json:"is_emote,omitempty"`
 }
 
 // User represents a Slack workspace member.

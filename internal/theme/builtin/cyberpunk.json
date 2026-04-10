@@ -20,6 +20,7 @@
     "replyLabel": "51",
     "selection": "201",
     "borderDefault": "55",
-    "borderActive": "201"
+    "borderActive": "201",
+    "emote": "#d946ef"
   }
 }

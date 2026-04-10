@@ -19,6 +19,7 @@ import (
 	"github.com/rw3iss/slackers/internal/commands"
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/debug"
+	"github.com/rw3iss/slackers/internal/emotes"
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/notifications"
 	"github.com/rw3iss/slackers/internal/secure"
@@ -162,6 +163,11 @@ type P2PReceivedMsg struct {
 	// resent after a reconnect — otherwise the receiver would
 	// order them by arrival time and see them out of order.
 	SentAt int64
+
+	// IsEmote marks this as an emote action (/laugh, /wave)
+	// so the model creates the types.Message with IsEmote=true
+	// and the renderer applies EmoteMessageStyle.
+	IsEmote bool
 }
 
 // SecureSessionReadyMsg signals that a secure session was established with a peer.
@@ -291,6 +297,7 @@ type Model struct {
 	outputView       OutputViewModel
 	cmdSuggest       CmdSuggestModel
 	cmdRegistry      *commands.Registry
+	emoteStore       *emotes.Store
 
 	// outputActive replaces the messages pane in renderBaseView
 	// with the OutputViewModel content. It's a *pane state* (not
@@ -635,12 +642,22 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 					Multiaddr: msg.StatusMessage,
 				}
 			case secure.MsgTypePing:
-				// Receiving a ping proves the peer is online.
-				// Route it so the handler can mark them online
-				// and reply with our status.
 				p2pChan <- P2PReceivedMsg{
 					SenderID: peerSlackID,
 					Text:     "__ping__",
+				}
+			case secure.MsgTypeEmote:
+				// Emote messages use the same P2PReceivedMsg path
+				// as regular messages but with IsEmote=true so the
+				// handler creates a types.Message with the emote
+				// flag and the renderer applies EmoteMessageStyle.
+				p2pChan <- P2PReceivedMsg{
+					SenderID:  peerSlackID,
+					Text:      msg.Text,
+					MsgID:     msg.MessageID,
+					ReplyToID: msg.ReplyToMsgID,
+					SentAt:    msg.Timestamp,
+					IsEmote:   true,
 				}
 			case secure.MsgTypeMessage:
 				p2pChan <- P2PReceivedMsg{
@@ -744,10 +761,12 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		eventChan:  make(chan slackpkg.SocketEvent, 100),
 		cmdSuggest: NewCmdSuggest(),
 	}
+	// Load emote dictionary (embedded defaults + user custom).
+	m.emoteStore = emotes.NewStore(config.DefaultConfigDir())
 	// Build the slash-command registry once before the splash
 	// screen so the trie is fully cached for the typing hot path.
-	// Custom emotes / commands.json files would also be merged
-	// here in the future — left as a no-op for now.
+	// Emotes are registered as KindEmote commands so they appear
+	// in the suggestion popup and the Command List.
 	m.cmdRegistry = m.buildCommandRegistry()
 	return m
 }
@@ -2948,6 +2967,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlaySettings
 		return m, nil
 
+	case EmoteSendMsg:
+		// Route the emote through the same send path as
+		// regular messages, but with IsEmote=true on the
+		// local Message struct so the renderer applies the
+		// emote style, and MsgTypeEmote on the P2P wire so
+		// the receiver knows to render it differently.
+		if m.currentCh == nil {
+			m.warning = "No channel selected"
+			return m, nil
+		}
+		text := msg.FormattedText
+		if text == "" {
+			return m, nil
+		}
+		// For P2P friend chats: send as MsgTypeEmote.
+		if m.currentCh.IsFriend && m.p2pNode != nil {
+			peerUID := m.currentCh.UserID
+			msgID := generateMessageID()
+			m.connectFriend(peerUID)
+			friendMsg := secure.P2PMessage{
+				Type:      secure.MsgTypeEmote,
+				Text:      text,
+				SenderID:  peerUID,
+				Timestamp: time.Now().Unix(),
+				MessageID: msgID,
+			}
+			sendCmd := sendFriendMessageCmd(m.p2pNode, m.friendStore, peerUID, friendMsg)
+			friendOffline := !m.p2pNode.IsConnected(peerUID)
+			localMsg := types.Message{
+				MessageID: msgID,
+				UserID:    "me",
+				UserName:  "You",
+				Text:      text,
+				Timestamp: time.Now(),
+				IsEmote:   true,
+				Pending:   friendOffline,
+			}
+			m.appendFriendMessage(peerUID, localMsg)
+			m.messages.AppendMessage(localMsg)
+			return m, sendCmd
+		}
+		// For Slack chats: send as plain text (Slack doesn't
+		// have a special emote message type). The emote
+		// formatting is already baked into the text.
+		return m, func() tea.Msg {
+			return InputSendMsg{Text: text}
+		}
+
 	case AwayStatusClosedMsg:
 		m.overlay = overlayNone
 		if m.cfg == nil {
@@ -4309,6 +4376,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Text:      msg.Text,
 			Timestamp: msgTime,
 			ReplyTo:   msg.ReplyToID,
+			IsEmote:   msg.IsEmote,
 		}
 
 		// If the sender flagged this as a reply, attach it to the

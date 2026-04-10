@@ -21,6 +21,7 @@
     "selection": "#36161f/#fad6e0",
     "menuItem": "#36161f",
     "borderDefault": "#d8b6c1",
-    "borderActive": "#b6336e"
+    "borderActive": "#b6336e",
+    "emote": "#a855f7"
   }
 }

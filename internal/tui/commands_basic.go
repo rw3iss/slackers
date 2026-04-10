@@ -27,6 +27,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rw3iss/slackers/internal/commands"
 	"github.com/rw3iss/slackers/internal/config"
+	_ "github.com/rw3iss/slackers/internal/emotes"
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/setup"
 	"github.com/rw3iss/slackers/internal/theme"
@@ -570,7 +571,103 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		},
 	})
 
+	// ---- Emotes -------------------------------------------------------
+	// Register every emote from the merged dictionary as a
+	// KindEmote command. They show in the suggestion popup and
+	// the Command List tagged [emote]. The generic /emote takes
+	// free-form $text.
+	if m.emoteStore != nil {
+		for _, e := range m.emoteStore.All() {
+			emote := e // capture for closure
+			desc := emote.Text
+			if len(desc) > 40 {
+				desc = desc[:37] + "..."
+			}
+			cmd := commands.Command{
+				Name:        emote.Command,
+				Kind:        commands.KindEmote,
+				Description: desc,
+				Usage:       "/" + emote.Command,
+				Run: func(ctx *commands.Context) commands.Result {
+					m := ctx.Host.(*Model)
+					return m.executeEmote(emote.Command, ctx)
+				},
+			}
+			if emote.Command == "emote" {
+				cmd.Args = []commands.ArgSpec{{
+					Name: "text", Kind: commands.ArgString,
+					Help: "custom emote text (used as $text)",
+				}}
+			}
+			_ = r.Register(cmd) // ignore duplicates with builtins
+		}
+	}
+
 	return r
+}
+
+// EmoteSendMsg is dispatched by the emote command's Run closure.
+// The model handler routes it through the appropriate send path
+// (Slack or P2P) and creates a local optimistic Message with
+// IsEmote=true so the renderer applies the emote style.
+type EmoteSendMsg struct {
+	FormattedText string
+}
+
+// executeEmote formats an emote template and returns a Result
+// that dispatches EmoteSendMsg into the current chat.
+func (m *Model) executeEmote(command string, ctx *commands.Context) commands.Result {
+	if m.emoteStore == nil {
+		return commands.Result{Status: commands.StatusError, StatusBar: "Emote system not available"}
+	}
+	if m.currentCh == nil {
+		return commands.Result{Status: commands.StatusError, StatusBar: "No channel selected"}
+	}
+	// Determine sender name.
+	sender := "You"
+	if m.cfg != nil && m.cfg.MyName != "" {
+		sender = m.cfg.MyName
+	}
+	// Determine receiver name.
+	receiver := ""
+	if m.currentCh.IsFriend || m.currentCh.IsDM {
+		if m.friendStore != nil && m.currentCh.IsFriend {
+			if f := m.friendStore.Get(m.currentCh.UserID); f != nil && f.Name != "" {
+				receiver = f.Name
+			}
+		}
+		if receiver == "" {
+			if u, ok := m.users[m.currentCh.UserID]; ok {
+				if u.DisplayName != "" {
+					receiver = u.DisplayName
+				} else if u.RealName != "" {
+					receiver = u.RealName
+				}
+			}
+		}
+		if receiver == "" {
+			receiver = m.currentCh.Name
+		}
+	}
+	// Free text for the generic /emote command.
+	freeText := ctx.Raw
+	formatted, err := m.emoteStore.FormatText(command, sender, receiver, "", freeText)
+	if err != nil {
+		return commands.Result{Status: commands.StatusError, StatusBar: err.Error()}
+	}
+	return commands.Result{
+		Status: commands.StatusOK,
+		Cmd: func() tea.Msg {
+			return EmoteSendMsg{FormattedText: formatted}
+		},
+	}
+}
+
+// rebuildCommandRegistry rebuilds the slash-command registry
+// from scratch. Called after emote edits/deletes so the trie
+// and lookup tables reflect the latest dictionary.
+func (m *Model) rebuildCommandRegistry() {
+	m.cmdRegistry = m.buildCommandRegistry()
 }
 
 // mask hides sensitive token values for /config display.

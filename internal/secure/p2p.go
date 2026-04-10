@@ -59,6 +59,7 @@ const (
 	MsgTypeProfileSync    = "profile_sync"    // sender announces their current contact card JSON
 	MsgTypeRequestPending = "request_pending" // asks the peer to scan its history and resend any pending messages addressed to us
 	MsgTypeStatusUpdate   = "status_update"   // sender announces a status change (online/offline/away/back)
+	MsgTypeEmote          = "emote"           // text emote (/laugh, /wave, etc.) — renders with special style
 
 	// Protocol for file transfers (separate from messaging).
 	P2PFileProtocol = protocol.ID("/slackers/file/1.0.0")

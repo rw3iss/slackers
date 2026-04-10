@@ -62,6 +62,8 @@ var (
 	ColorBorderDefaultBg lipgloss.Color
 	ColorBorderActive    lipgloss.Color
 	ColorBorderActiveBg  lipgloss.Color
+	ColorEmote           lipgloss.Color
+	ColorEmoteBg         lipgloss.Color
 
 	// Shared widget colors — centralised to eliminate inline
 	// magic 256-color indices scattered across overlays. Refreshed
@@ -140,6 +142,7 @@ var (
 	FriendCardPillSelectedStyle lipgloss.Style // pill highlighted when cursor is on it in select mode
 	CodeSnippetStyle            lipgloss.Style // idle styling for inline `code` spans in chat
 	CodeSnippetSelectedStyle    lipgloss.Style // highlighted styling when cursor is on a snippet
+	EmoteMessageStyle           lipgloss.Style // emote action text in chat (/laugh, /wave)
 
 	// Emoji picker hot-path styles.
 	EmojiActiveBgStyle     lipgloss.Style // tab highlight background for the active category
@@ -235,6 +238,7 @@ func ApplyTheme(t theme.Theme) {
 	ColorMenuItem, ColorMenuItemBg = applyKey(t, theme.KeyMenuItem)
 	ColorBorderDefault, ColorBorderDefaultBg = applyKey(t, theme.KeyBorderDefault)
 	ColorBorderActive, ColorBorderActiveBg = applyKey(t, theme.KeyBorderActive)
+	ColorEmote, ColorEmoteBg = applyKey(t, theme.KeyEmote)
 
 	// Shared widget colors. These are not yet theme keys —
 	// they're fixed 256-color indices chosen to read well on
@@ -347,6 +351,13 @@ func rebuildDerivedStyles() {
 		Background(ColorAccent).
 		Bold(true).
 		Padding(0, 1)
+	// EmoteMessageStyle is used for emote action text in the
+	// chat pane (/laugh, /wave). Italic + the theme's emote
+	// color (purple-ish by default).
+	EmoteMessageStyle = lipgloss.NewStyle().
+		Foreground(ColorEmote).
+		Italic(true)
+
 	// CodeSnippetStyle is the idle rendering for inline `code`
 	// spans inside chat message bodies. Italic + accent fg so it
 	// reads as "this is a code-ish thing" without adding any
