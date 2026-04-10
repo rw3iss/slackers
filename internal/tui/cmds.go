@@ -506,6 +506,21 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, c
 					store.SetOnline(uid, on)
 					if on {
 						store.UpdateLastOnline(uid)
+						// Send a status_update to the friend so
+						// THEIR handler fires and marks us online
+						// on their side. Without this, connecting
+						// at the transport layer is invisible to
+						// the remote — their handleStream only
+						// fires when we open an application stream
+						// and write a message.
+						statusMsg := secure.P2PMessage{
+							Type:          secure.MsgTypeStatusUpdate,
+							Timestamp:     time.Now().Unix(),
+							SenderID:      uid,
+							StatusType:    localStatus,
+							StatusMessage: localAwayMsg,
+						}
+						_ = p2p.SendMessage(uid, statusMsg)
 					}
 					// Build status info from the friend store's
 					// current AwayStatus/AwayMessage (populated
