@@ -57,23 +57,47 @@ func (m *AwayStatusModel) SetSize(w, h int) {
 func (m AwayStatusModel) Update(msg tea.Msg) (AwayStatusModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// When focused on the message input, forward ALL
+		// keystrokes to the textinput first — only Tab and Esc
+		// escape the input. This ensures capital letters, space,
+		// arrows, etc. all work normally while typing.
+		if m.focus == 1 {
+			switch msg.String() {
+			case "esc":
+				return m, nil
+			case "tab":
+				m.focus = (m.focus + 1) % 4
+				m.input.Blur()
+				return m, nil
+			case "shift+tab":
+				m.focus = (m.focus + 3) % 4
+				m.input.Blur()
+				return m, nil
+			case "enter":
+				// Enter in the input field → move to Save
+				m.focus = 2
+				m.input.Blur()
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.input, cmd = m.input.Update(msg)
+				return m, cmd
+			}
+		}
+		// Non-input focus: handle navigation and actions.
 		switch msg.String() {
 		case "esc":
-			return m, nil // model catches esc and closes the overlay
+			return m, nil
 		case "tab", "down":
 			m.focus = (m.focus + 1) % 4
 			if m.focus == 1 {
 				m.input.Focus()
-			} else {
-				m.input.Blur()
 			}
 			return m, nil
 		case "shift+tab", "up":
 			m.focus = (m.focus + 3) % 4
 			if m.focus == 1 {
 				m.input.Focus()
-			} else {
-				m.input.Blur()
 			}
 			return m, nil
 		case "enter", " ":
@@ -97,12 +121,6 @@ func (m AwayStatusModel) Update(msg tea.Msg) (AwayStatusModel, tea.Cmd) {
 					}
 				}
 			}
-		}
-		// When focused on the message input, forward keystrokes.
-		if m.focus == 1 {
-			var cmd tea.Cmd
-			m.input, cmd = m.input.Update(msg)
-			return m, cmd
 		}
 	}
 	return m, nil
