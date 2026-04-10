@@ -60,7 +60,7 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Aliases:     []string{"cmds", "cmd"},
 		Description: "Open the Command List browser",
 		Usage:       "/commands",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
 			return commands.Result{
 				Status: commands.StatusOK,
 				Cmd:    func() tea.Msg { return CommandListOpenMsg{} },
@@ -102,7 +102,8 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Aliases:     []string{"ver"},
 		Description: "Show the running slackers version",
 		Usage:       "/version",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			return commands.Result{
 				Status:    commands.StatusOK,
 				StatusBar: "slackers v" + m.version,
@@ -115,7 +116,7 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Aliases:     []string{"exit", "q"},
 		Description: "Exit slackers",
 		Usage:       "/quit",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
 			return commands.Result{
 				Status: commands.StatusOK,
 				Cmd:    tea.Quit,
@@ -127,7 +128,8 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Name:        "me",
 		Description: "Show your own contact info",
 		Usage:       "/me",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			var b strings.Builder
 			b.WriteString("# Your Contact Info\n\n")
 			if m.cfg != nil {
@@ -165,7 +167,8 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Name:        "friends",
 		Description: "List your friends",
 		Usage:       "/friends",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			if m.friendStore == nil {
 				return commands.Result{Status: commands.StatusError, StatusBar: "Friends store not available"}
 			}
@@ -242,6 +245,7 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 			Help: "the friend's display name, user id, or slacker id",
 		}},
 		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			if m.friendStore == nil {
 				return commands.Result{Status: commands.StatusError, StatusBar: "Friends store not available"}
 			}
@@ -278,7 +282,8 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Aliases:     []string{"chans"},
 		Description: "List every channel and friend chat",
 		Usage:       "/channels",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			all := m.channels.AllChannels()
 			if len(all) == 0 {
 				return commands.Result{Status: commands.StatusOK, Title: "Channels", Body: "_No channels._"}
@@ -306,7 +311,8 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Aliases:     []string{"clear"},
 		Description: "Clear the current friend chat's history (with prompt)",
 		Usage:       "/clear-history",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			if m.currentCh == nil {
 				return commands.Result{Status: commands.StatusError, StatusBar: "No channel selected"}
 			}
@@ -329,7 +335,7 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Aliases:     []string{"prefs"},
 		Description: "Open the settings overlay",
 		Usage:       "/settings",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
 			return commands.Result{
 				Status: commands.StatusOK,
 				Cmd:    func() tea.Msg { return openSettingsMsg{} },
@@ -342,7 +348,7 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Aliases:     []string{"keys", "keybinds"},
 		Description: "Open the keyboard shortcuts editor",
 		Usage:       "/shortcuts",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
 			return commands.Result{
 				Status: commands.StatusOK,
 				Cmd:    func() tea.Msg { return ShortcutsEditorOpenMsg{} },
@@ -356,7 +362,8 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Name:        "themes",
 		Description: "List installed themes",
 		Usage:       "/themes",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			all := theme.LoadAll()
 			var b strings.Builder
 			b.WriteString("# Themes\n\n")
@@ -384,6 +391,7 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 			Help: "an installed theme name (see /themes)",
 		}},
 		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			if len(ctx.Args) == 0 {
 				return commands.Result{Status: commands.StatusError, StatusBar: "Usage: /theme <name>"}
 			}
@@ -412,6 +420,7 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 			{Name: "value", Optional: true, Help: "second-arg value for friend / theme subcommands"},
 		},
 		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			if len(ctx.Args) == 0 {
 				return commands.Result{
 					Status:    commands.StatusError,
@@ -463,13 +472,20 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 					},
 				}
 			}
-			// No channel — show in Output view so the user
-			// can still copy the content.
+			// No channel — show in Output view. For setup,
+			// show both JSON + hash as selectable sections so
+			// the user can pick which to copy. For other
+			// targets, show the body as a selectable section.
+			if target.name == "setup" {
+				return m.buildShareSetupOutput()
+			}
 			return commands.Result{
-				Status:    commands.StatusOK,
-				Title:     "Share: " + target.name,
-				Body:      body,
-				StatusBar: "No channel selected — content shown in Output view (copy with 'c')",
+				Status: commands.StatusOK,
+				Title:  "Share: " + target.name,
+				Sections: []commands.Section{
+					{Text: body, Selectable: true},
+				},
+				StatusBar: "No channel selected — select an item and press 'c' to copy",
 			}
 		},
 	})
@@ -479,6 +495,7 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Description: "Import or share workspace credentials",
 		Usage:       "/setup <json|hash|--flags> · /setup share [hash|json]",
 		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			if len(ctx.Args) == 0 {
 				return commands.Result{
 					Status:    commands.StatusError,
@@ -528,7 +545,8 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Name:        "config",
 		Description: "Show the current configuration",
 		Usage:       "/config",
-		Run: func(*commands.Context) commands.Result {
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
 			if m.cfg == nil {
 				return commands.Result{Status: commands.StatusError, StatusBar: "No config loaded"}
 			}
@@ -761,6 +779,69 @@ func (m *Model) refreshCmdSuggest() {
 	}
 	m.cmdSuggest.SetArgMatches(ranked, prefix)
 	m.cmdSuggest.SetWidth(m.width - 2)
+}
+
+// buildShareSetupOutput returns a multi-section Output view result
+// showing both the JSON and hash forms of the workspace setup
+// credentials. Each form is a selectable section so the user can
+// arrow onto it, press 'c' to copy, or Enter to copy to clipboard.
+func (m *Model) buildShareSetupOutput() commands.Result {
+	if m.cfg == nil {
+		return commands.Result{
+			Status:    commands.StatusError,
+			StatusBar: "No config loaded",
+		}
+	}
+	share := setup.Config{
+		ClientID:     m.cfg.ClientID,
+		ClientSecret: m.cfg.ClientSecret,
+		AppToken:     m.cfg.AppToken,
+	}
+	if share.IsEmpty() {
+		return commands.Result{
+			Status:    commands.StatusError,
+			StatusBar: "No workspace credentials configured — run /setup first",
+		}
+	}
+	hash, err := setup.Encode(share)
+	if err != nil {
+		return commands.Result{
+			Status:    commands.StatusError,
+			StatusBar: "Encode hash failed: " + err.Error(),
+		}
+	}
+	js, err := share.ToJSON()
+	if err != nil {
+		return commands.Result{
+			Status:    commands.StatusError,
+			StatusBar: "Encode JSON failed: " + err.Error(),
+		}
+	}
+	return commands.Result{
+		Status: commands.StatusOK,
+		Title:  "Share: setup",
+		Sections: []commands.Section{
+			{
+				Text:       "Select an item below and press 'c' to copy it to the clipboard.",
+				Selectable: false,
+			},
+			{
+				Title:      "JSON format",
+				Text:       js,
+				Selectable: true,
+			},
+			{
+				Title:      "Hash format (compact)",
+				Text:       hash,
+				Selectable: true,
+			},
+			{
+				Text:       "User OAuth token (xoxp-) is NOT included.",
+				Selectable: false,
+			},
+		},
+		StatusBar: "No channel selected — select an item and press 'c' to copy",
+	}
 }
 
 // buildShareBody constructs the chat message body for one /share

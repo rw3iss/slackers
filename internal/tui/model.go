@@ -1715,7 +1715,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.input.Reset()
 						m.cmdSuggest.Hide()
 						m.resizeComponents()
-						res := m.cmdRegistry.Run(line)
+						res := m.cmdRegistry.Run(line, &m)
 						return m, m.applyCommandResult(res)
 					}
 					// Arg mode: substitute the highlighted arg
@@ -1733,7 +1733,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.input.Reset()
 						m.cmdSuggest.Hide()
 						m.resizeComponents()
-						res := m.cmdRegistry.Run(val)
+						res := m.cmdRegistry.Run(val, &m)
 						return m, m.applyCommandResult(res)
 					}
 				case "esc":
@@ -3201,7 +3201,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.Reset()
 			m.cmdSuggest.Hide()
 			m.resizeComponents()
-			res := m.cmdRegistry.Run(text)
+			res := m.cmdRegistry.Run(text, &m)
 			return m, m.applyCommandResult(res)
 		}
 		// Sending a regular chat message implicitly closes the

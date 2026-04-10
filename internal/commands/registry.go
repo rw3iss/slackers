@@ -140,9 +140,11 @@ func (r *Registry) Lookup(query string, topN int) []*Command {
 
 // Run looks up the command by the leading token in input and
 // invokes its RunFunc. The leading token may be prefixed with
-// "/" or not. Returns a Result with StatusError if the command
-// isn't registered.
-func (r *Registry) Run(input string) Result {
+// "/" or not. host is the live host model (e.g. *tui.Model)
+// that commands can read current state from via ctx.Host.
+// Returns a Result with StatusError if the command isn't
+// registered.
+func (r *Registry) Run(input string, host any) Result {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return Result{Status: StatusError, StatusBar: "Empty command"}
@@ -165,6 +167,7 @@ func (r *Registry) Run(input string) Result {
 	ctx := &Context{
 		Args: tokenize(rest),
 		Raw:  rest,
+		Host: host,
 	}
 	if cmd.Run == nil {
 		return Result{

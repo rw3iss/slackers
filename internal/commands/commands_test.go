@@ -56,7 +56,7 @@ func TestFuzzyScoreNoMatch(t *testing.T) {
 
 func TestRegistryRunUnknown(t *testing.T) {
 	r := NewRegistry()
-	res := r.Run("/nope")
+	res := r.Run("/nope", nil)
 	if res.Status != StatusError {
 		t.Errorf("expected error status, got %v", res.Status)
 	}
@@ -74,7 +74,7 @@ func TestRegistryRunWithArgs(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	res := r.Run(`/echo hello "two words" three`)
+	res := r.Run(`/echo hello "two words" three`, nil)
 	if res.Status != StatusOK {
 		t.Fatalf("expected ok, got %v: %q", res.Status, res.StatusBar)
 	}

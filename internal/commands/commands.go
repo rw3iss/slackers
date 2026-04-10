@@ -96,8 +96,12 @@ func (c Command) FullName() string {
 	return "/" + c.Name
 }
 
-// Context carries the raw args for an invocation. RunFunc closures
-// usually pull additional state from the captured *Model.
+// Context carries the raw args for an invocation plus an opaque
+// reference to the host model. Commands read live state (current
+// channel, friend store, config, etc.) from Host rather than
+// from a pointer captured at closure-construction time —
+// bubbletea models are VALUE types, so a pointer captured in
+// NewModel would go stale immediately.
 type Context struct {
 	// Args is the slice of whitespace-separated tokens following
 	// the command name. Tokens enclosed in double quotes are
@@ -109,6 +113,12 @@ type Context struct {
 	// value (e.g. /add-friend takes a JSON / hash blob that may
 	// itself contain spaces and quotes).
 	Raw string
+
+	// Host is the live host model, set by the caller before
+	// Run. In the TUI layer this is *tui.Model. Typed as `any`
+	// so the commands package stays Model-agnostic. Commands
+	// that need host state assert it: `m := ctx.Host.(*Model)`.
+	Host any
 }
 
 // ResultStatus classifies a command's outcome. The host inspects

@@ -325,8 +325,10 @@ func (o OutputViewModel) Update(msg tea.Msg) (OutputViewModel, tea.Cmd) {
 				return o, nil
 			}
 			return o, nil
-		case "c":
+		case "c", "enter":
 			// Copy selected item / snippet to clipboard.
+			// Both 'c' and Enter trigger the copy so users
+			// can use whichever feels more natural.
 			if text := o.SelectedCopyText(); text != "" {
 				if copyToClipboard(text) {
 					return o, func() tea.Msg {
