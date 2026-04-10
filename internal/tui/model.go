@@ -1415,8 +1415,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.overlay = overlayNone
 				return m, nil
 			}
+			// Use origMsg (pre-normalization) so the textinput
+			// receives capital letters as typed — the
+			// normalizeShortcutKey pass lowercases them for
+			// shortcut matching, but text inputs need the
+			// original case. Same pattern as overlayFriendsConfig.
 			var cmd tea.Cmd
-			m.awayStatus, cmd = m.awayStatus.Update(msg)
+			m.awayStatus, cmd = m.awayStatus.Update(origMsg)
 			return m, cmd
 		}
 
