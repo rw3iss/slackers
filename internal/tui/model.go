@@ -4421,20 +4421,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		// Startup broadcast: announce our status to all connected
-		// friends so they learn we're online right away instead of
-		// waiting for their next ping cycle to discover us. If the
-		// user has a persisted away status, broadcast that instead.
-		if m.p2pNode != nil {
-			startupStatus := "online"
-			startupMsg := ""
-			if m.cfg != nil && m.cfg.AwayEnabled {
-				startupStatus = "away"
-				startupMsg = m.cfg.AwayMsg
-			}
-			go m.p2pNode.BroadcastStatus(startupStatus, startupMsg)
+		// Immediately kick off the first batched ping cycle so
+		// every friend we can reach learns we're online (and we
+		// learn their status) right away — not after a 10-second
+		// delay. The ping connects in batches of 5 and
+		// piggybacks our local status; each friend's handler
+		// replies with their own status, creating a full
+		// bidirectional exchange. This replaces the earlier
+		// BroadcastStatus call which only reached already-
+		// connected peers (nearly empty at startup).
+		localStatus := "online"
+		localAwayMsg := ""
+		if m.cfg != nil && m.cfg.AwayEnabled {
+			localStatus = "away"
+			localAwayMsg = m.cfg.AwayMsg
 		}
-		return m, nil
+		return m, friendPingCmdWithCurrent(
+			m.friendStore, m.p2pNode, "", localStatus, localAwayMsg,
+		)
 
 	case FriendRequestSentMsg:
 		m.overlay = overlayNone
