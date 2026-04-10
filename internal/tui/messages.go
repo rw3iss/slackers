@@ -326,7 +326,7 @@ func (m *MessageViewModel) SetMessages(msgs []types.Message) {
 // SetMessagesSilent updates messages without resetting scroll position.
 // Used for background polling updates.
 func (m *MessageViewModel) SetMessagesSilent(msgs []types.Message) {
-	wasAtBottom := m.viewport.AtBottom()
+	wasAtBottom := m.viewport.AtBottom() || m.autoScroll
 	m.messages = msgs
 	m.contextMode = false
 	m.formattedTextCache = nil
@@ -666,8 +666,8 @@ func (m *MessageViewModel) SetItemSpacing(n int) {
 func (m *MessageViewModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	// Viewport height = pane height - 1 header line - 1 bottom gutter.
-	vpH := h - 2
+	// Viewport height = pane height - 1 header line.
+	vpH := h - 1
 	if vpH < 1 {
 		vpH = 1
 	}
@@ -1707,25 +1707,58 @@ func (m *MessageViewModel) scrollToReactCursor() {
 	if targetID == "" {
 		return
 	}
-	// Find which line the selected message starts at.
-	targetLine := -1
+
+	// Find the first and last line belonging to this message.
+	// lineToMsgID maps content lines to message IDs — a message
+	// occupies all lines from its first entry to the line before
+	// the next message's first entry (or end of content).
+	msgStart := -1
+	msgEnd := -1
+	maxLine := 0
 	for line, id := range m.lineToMsgID {
+		if line > maxLine {
+			maxLine = line
+		}
 		if id == targetID {
-			targetLine = line
-			break
+			if msgStart < 0 || line < msgStart {
+				msgStart = line
+			}
 		}
 	}
-	if targetLine < 0 {
+	if msgStart < 0 {
 		return
 	}
+
+	// Find where the next message starts to determine this message's end.
+	nextStart := m.viewport.TotalLineCount()
+	for line, id := range m.lineToMsgID {
+		if id != targetID && line > msgStart && line < nextStart {
+			nextStart = line
+		}
+	}
+	msgEnd = nextStart - 1
+	if msgEnd < msgStart {
+		msgEnd = msgStart
+	}
+
+	// Message height in lines.
+	msgHeight := msgEnd - msgStart + 1
+	vpH := m.viewport.Height
 	top := m.viewport.YOffset
-	bottom := top + m.viewport.Height - 1
-	if targetLine < top {
-		// Scroll up so the line is at the top of the viewport.
-		m.viewport.SetYOffset(targetLine)
-	} else if targetLine > bottom-2 {
-		// Scroll down so the line is near the bottom (leave 2-line margin).
-		m.viewport.SetYOffset(targetLine - m.viewport.Height + 3)
+	bottom := top + vpH - 1
+
+	if msgStart < top {
+		// Message is above viewport — scroll up to show it at the top.
+		m.viewport.SetYOffset(msgStart)
+	} else if msgEnd > bottom {
+		// Message extends below viewport — scroll down so the full
+		// message is visible. If the message is taller than the
+		// viewport, show its top at the viewport top.
+		if msgHeight >= vpH {
+			m.viewport.SetYOffset(msgStart)
+		} else {
+			m.viewport.SetYOffset(msgEnd - vpH + 1)
+		}
 	}
 }
 
@@ -1802,6 +1835,24 @@ func (m *MessageViewModel) ToggleReplyCollapse(msgID string) {
 	}
 	m.expandedReplies[msgID] = !m.expandedReplies[msgID]
 	m.rebuildContent()
+}
+
+// AddReplyLocal appends a reply message to a parent message's
+// Replies slice without reloading from the server. Used for
+// optimistic display of a reply the user just sent.
+func (m *MessageViewModel) AddReplyLocal(parentID string, reply types.Message) {
+	for i := range m.messages {
+		if m.messages[i].MessageID == parentID {
+			m.messages[i].Replies = append(m.messages[i].Replies, reply)
+			m.rebuildContent()
+			return
+		}
+	}
+}
+
+// ScrollToBottom scrolls the viewport to the very bottom.
+func (m *MessageViewModel) ScrollToBottom() {
+	m.viewport.GotoBottom()
 }
 
 // ExpandReplies forces a message's inline reply tree to render
@@ -1972,6 +2023,12 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					m.replyReactionSelIdx = -1
 					m.rebuildContent()
 					m.scrollToReactCursor()
+				} else {
+					// At the first message — scroll viewport up
+					// line-by-line for long messages.
+					if m.viewport.YOffset > 0 {
+						m.viewport.LineUp(1)
+					}
 				}
 				return m, nil
 			case "down":
@@ -1992,6 +2049,12 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					m.replyReactionSelIdx = -1
 					m.rebuildContent()
 					m.scrollToReactCursor()
+				} else {
+					// At the last message — scroll viewport line-by-line
+					// so the user can read the full content of a long message.
+					if !m.viewport.AtBottom() {
+						m.viewport.LineDown(1)
+					}
 				}
 				return m, nil
 			case "left":
@@ -2983,9 +3046,9 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		}
 	}
 
-	// Trim trailing blank lines so the latest message hugs the bottom of
-	// the viewport instead of leaving padding below it.
-	for len(lines) > 0 && lines[len(lines)-1] == "" {
+	// Trim trailing blank lines down to just 1 so the last message
+	// sits cleanly at the bottom with a single line of breathing room.
+	for len(lines) > 1 && lines[len(lines)-1] == "" && lines[len(lines)-2] == "" {
 		lines = lines[:len(lines)-1]
 	}
 

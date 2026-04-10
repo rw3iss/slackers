@@ -3860,9 +3860,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ChannelID: m.currentCh.ID,
 				Files:     slackFileInfos,
 			}
-			debug.Log("[tui] optimistic append: id=%s text=%q ch=%s",
-				localMsgID, cleanSlackText, m.currentCh.ID)
-			m.messages.AppendMessage(localMsg)
+			debug.Log("[tui] optimistic append: id=%s text=%q ch=%s replyTo=%s",
+				localMsgID, cleanSlackText, m.currentCh.ID, replyToID)
+			// For thread replies, we add the message as a nested reply
+			// below (in the replyToID block) rather than top-level.
+			if replyToID == "" {
+				m.messages.AppendMessage(localMsg)
+			}
 
 			// Kick off background uploads for any files. Each upload
 			// is tracked by "<msgID>|<fileID>" so the user can cancel
@@ -3891,10 +3895,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Slack thread reply if reply ID set.
 			if replyToID != "" && m.slackSvc != nil {
+				// Add the optimistic message as a reply under the parent
+				// so it's visible immediately in the reply tree.
+				localMsg.ReplyTo = replyToID
+				m.messages.AddReplyLocal(replyToID, localMsg)
+				m.messages.ExpandReplies(replyToID)
+				m.messages.ScrollToBottom()
+
 				channelID := m.currentCh.ID
 				cmds := []tea.Cmd{
 					func() tea.Msg {
 						_ = m.slackSvc.SendThreadReply(channelID, replyToID, cleanSlackText)
+						// Small delay so Slack processes the reply before
+						// we reload history — avoids the reply vanishing
+						// briefly during the silent reload.
+						time.Sleep(500 * time.Millisecond)
 						return nil
 					},
 					silentLoadHistoryCmd(m.slackSvc, channelID),
