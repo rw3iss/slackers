@@ -764,8 +764,37 @@ func (m ChannelListModel) View() string {
 		}
 	}
 
-	// Apply scrolling.
-	viewHeight := m.height - 2
+	// Build an optional away-status footer for the selected friend.
+	// This sits at the very bottom of the sidebar pane, pinned
+	// below the scrollable channel list, so the user always sees
+	// the selected friend's away status without scrolling.
+	awayFooter := ""
+	awayFooterLines := 0
+	if m.selected >= 0 && m.selected < len(m.rows) {
+		row := m.rows[m.selected]
+		if row.channel != nil && row.channel.IsFriend {
+			if fs, ok := m.friendStatus[row.channel.ID]; ok && fs.AwayStatus == "away" {
+				label := "AWAY"
+				if fs.AwayMessage != "" {
+					label = "AWAY: " + fs.AwayMessage
+				}
+				// Truncate to sidebar width minus padding.
+				maxW := m.width - 4
+				if maxW > 0 && len(label) > maxW {
+					label = label[:maxW-1] + "…"
+				}
+				awayStyle := lipgloss.NewStyle().
+					Foreground(ColorMuted).
+					Italic(true).
+					Bold(true)
+				awayFooter = awayStyle.Render(" " + label)
+				awayFooterLines = 1
+			}
+		}
+	}
+
+	// Apply scrolling. Reserve space for the away footer if present.
+	viewHeight := m.height - 2 - awayFooterLines
 	if viewHeight < 1 {
 		viewHeight = 1
 	}
@@ -787,6 +816,18 @@ func (m ChannelListModel) View() string {
 	}
 
 	content := b.String()
+	// Append the away footer after the channel list content.
+	// It renders inside the same pane border, pinned at the
+	// bottom. Pad with enough newlines to push it down to the
+	// last available row.
+	if awayFooter != "" {
+		renderedLines := strings.Count(content, "\n") + 1
+		gap := viewHeight - renderedLines
+		for i := 0; i < gap; i++ {
+			content += "\n"
+		}
+		content += "\n" + awayFooter
+	}
 
 	style := SidebarStyle
 	if m.focused {
