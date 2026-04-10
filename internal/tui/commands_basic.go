@@ -615,6 +615,93 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		}
 	}
 
+	// ---- Plugins -------------------------------------------------------
+
+	register(commands.Command{
+		Name:        "plugins",
+		Description: "Open the plugin manager",
+		Usage:       "/plugins",
+		Run: func(ctx *commands.Context) commands.Result {
+			return commands.Result{
+				Status: commands.StatusOK,
+				Cmd:    func() tea.Msg { return PluginsOpenMsg{} },
+			}
+		},
+	})
+
+	register(commands.Command{
+		Name:        "plugin",
+		Description: "Manage plugins (enable, disable, uninstall, info)",
+		Usage:       "/plugin <action> [name]",
+		Args: []commands.ArgSpec{
+			{Name: "action", Kind: commands.ArgString, Help: "enable, disable, uninstall, or info"},
+			{Name: "name", Kind: commands.ArgString, Optional: true, Help: "plugin name"},
+		},
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
+			if len(ctx.Args) == 0 {
+				return commands.Result{
+					Status: commands.StatusOK,
+					Cmd:    func() tea.Msg { return PluginsOpenMsg{} },
+				}
+			}
+			action := ctx.Args[0]
+			if len(ctx.Args) < 2 && action != "list" {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "Usage: /plugin " + action + " <name>",
+				}
+			}
+			name := ""
+			if len(ctx.Args) >= 2 {
+				name = ctx.Args[1]
+			}
+			switch action {
+			case "enable":
+				if err := m.pluginManager.Enable(name); err != nil {
+					return commands.Result{Status: commands.StatusError, StatusBar: err.Error()}
+				}
+				return commands.Result{Status: commands.StatusOK, StatusBar: "Plugin enabled: " + name}
+			case "disable":
+				if err := m.pluginManager.Disable(name); err != nil {
+					return commands.Result{Status: commands.StatusError, StatusBar: err.Error()}
+				}
+				return commands.Result{Status: commands.StatusOK, StatusBar: "Plugin disabled: " + name}
+			case "uninstall":
+				if err := m.pluginManager.Uninstall(name); err != nil {
+					return commands.Result{Status: commands.StatusError, StatusBar: err.Error()}
+				}
+				return commands.Result{Status: commands.StatusOK, StatusBar: "Plugin uninstalled: " + name}
+			case "info":
+				info := m.pluginManager.Get(name)
+				if info == nil {
+					return commands.Result{Status: commands.StatusError, StatusBar: "Plugin not found: " + name}
+				}
+				body := fmt.Sprintf("Name:        %s\nVersion:     %s\nAuthor:      %s\nDescription: %s\nStatus:      %s\nInstalled:   %s",
+					info.Name, info.Version, info.Author, info.Description, info.State, info.InstalledAt)
+				return commands.Result{Status: commands.StatusOK, Title: "Plugin: " + name, Body: body}
+			case "list":
+				list := m.pluginManager.List()
+				if len(list) == 0 {
+					return commands.Result{Status: commands.StatusInfo, StatusBar: "No plugins installed"}
+				}
+				var sections []commands.Section
+				for _, p := range list {
+					sections = append(sections, commands.Section{
+						Text:       fmt.Sprintf("%-20s v%-8s %s [%s]", p.Name, p.Version, p.Author, p.State),
+						Selectable: true,
+					})
+				}
+				return commands.Result{Status: commands.StatusOK, Title: "Plugins", Sections: sections}
+			default:
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "Unknown action: " + action + " (try: enable, disable, uninstall, info, list)",
+				}
+			}
+		},
+	})
+
 	return r
 }
 

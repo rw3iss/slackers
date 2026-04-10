@@ -23,6 +23,7 @@ import (
 	"github.com/rw3iss/slackers/internal/emotes"
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/notifications"
+	"github.com/rw3iss/slackers/internal/plugins"
 	"github.com/rw3iss/slackers/internal/secure"
 	"github.com/rw3iss/slackers/internal/setup"
 	"github.com/rw3iss/slackers/internal/shortcuts"
@@ -63,6 +64,7 @@ const (
 	overlayThemeEditor
 	overlayThemeColorPicker
 	overlayNotifications
+	overlayPlugins
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -481,7 +483,9 @@ type Model struct {
 	// Plugin API host — provides the stable API surface that plugins
 	// use to interact with the app. Created once in NewModel, shared
 	// with all plugins. The Model drains its cmdQueue on every Update.
-	apiHost *api.Host
+	apiHost       *api.Host
+	pluginManager *plugins.Manager
+	pluginsOverlay PluginsModel
 }
 
 // NewModel creates a new root TUI model.
@@ -822,6 +826,10 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	// stable interface that plugins can depend on.
 	m.apiHost = api.NewHost(version, cfg, slackSvc, friendStore, p2pNode, nil)
 
+	// Create the plugin manager and init all registered plugins.
+	pluginDir := filepath.Join(config.DefaultConfigDir(), "plugins")
+	m.pluginManager = plugins.NewManager(pluginDir)
+
 	// Load emote dictionary (embedded defaults + user custom).
 	m.emoteStore = emotes.NewStore(config.DefaultConfigDir())
 	// Build the slash-command registry once before the splash
@@ -830,6 +838,18 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 	// in the suggestion popup and the Command List.
 	m.cmdRegistry = m.buildCommandRegistry()
 	m.apiHost.SetCmdRegistry(m.cmdRegistry)
+
+	// Initialize all registered plugins (checks enable state from disk).
+	_ = m.pluginManager.InitAll(m.apiHost)
+	// Register commands from enabled plugins into the registry.
+	for _, p := range m.pluginManager.EnabledPlugins() {
+		for _, cmd := range p.Commands() {
+			if cmd != nil {
+				_ = m.cmdRegistry.Register(*cmd)
+			}
+		}
+	}
+
 	return m
 }
 
@@ -1517,6 +1537,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayRemoteBrowser {
 			var cmd tea.Cmd
 			m.remoteBrowser, cmd = m.remoteBrowser.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayPlugins {
+			var cmd tea.Cmd
+			m.pluginsOverlay, cmd = m.pluginsOverlay.Update(msg)
 			return m, cmd
 		}
 
@@ -3106,6 +3131,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RemoteBrowseCloseMsg:
 		m.overlay = overlayNone
+		return m, nil
+
+	case PluginsOpenMsg:
+		m.pluginsOverlay = NewPluginsModel(m.pluginManager.List())
+		m.pluginsOverlay.SetSize(m.width, m.height)
+		m.overlay = overlayPlugins
+		return m, nil
+
+	case PluginsCloseMsg:
+		m.overlay = overlayNone
+		return m, nil
+
+	case PluginToggleMsg:
+		info := m.pluginManager.Get(msg.Name)
+		if info != nil {
+			if info.State == plugins.StateDisabled {
+				if err := m.pluginManager.Enable(msg.Name); err != nil {
+					m.warning = "Plugin enable failed: " + err.Error()
+				} else {
+					m.warning = "Plugin enabled: " + msg.Name
+				}
+			} else {
+				if err := m.pluginManager.Disable(msg.Name); err != nil {
+					m.warning = "Plugin disable failed: " + err.Error()
+				} else {
+					m.warning = "Plugin disabled: " + msg.Name
+				}
+			}
+		}
+		m.pluginsOverlay.Refresh(m.pluginManager.List())
+		return m, nil
+
+	case PluginUninstallMsg:
+		if err := m.pluginManager.Uninstall(msg.Name); err != nil {
+			m.warning = "Plugin uninstall failed: " + err.Error()
+		} else {
+			m.warning = "Plugin uninstalled: " + msg.Name
+		}
+		m.pluginsOverlay.Refresh(m.pluginManager.List())
 		return m, nil
 
 	case RemoteBrowseSendRequestMsg:
@@ -5183,6 +5247,8 @@ func (m Model) viewInner() string {
 		return m.emoteEdit.View()
 	case overlayRemoteBrowser:
 		return m.remoteBrowser.View()
+	case overlayPlugins:
+		return m.pluginsOverlay.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the
