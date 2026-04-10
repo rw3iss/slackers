@@ -65,16 +65,15 @@ func (m AwayStatusModel) Update(msg tea.Msg) (AwayStatusModel, tea.Cmd) {
 			switch msg.String() {
 			case "esc":
 				return m, nil
-			case "tab":
+			case "tab", "down":
 				m.focus = (m.focus + 1) % 4
 				m.input.Blur()
 				return m, nil
-			case "shift+tab":
+			case "shift+tab", "up":
 				m.focus = (m.focus + 3) % 4
 				m.input.Blur()
 				return m, nil
 			case "enter":
-				// Enter in the input field → move to Save
 				m.focus = 2
 				m.input.Blur()
 				return m, nil
