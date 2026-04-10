@@ -3751,6 +3751,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.friendStore.UpdateLastOnline(msg.SenderID)
 				m.channels.ClearUnread("friend:" + msg.SenderID)
 				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.updateFriendStatusDisplay()
 				if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
 					m.setChannelHeader()
 				}
