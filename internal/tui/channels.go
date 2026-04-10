@@ -765,11 +765,15 @@ func (m ChannelListModel) View() string {
 	}
 
 	// Build an optional away-status footer for the selected friend.
-	// This sits at the very bottom of the sidebar pane, pinned
-	// below the scrollable channel list, so the user always sees
-	// the selected friend's away status without scrolling.
-	awayFooter := ""
-	awayFooterLines := 0
+	// The footer sits at the very bottom of the sidebar pane,
+	// growing UPWARD from the bottom row. It can wrap to up to 3
+	// lines based on the current sidebar width; any text beyond
+	// that is truncated with an ellipsis.
+	//
+	// The footer height is computed BEFORE the scroll window so
+	// the channel list shrinks to make room and the footer never
+	// overlaps content.
+	var awayFooterRendered []string
 	if m.selected >= 0 && m.selected < len(m.rows) {
 		row := m.rows[m.selected]
 		if row.channel != nil && row.channel.IsFriend {
@@ -778,23 +782,29 @@ func (m ChannelListModel) View() string {
 				if fs.AwayMessage != "" {
 					label = "AWAY: " + fs.AwayMessage
 				}
-				// Truncate to sidebar width minus padding.
-				maxW := m.width - 4
-				if maxW > 0 && len(label) > maxW {
-					label = label[:maxW-1] + "…"
+				// The usable content width inside the pane is
+				// the outer width minus 2 borders minus 2
+				// padding cells. Leave 1 extra cell so text
+				// doesn't butt against the right border.
+				innerW := m.width - 5
+				if innerW < 8 {
+					innerW = 8
 				}
-				awayStyle := lipgloss.NewStyle().
-					Foreground(ColorMuted).
-					Italic(true).
-					Bold(true)
-				awayFooter = awayStyle.Render(" " + label)
-				awayFooterLines = 1
+				const maxFooterLines = 3
+				awayFooterRendered = wrapAndTruncate(label, innerW, maxFooterLines)
 			}
 		}
 	}
+	awayFooterLines := len(awayFooterRendered)
+	// Reserve 1 extra row as a visual separator between the
+	// channel list and the footer.
+	awayReserve := 0
+	if awayFooterLines > 0 {
+		awayReserve = awayFooterLines + 1
+	}
 
-	// Apply scrolling. Reserve space for the away footer if present.
-	viewHeight := m.height - 2 - awayFooterLines
+	// Apply scrolling. Reserve space for the away footer.
+	viewHeight := m.height - 2 - awayReserve
 	if viewHeight < 1 {
 		viewHeight = 1
 	}
@@ -816,17 +826,26 @@ func (m ChannelListModel) View() string {
 	}
 
 	content := b.String()
-	// Append the away footer after the channel list content.
-	// It renders inside the same pane border, pinned at the
-	// bottom. Pad with enough newlines to push it down to the
-	// last available row.
-	if awayFooter != "" {
+	// Append the away footer pinned at the bottom. Pad with
+	// newlines so the footer grows upward from the last row
+	// regardless of how many channel rows are visible above.
+	if awayFooterLines > 0 {
 		renderedLines := strings.Count(content, "\n") + 1
 		gap := viewHeight - renderedLines
 		for i := 0; i < gap; i++ {
 			content += "\n"
 		}
-		content += "\n" + awayFooter
+		awayStyle := lipgloss.NewStyle().
+			Foreground(ColorMuted).
+			Italic(true).
+			Bold(true)
+		content += "\n" // separator row
+		for i, line := range awayFooterRendered {
+			content += awayStyle.Render(" " + line)
+			if i < len(awayFooterRendered)-1 {
+				content += "\n"
+			}
+		}
 	}
 
 	style := SidebarStyle
@@ -838,6 +857,85 @@ func (m ChannelListModel) View() string {
 		Width(m.width).
 		Height(m.height).
 		Render(content)
+}
+
+// wrapAndTruncate word-wraps text to maxWidth columns and returns
+// at most maxLines lines. If the wrapped text exceeds maxLines,
+// the last line is truncated and an ellipsis appended. Used by
+// the sidebar's away-status footer to fit the message into the
+// dynamically resizable sidebar width.
+func wrapAndTruncate(text string, maxWidth, maxLines int) []string {
+	if maxWidth < 4 {
+		maxWidth = 4
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return nil
+	}
+	var lines []string
+	var cur strings.Builder
+	curLen := 0
+	for _, w := range words {
+		wLen := len(w)
+		if curLen > 0 && curLen+1+wLen > maxWidth {
+			// Flush current line.
+			lines = append(lines, cur.String())
+			cur.Reset()
+			curLen = 0
+			if len(lines) >= maxLines {
+				break
+			}
+		}
+		if curLen > 0 {
+			cur.WriteByte(' ')
+			curLen++
+		}
+		// If a single word exceeds the width, hard-break it.
+		if wLen > maxWidth {
+			remaining := maxWidth - curLen
+			if remaining < 1 {
+				lines = append(lines, cur.String())
+				cur.Reset()
+				curLen = 0
+				remaining = maxWidth
+			}
+			cur.WriteString(w[:remaining])
+			lines = append(lines, cur.String())
+			cur.Reset()
+			curLen = 0
+			// Drop the rest of the over-long word — it would
+			// take too many lines to render fully.
+			continue
+		}
+		cur.WriteString(w)
+		curLen += wLen
+	}
+	if cur.Len() > 0 && len(lines) < maxLines {
+		lines = append(lines, cur.String())
+	}
+	// Truncate to maxLines with ellipsis on the last line.
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	if len(lines) == maxLines && cur.Len() > 0 {
+		// Check if there's more text that didn't fit.
+		total := 0
+		for _, w := range words {
+			total += len(w) + 1
+		}
+		totalChars := 0
+		for _, l := range lines {
+			totalChars += len(l) + 1
+		}
+		if totalChars < total {
+			last := lines[maxLines-1]
+			if len(last) > maxWidth-1 {
+				last = last[:maxWidth-2]
+			}
+			lines[maxLines-1] = last + "…"
+		}
+	}
+	return lines
 }
 
 func (m ChannelListModel) renderItem(ch types.Channel, rowIdx int, maxLen int, isHidden bool) string {
