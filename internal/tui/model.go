@@ -628,14 +628,19 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 				}
 			case secure.MsgTypeStatusUpdate:
 				// Peer announces a status change (online/away/back/offline).
-				// PubKey carries the status type, Multiaddr carries
-				// the optional message — reusing existing P2PReceivedMsg
-				// fields to avoid adding new struct fields just for routing.
 				p2pChan <- P2PReceivedMsg{
 					SenderID:  peerSlackID,
 					Text:      "__status_update__",
 					PubKey:    msg.StatusType,
 					Multiaddr: msg.StatusMessage,
+				}
+			case secure.MsgTypePing:
+				// Receiving a ping proves the peer is online.
+				// Route it so the handler can mark them online
+				// and reply with our status.
+				p2pChan <- P2PReceivedMsg{
+					SenderID: peerSlackID,
+					Text:     "__ping__",
 				}
 			case secure.MsgTypeMessage:
 				p2pChan <- P2PReceivedMsg{
@@ -3691,6 +3696,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case P2PReceivedMsg:
+		// Any P2P message from a known friend proves they're
+		// running right now — mark them online immediately so
+		// the sidebar and chat header reflect it without
+		// waiting for the next 10-second ping cycle. The
+		// disconnect handler below overrides this for the
+		// explicit "I'm going offline" case.
+		if msg.SenderID != "" && msg.SenderID != "unknown" && msg.Text != "__disconnect__" {
+			if m.friendStore != nil && m.friendStore.Get(msg.SenderID) != nil {
+				wasOnline := m.friendStore.Get(msg.SenderID).Online
+				m.friendStore.SetOnline(msg.SenderID, true)
+				m.friendStore.UpdateLastOnline(msg.SenderID)
+				if !wasOnline {
+					// State flip — refresh sidebar + header.
+					m.channels.SetFriendChannels(m.buildFriendChannels())
+					m.updateFriendStatusDisplay()
+					if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
+						m.setChannelHeader()
+					}
+				}
+			}
+			// For pings and status_updates, reply with OUR
+			// current status so the sender learns it right away
+			// (instead of waiting for their next ping cycle to
+			// reach us). Fire-and-forget in a goroutine so the
+			// Update loop doesn't block on the stream write.
+			if (msg.Text == "__status_update__" || msg.Text == "__ping__") && m.p2pNode != nil {
+				localStatus := "online"
+				localMsg := ""
+				if m.cfg != nil && m.cfg.AwayEnabled {
+					localStatus = "away"
+					localMsg = m.cfg.AwayMsg
+				}
+				senderID := msg.SenderID
+				go func() {
+					reply := secure.P2PMessage{
+						Type:          secure.MsgTypeStatusUpdate,
+						Timestamp:     time.Now().Unix(),
+						SenderID:      senderID,
+						StatusType:    localStatus,
+						StatusMessage: localMsg,
+					}
+					_ = m.p2pNode.SendMessage(senderID, reply)
+				}()
+			}
+		}
+
 		// Handle disconnect notifications.
 		if msg.Text == "__disconnect__" {
 			if m.friendStore != nil {
