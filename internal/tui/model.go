@@ -4508,19 +4508,39 @@ func (m Model) renderBaseView() string {
 	}
 	inputBar := m.input.View()
 	statusLine := m.renderStatusBar()
-	// Render the slash-command suggestion popup directly above
-	// the input bar when active. The popup floats inline (it's
-	// part of the vertical layout, not an overlay) so it doesn't
-	// have to deal with z-ordering against the message pane.
-	var suggest string
+	base := lipgloss.JoinVertical(lipgloss.Left, topRow, inputBar, statusLine)
+
+	// Command-suggestion popup. Rendered as a floating overlay
+	// that covers the BOTTOM rows of the sidebar/messages panes,
+	// rather than being inserted as a vertical layout element
+	// (which pushed the panes off the top of the terminal). The
+	// popup sits right above the input bar — its bottom edge
+	// touches the input bar's top, and it extends upward into
+	// the pane area. The covered pane content is restored the
+	// instant the popup dismisses.
 	if m.cmdSuggest.Visible() {
-		suggest = m.cmdSuggest.View()
-	}
-	var base string
-	if suggest != "" {
-		base = lipgloss.JoinVertical(lipgloss.Left, topRow, suggest, inputBar, statusLine)
-	} else {
-		base = lipgloss.JoinVertical(lipgloss.Left, topRow, inputBar, statusLine)
+		popupStr := m.cmdSuggest.View()
+		popupLines := strings.Split(popupStr, "\n")
+		baseLines := strings.Split(base, "\n")
+		// Clamp the base to terminal height in case pane
+		// rendering produced an extra trailing newline.
+		if len(baseLines) > m.height {
+			baseLines = baseLines[:m.height]
+		}
+		// Position the popup right above the input bar. The
+		// popup's last line sits at row (inputTop - 1), so
+		// its first line is at (inputTop - len(popupLines)).
+		popupStart := m.inputTop - len(popupLines)
+		if popupStart < 0 {
+			popupStart = 0
+		}
+		for i, pline := range popupLines {
+			row := popupStart + i
+			if row >= 0 && row < len(baseLines) {
+				baseLines[row] = pline
+			}
+		}
+		base = strings.Join(baseLines, "\n")
 	}
 
 	// Notifications indicator overlay.

@@ -431,12 +431,6 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 					StatusBar: "/share " + target.name + " requires a second argument (e.g. /share " + target.name + " <name>)",
 				}
 			}
-			if m.currentCh == nil {
-				return commands.Result{
-					Status:    commands.StatusError,
-					StatusBar: "No channel selected — nothing to share into",
-				}
-			}
 			// Build the message body for the selected target.
 			body, err := m.buildShareBody(*target, ctx.Args)
 			if err != nil {
@@ -451,15 +445,31 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 					StatusBar: "Share produced no content — nothing to send",
 				}
 			}
-			// Dispatch through the normal send path so all the
-			// existing routing (friend vs slack, marker expansion,
-			// file extraction, etc.) runs unchanged.
+			// If a channel is selected, send the share content
+			// directly into the chat via the normal send path
+			// (friend vs slack, expandFriendMarkers, etc.).
+			// Otherwise fall back to showing it in the Output
+			// view — this covers the "no channel open yet"
+			// and "output view is active" cases so the user
+			// always sees useful output instead of an error.
+			if m.currentCh != nil {
+				chName := m.currentCh.Name
+				tgtName := target.name
+				return commands.Result{
+					Status:    commands.StatusOK,
+					StatusBar: "Shared " + tgtName + " in " + chName,
+					Cmd: func() tea.Msg {
+						return InputSendMsg{Text: body}
+					},
+				}
+			}
+			// No channel — show in Output view so the user
+			// can still copy the content.
 			return commands.Result{
 				Status:    commands.StatusOK,
-				StatusBar: "Shared " + target.name + " in " + m.currentCh.Name,
-				Cmd: func() tea.Msg {
-					return InputSendMsg{Text: body}
-				},
+				Title:     "Share: " + target.name,
+				Body:      body,
+				StatusBar: "No channel selected — content shown in Output view (copy with 'c')",
 			}
 		},
 	})
