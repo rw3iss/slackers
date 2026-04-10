@@ -23,5 +23,8 @@
   "clap": "$sender claps.",
   "fist": "$sender fist-bumps $receiver.",
   "eye": "$sender eyes $receiver suspiciously.",
+  "smile": "$sender smiles.",
+  "grin": "$sender grins.",
+  "chuckle": "$sender chuckles.",
   "emote": "$sender $text"
 }
