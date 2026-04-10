@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -26,9 +28,12 @@ type FileBrowserFavoritesChangedMsg struct {
 
 // fileEntry represents a single file or directory in the listing.
 type fileEntry struct {
-	name  string
-	isDir bool
-	size  int64
+	name        string
+	isDir       bool
+	size        int64
+	modTime     int64 // unix seconds
+	createdTime int64 // unix seconds (falls back to modTime on most Linux fs)
+	ext         string
 }
 
 // FileBrowserConfig holds options for creating a FileBrowserModel.
@@ -38,7 +43,10 @@ type FileBrowserConfig struct {
 	ShowFiles   bool     // Show files in listing (default: true)
 	ShowFolders bool     // Show folders in listing (default: true)
 	FileTypes   []string // If non-empty, only show files with these extensions (e.g. [".png", ".jpg"])
-	Favorites   []string // Initial list of favorite folder paths
+	Favorites     []string // Initial list of favorite folder paths
+	SortBy        string   // "name", "size", "modified", "type" (default: "name")
+	SortAsc       bool     // true = ascending (default: true)
+	HideFavorites bool     // true = don't show favorites section (for remote browsers)
 }
 
 // fbHitKind identifies what was at a given clickable row.
@@ -63,16 +71,14 @@ type fbHit struct {
 type fbPane int
 
 const (
-	// fbPaneOuter is the initial top-level mode where the user picks
-	// between the favorites list and the files list using up/down.
-	// Right/Enter enters the chosen list.
+	// fbPaneOuter is legacy — treated as fbPaneFiles.
 	fbPaneOuter fbPane = iota
-	// fbPaneFavorites is active when the user is navigating within the
-	// favorites list. Esc/Left returns to the outer mode.
+	// fbPaneFavorites is active when navigating the favorites list.
 	fbPaneFavorites
-	// fbPaneFiles is active when the user is navigating within the
-	// directory listing.
+	// fbPaneFiles is active when navigating the directory listing.
 	fbPaneFiles
+	// fbPaneFilter is active when the filter input has focus.
+	fbPaneFilter
 )
 
 // FileBrowserModel provides a file/folder browser overlay.
@@ -98,6 +104,16 @@ type FileBrowserModel struct {
 	// Mouse hit-test data, rebuilt every View() call. Each entry maps a
 	// row inside the inner content area to a clickable item.
 	hits []fbHit
+
+	// Sorting state.
+	sortBy  string // "name", "size", "modified", "created", "type"
+	sortAsc bool
+
+	// Filter state.
+	filter   textinput.Model
+	filtered []fileEntry // entries after filter applied (nil = use entries)
+
+	hideFavorites bool // true for remote browsers
 }
 
 // NewFileBrowser creates a new file browser from the given config.
@@ -125,6 +141,17 @@ func NewFileBrowser(cfg FileBrowserConfig) FileBrowserModel {
 		showFolders = true
 	}
 
+	sortBy := cfg.SortBy
+	if sortBy == "" {
+		sortBy = "name"
+	}
+
+	ti := textinput.New()
+	ti.Placeholder = "Filter..."
+	ti.Prompt = "🔍 "
+	ti.CharLimit = 64
+	// Starts blurred — focus is on the file list initially.
+
 	m := FileBrowserModel{
 		currentDir:  startDir,
 		title:       title,
@@ -132,16 +159,11 @@ func NewFileBrowser(cfg FileBrowserConfig) FileBrowserModel {
 		showFolders: showFolders,
 		fileTypes:   cfg.FileTypes,
 		favorites:   append([]string(nil), cfg.Favorites...),
-		// Start in outer-selection mode. Default to highlighting the
-		// favorites list when the user has any saved, otherwise fall
-		// back to the files list so existing single-Enter workflows
-		// still work.
-		pane: fbPaneOuter,
-	}
-	if len(m.favorites) > 0 {
-		m.outerSel = 0
-	} else {
-		m.outerSel = 1
+		sortBy:        sortBy,
+		sortAsc:       cfg.SortAsc,
+		filter:        ti,
+		hideFavorites: cfg.HideFavorites,
+		pane:          fbPaneFiles,
 	}
 	m.loadDir()
 	return m
@@ -166,12 +188,15 @@ func (m *FileBrowserModel) loadDir() {
 			continue
 		}
 
+		mt := info.ModTime().Unix()
+		ct := fileCreatedTime(info)
 		if de.IsDir() {
 			if m.showFolders {
 				dirs = append(dirs, fileEntry{
-					name:  de.Name(),
-					isDir: true,
-					size:  0,
+					name:        de.Name(),
+					isDir:       true,
+					modTime:     mt,
+					createdTime: ct,
 				})
 			}
 		} else {
@@ -192,19 +217,18 @@ func (m *FileBrowserModel) loadDir() {
 				}
 			}
 			files = append(files, fileEntry{
-				name:  de.Name(),
-				isDir: false,
-				size:  info.Size(),
+				name:        de.Name(),
+				isDir:       false,
+				size:        info.Size(),
+				modTime:     mt,
+				createdTime: ct,
+				ext:         strings.ToLower(filepath.Ext(de.Name())),
 			})
 		}
 	}
 
-	sort.Slice(dirs, func(i, j int) bool {
-		return strings.ToLower(dirs[i].name) < strings.ToLower(dirs[j].name)
-	})
-	sort.Slice(files, func(i, j int) bool {
-		return strings.ToLower(files[i].name) < strings.ToLower(files[j].name)
-	})
+	sortFileEntries(dirs, m.sortBy, m.sortAsc)
+	sortFileEntries(files, m.sortBy, m.sortAsc)
 
 	m.entries = nil
 	if m.currentDir != "/" {
@@ -213,8 +237,124 @@ func (m *FileBrowserModel) loadDir() {
 	m.entries = append(m.entries, dirs...)
 	m.entries = append(m.entries, files...)
 
+	m.filter.SetValue("")
+	m.rebuildFiltered()
 	m.fileSel = 0
 	m.scrollOff = 0
+}
+
+// rebuildFiltered applies the current filter text to entries.
+func (m *FileBrowserModel) rebuildFiltered() {
+	q := strings.TrimSpace(strings.ToLower(m.filter.Value()))
+	if q == "" {
+		m.filtered = m.entries
+		return
+	}
+	m.filtered = nil
+	for _, e := range m.entries {
+		if e.name == ".." || strings.Contains(strings.ToLower(e.name), q) {
+			m.filtered = append(m.filtered, e)
+		}
+	}
+	if m.fileSel >= len(m.filtered) {
+		m.fileSel = len(m.filtered) - 1
+		if m.fileSel < 0 {
+			m.fileSel = 0
+		}
+	}
+}
+
+// filteredEntries returns the active entry list (filtered or all).
+func (m *FileBrowserModel) filteredEntries() []fileEntry {
+	if m.filtered != nil {
+		return m.filtered
+	}
+	return m.entries
+}
+
+// fileCreatedTime tries to extract the birth/creation time from a
+// FileInfo. On systems where this isn't available (most Linux
+// filesystems), it falls back to the modification time.
+func fileCreatedTime(info os.FileInfo) int64 {
+	// Go's os.FileInfo doesn't expose birth time portably.
+	// Fall back to mod time.
+	return info.ModTime().Unix()
+}
+
+// sortFileEntries sorts a slice of fileEntry in place by the given
+// sort key and direction. Used by both local and remote file browsers.
+func sortFileEntries(entries []fileEntry, sortBy string, asc bool) {
+	sort.Slice(entries, func(i, j int) bool {
+		var less bool
+		switch sortBy {
+		case "size":
+			less = entries[i].size < entries[j].size
+		case "modified":
+			less = entries[i].modTime < entries[j].modTime
+		case "created":
+			less = entries[i].createdTime < entries[j].createdTime
+		case "type":
+			if entries[i].ext != entries[j].ext {
+				less = entries[i].ext < entries[j].ext
+			} else {
+				less = strings.ToLower(entries[i].name) < strings.ToLower(entries[j].name)
+			}
+		default: // "name"
+			less = strings.ToLower(entries[i].name) < strings.ToLower(entries[j].name)
+		}
+		if !asc {
+			return !less
+		}
+		return less
+	})
+}
+
+// fileSortLabel returns a short display label for the current sort mode.
+func fileSortLabel(sortBy string, asc bool) string {
+	dir := "↑"
+	if !asc {
+		dir = "↓"
+	}
+	switch sortBy {
+	case "size":
+		return "size " + dir
+	case "modified":
+		return "modified " + dir
+	case "created":
+		return "created " + dir
+	case "type":
+		return "type " + dir
+	default:
+		return "name " + dir
+	}
+}
+
+// nextFileSortBy cycles to the next sort mode.
+func nextFileSortBy(current string) string {
+	switch current {
+	case "name":
+		return "size"
+	case "size":
+		return "modified"
+	case "modified":
+		return "created"
+	case "created":
+		return "type"
+	default:
+		return "name"
+	}
+}
+
+// FileBrowserSortChangedMsg is dispatched when the user changes the
+// sort mode in the file browser so the model can persist the preference.
+type FileBrowserSortChangedMsg struct {
+	SortBy  string
+	SortAsc bool
+}
+
+// hasFavorites returns true if the favorites section should be shown.
+func (m *FileBrowserModel) hasFavorites() bool {
+	return !m.hideFavorites && len(m.favorites) > 0
 }
 
 // SetSize sets the overlay dimensions.
@@ -264,55 +404,14 @@ func (m FileBrowserModel) Update(msg tea.Msg) (FileBrowserModel, tea.Cmd) {
 	}
 	switch m.pane {
 	case fbPaneOuter:
-		return m.updateOuter(keyMsg)
+		m.pane = fbPaneFiles
+		return m.updateFiles(keyMsg)
 	case fbPaneFavorites:
 		return m.updateFavorites(keyMsg)
+	case fbPaneFilter:
+		return m.updateFilter(keyMsg)
 	case fbPaneFiles:
 		return m.updateFiles(keyMsg)
-	}
-	return m, nil
-}
-
-// updateOuter handles keys in the top-level mode where up/down picks
-// between the favorites list and the files list.
-func (m FileBrowserModel) updateOuter(msg tea.KeyMsg) (FileBrowserModel, tea.Cmd) {
-	switch msg.String() {
-	case "up", "k":
-		if m.outerSel > 0 {
-			m.outerSel--
-		}
-	case "down", "j":
-		// On the Files row, pressing down auto-enters the file list
-		// with the first entry selected (same as pressing right/Enter).
-		if m.outerSel == 1 && len(m.entries) > 0 {
-			m.pane = fbPaneFiles
-			m.fileSel = 0
-			m.ensureVisible()
-			return m, nil
-		}
-		if m.outerSel < 1 {
-			m.outerSel++
-		}
-	case "right", "l", "enter", "tab", " ", "space":
-		if m.outerSel == 0 {
-			// Enter favorites only if there are any.
-			if len(m.favorites) == 0 {
-				return m, nil
-			}
-			m.pane = fbPaneFavorites
-			if m.favSel < 0 || m.favSel >= len(m.favorites) {
-				m.favSel = 0
-			}
-		} else {
-			m.pane = fbPaneFiles
-			if m.fileSel < 0 || m.fileSel >= len(m.entries) {
-				m.fileSel = 0
-			}
-			m.ensureVisible()
-		}
-	case "esc":
-		// Outer-mode esc closes the browser.
-		return m, func() tea.Msg { return FileBrowserCancelMsg{} }
 	}
 	return m, nil
 }
@@ -329,12 +428,10 @@ func (m FileBrowserModel) updateFavorites(msg tea.KeyMsg) (FileBrowserModel, tea
 		if m.favSel < len(m.favorites)-1 {
 			m.favSel++
 			m.ensureVisible()
-		} else if len(m.entries) > 0 {
-			// At the bottom of favorites — seamlessly drop into the
-			// files list with the first entry selected.
-			m.pane = fbPaneFiles
-			m.fileSel = 0
-			m.ensureVisible()
+		} else {
+			// At the bottom of favorites — drop into filter bar.
+			m.pane = fbPaneFilter
+			m.filter.Focus()
 		}
 	case "enter":
 		if m.favSel < 0 || m.favSel >= len(m.favorites) {
@@ -365,36 +462,94 @@ func (m FileBrowserModel) updateFavorites(msg tea.KeyMsg) (FileBrowserModel, tea
 				return FileBrowserFavoritesChangedMsg{Favorites: favs}
 			}
 		}
-	case "left", "h", "esc":
-		m.pane = fbPaneOuter
-		m.outerSel = 0
+	case "esc":
+		// From favorites, esc goes to filter bar.
+		m.pane = fbPaneFilter
+		m.filter.Focus()
+	case "left", "h":
+		m.pane = fbPaneFilter
+		m.filter.Focus()
 	}
 	return m, nil
 }
 
+// updateFilter handles keys when the filter input has focus.
+func (m FileBrowserModel) updateFilter(msg tea.KeyMsg) (FileBrowserModel, tea.Cmd) {
+	switch msg.String() {
+	case "up":
+		if m.hasFavorites() {
+			m.pane = fbPaneFavorites
+			m.favSel = len(m.favorites) - 1
+			m.filter.Blur()
+		}
+		return m, nil
+	case "down":
+		m.pane = fbPaneFiles
+		m.filter.Blur()
+		if m.fileSel < 0 {
+			m.fileSel = 0
+		}
+		m.ensureVisible()
+		return m, nil
+	case "enter":
+		// Enter from filter → jump to files with current filter applied.
+		m.pane = fbPaneFiles
+		m.filter.Blur()
+		m.fileSel = 0
+		m.ensureVisible()
+		return m, nil
+	case "esc":
+		if m.filter.Value() != "" {
+			m.filter.SetValue("")
+			m.rebuildFiltered()
+			return m, nil
+		}
+		return m, func() tea.Msg { return FileBrowserCancelMsg{} }
+	case "alt+s":
+		m.sortBy = nextFileSortBy(m.sortBy)
+		m.loadDir()
+		return m, func() tea.Msg {
+			return FileBrowserSortChangedMsg{SortBy: m.sortBy, SortAsc: m.sortAsc}
+		}
+	case "alt+d":
+		m.sortAsc = !m.sortAsc
+		m.loadDir()
+		return m, func() tea.Msg {
+			return FileBrowserSortChangedMsg{SortBy: m.sortBy, SortAsc: m.sortAsc}
+		}
+	}
+	// All other keys go to the filter input.
+	var cmd tea.Cmd
+	m.filter, cmd = m.filter.Update(msg)
+	m.rebuildFiltered()
+	return m, cmd
+}
+
 // updateFiles handles keys when navigating inside the directory listing.
 func (m FileBrowserModel) updateFiles(msg tea.KeyMsg) (FileBrowserModel, tea.Cmd) {
+	fe := m.filteredEntries()
 	switch msg.String() {
-	case "up", "k":
+	case "up":
 		if m.fileSel > 0 {
 			m.fileSel--
 			m.ensureVisible()
-		} else if len(m.favorites) > 0 {
-			// At the top of the files list — seamlessly jump up into
-			// the favorites list with the last favorite selected.
-			m.pane = fbPaneFavorites
-			m.favSel = len(m.favorites) - 1
+		} else {
+			// At top of file list — go to filter bar.
+			m.pane = fbPaneFilter
+			m.filter.Focus()
 		}
-	case "down", "j":
-		if m.fileSel < len(m.entries)-1 {
+		return m, nil
+	case "down":
+		if m.fileSel < len(fe)-1 {
 			m.fileSel++
 			m.ensureVisible()
 		}
+		return m, nil
 	case "enter":
-		if len(m.entries) == 0 {
+		if len(fe) == 0 {
 			return m, nil
 		}
-		entry := m.entries[m.fileSel]
+		entry := fe[m.fileSel]
 		if entry.name == ".." {
 			m.currentDir = filepath.Dir(m.currentDir)
 			m.loadDir()
@@ -410,10 +565,10 @@ func (m FileBrowserModel) updateFiles(msg tea.KeyMsg) (FileBrowserModel, tea.Cmd
 			return FileBrowserSelectMsg{Path: path, IsDir: false}
 		}
 	case "tab", "right":
-		if len(m.entries) == 0 {
+		if len(fe) == 0 {
 			return m, nil
 		}
-		entry := m.entries[m.fileSel]
+		entry := fe[m.fileSel]
 		if entry.isDir && entry.name != ".." {
 			path := filepath.Join(m.currentDir, entry.name)
 			return m, func() tea.Msg {
@@ -426,13 +581,12 @@ func (m FileBrowserModel) updateFiles(msg tea.KeyMsg) (FileBrowserModel, tea.Cmd
 				return FileBrowserSelectMsg{Path: path, IsDir: false}
 			}
 		}
-	case "f", "F":
-		// Add the highlighted directory to favorites. If the highlighted
-		// row is "..", favorite the current directory itself.
-		if len(m.entries) == 0 {
+	case "ctrl+f":
+		// Add the highlighted directory to favorites.
+		if len(fe) == 0 {
 			return m, nil
 		}
-		entry := m.entries[m.fileSel]
+		entry := fe[m.fileSel]
 		var path string
 		switch {
 		case entry.name == "..":
@@ -448,18 +602,24 @@ func (m FileBrowserModel) updateFiles(msg tea.KeyMsg) (FileBrowserModel, tea.Cmd
 				return FileBrowserFavoritesChangedMsg{Favorites: favs}
 			}
 		}
-	case "backspace", "ctrl+up":
+	case "ctrl+up":
 		if m.currentDir != "/" {
 			m.currentDir = filepath.Dir(m.currentDir)
 			m.loadDir()
 		}
-	case "left", "h":
-		// Back out to the outer pane selector.
-		m.pane = fbPaneOuter
-		m.outerSel = 1
+		return m, nil
+	case "left":
+		// Go to filter bar from files.
+		m.pane = fbPaneFilter
+		m.filter.Focus()
+		return m, nil
 	case "esc":
-		m.pane = fbPaneOuter
-		m.outerSel = 1
+		if m.filter.Value() != "" {
+			m.filter.SetValue("")
+			m.rebuildFiltered()
+			return m, nil
+		}
+		return m, func() tea.Msg { return FileBrowserCancelMsg{} }
 	case "pgup":
 		visible := m.visibleLines()
 		m.fileSel -= visible
@@ -467,27 +627,47 @@ func (m FileBrowserModel) updateFiles(msg tea.KeyMsg) (FileBrowserModel, tea.Cmd
 			m.fileSel = 0
 		}
 		m.ensureVisible()
+		return m, nil
 	case "pgdown":
 		visible := m.visibleLines()
 		m.fileSel += visible
-		if m.fileSel >= len(m.entries) {
-			m.fileSel = len(m.entries) - 1
+		if m.fileSel >= len(fe) {
+			m.fileSel = len(fe) - 1
 		}
 		if m.fileSel < 0 {
 			m.fileSel = 0
 		}
 		m.ensureVisible()
+		return m, nil
 	case "home":
 		m.fileSel = 0
 		m.ensureVisible()
+		return m, nil
 	case "end":
-		m.fileSel = len(m.entries) - 1
+		m.fileSel = len(fe) - 1
 		if m.fileSel < 0 {
 			m.fileSel = 0
 		}
 		m.ensureVisible()
+		return m, nil
+	case "alt+s":
+		m.sortBy = nextFileSortBy(m.sortBy)
+		m.loadDir()
+		return m, func() tea.Msg {
+			return FileBrowserSortChangedMsg{SortBy: m.sortBy, SortAsc: m.sortAsc}
+		}
+	case "alt+d":
+		m.sortAsc = !m.sortAsc
+		m.loadDir()
+		return m, func() tea.Msg {
+			return FileBrowserSortChangedMsg{SortBy: m.sortBy, SortAsc: m.sortAsc}
+		}
 	}
-	return m, nil
+	// All other keys go to the filter input.
+	var cmd tea.Cmd
+	m.filter, cmd = m.filter.Update(msg)
+	m.rebuildFiltered()
+	return m, cmd
 }
 
 // FileBrowserCancelMsg signals the user wants to close the browser
@@ -498,12 +678,16 @@ type FileBrowserCancelMsg struct{}
 // We always reserve a few lines for the favorites section header and any
 // favorite rows so the file list can still scroll cleanly underneath.
 func (m FileBrowserModel) visibleLines() int {
-	// Overhead: border (2) + padding (2) + title (1) + blank (1) +
-	//           favorites header (1) + favorite rows (capped) + spacer (1) +
-	//           path (1) + blank (1) + footer (1) + blank (1)
-	favRows := len(m.favorites)
-	if favRows > 5 {
-		favRows = 5
+	// Overhead: border (2) + padding (2) + header (1) + blank (1) +
+	//           favorites header+rows (capped) + spacer (1) +
+	//           filter (1) + blank (1) + footer (1) + blank (1)
+	favRows := 0
+	if m.hasFavorites() {
+		favRows = len(m.favorites)
+		if favRows > 5 {
+			favRows = 5
+		}
+		favRows += 2 // header + spacer
 	}
 	overhead := 12 + favRows
 	v := m.height - 2 - overhead
@@ -533,10 +717,6 @@ func (m *FileBrowserModel) ensureVisible() {
 // View renders the file browser overlay. Uses a pointer receiver so it
 // can record clickable rows into m.hits as a side-effect of rendering.
 func (m *FileBrowserModel) View() string {
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorPrimary)
-
 	pathStyle := lipgloss.NewStyle().
 		Foreground(ColorMuted).
 		Italic(true)
@@ -565,29 +745,42 @@ func (m *FileBrowserModel) View() string {
 		Foreground(ColorPrimary).
 		Bold(true)
 
-	outerHighlightStyle := lipgloss.NewStyle().
-		Foreground(ColorHighlight).
-		Bold(true)
-
 	// Build content as an explicit slice of lines so we can record an
 	// accurate row → action map for mouse hit-testing.
 	m.hits = m.hits[:0]
 	var lines []string
 
-	lines = append(lines, titleStyle.Render(m.title))
+	// --- Header: path (left) + sort label (right) ---
+	contentW := m.width - 16 // account for box border + padding
+	if contentW < 30 {
+		contentW = 30
+	}
+	pathDisplay := collapseHome(m.currentDir)
+	sortRight := "sorted by " + m.sortBy
+	if m.sortAsc {
+		sortRight += " (asc)"
+	} else {
+		sortRight += " (desc)"
+	}
+	// Abbreviate path if it won't fit alongside the sort label.
+	maxPathW := contentW - len(sortRight) - 4
+	if maxPathW < 10 {
+		maxPathW = 10
+	}
+	if len(pathDisplay) > maxPathW {
+		pathDisplay = "…" + pathDisplay[len(pathDisplay)-maxPathW+1:]
+	}
+	pad := contentW - lipgloss.Width(pathDisplay) - lipgloss.Width(sortRight)
+	if pad < 2 {
+		pad = 2
+	}
+	headerLine := pathStyle.Render(pathDisplay) + strings.Repeat(" ", pad) + dimStyle.Render(sortRight)
+	lines = append(lines, headerLine)
 	lines = append(lines, "")
 
-	// --- Favorites section ---
-	favHeader := "Favorites"
-	if m.pane == fbPaneOuter && m.outerSel == 0 {
-		lines = append(lines, outerHighlightStyle.Render("▶ "+favHeader))
-	} else {
-		lines = append(lines, "  "+sectionHeaderStyle.Render(favHeader))
-	}
-
-	if len(m.favorites) == 0 {
-		lines = append(lines, dimStyle.Render("    (none — press 'f' on a folder to add)"))
-	} else {
+	// --- Favorites section (compact, only if visible) ---
+	if m.hasFavorites() {
+		lines = append(lines, sectionHeaderStyle.Render("  Favorites"))
 		favVisible := 5
 		if favVisible > len(m.favorites) {
 			favVisible = len(m.favorites)
@@ -617,89 +810,59 @@ func (m *FileBrowserModel) View() string {
 		if favScroll > 0 || favEnd < len(m.favorites) {
 			lines = append(lines, dimStyle.Render(fmt.Sprintf("    (%d / %d)", m.favSel+1, len(m.favorites))))
 		}
+		lines = append(lines, "")
 	}
 
-	lines = append(lines, "")
-
-	// --- Files section ---
-	filesHeader := "Files"
-	if m.pane == fbPaneOuter && m.outerSel == 1 {
-		lines = append(lines, outerHighlightStyle.Render("▶ "+filesHeader))
-	} else {
-		lines = append(lines, "  "+sectionHeaderStyle.Render(filesHeader))
+	// --- Filter bar ---
+	filterPrefix := "  "
+	if m.pane == fbPaneFilter {
+		filterPrefix = selectedPrefix.Render("> ")
 	}
-	lines = append(lines, pathStyle.Render("  "+m.currentDir))
+	lines = append(lines, filterPrefix+m.filter.View())
 	lines = append(lines, "")
 
+	// --- File list (table format) ---
+	fe := m.filteredEntries()
 	if m.err != nil {
 		lines = append(lines, errStyle.Render("Error: "+m.err.Error()))
-	} else if len(m.entries) == 0 {
+	} else if len(fe) == 0 {
 		lines = append(lines, dimStyle.Render("  (empty directory)"))
 	} else {
 		visible := m.visibleLines()
 		end := m.scrollOff + visible
-		if end > len(m.entries) {
-			end = len(m.entries)
+		if end > len(fe) {
+			end = len(fe)
 		}
 
+		// Determine which date column to show.
+		showCreated := m.sortBy == "created"
+
 		for i := m.scrollOff; i < end; i++ {
-			entry := m.entries[i]
-
+			entry := fe[i]
 			isSelected := m.pane == fbPaneFiles && i == m.fileSel
-			var prefix string
-			if isSelected {
-				prefix = selectedPrefix.Render("> ")
-			} else {
-				prefix = "  "
-			}
 
-			var rendered string
-			if entry.isDir {
-				name := entry.name
-				if name != ".." {
-					name += "/"
-				}
-				if isSelected {
-					rendered = prefix + lipgloss.NewStyle().
-						Foreground(ColorAccent).Bold(true).Render(name)
-				} else {
-					rendered = prefix + dirStyle.Render(name)
-				}
-			} else {
-				var nameStyled string
-				if isSelected {
-					nameStyled = lipgloss.NewStyle().
-						Foreground(ColorPrimary).Bold(true).Render(entry.name)
-				} else {
-					nameStyled = fileStyle.Render(entry.name)
-				}
-				rendered = prefix + nameStyled + "  " +
-					sizeStyle.Render(formatFileSize(entry.size))
-			}
+			row := renderFileRow(entry, isSelected, showCreated, contentW,
+				selectedPrefix, dirStyle, fileStyle, sizeStyle, dimStyle)
 			m.hits = append(m.hits, fbHit{kind: fbHitFile, index: i, row: len(lines)})
-			lines = append(lines, rendered)
+			lines = append(lines, row)
 		}
 
 		if m.scrollOff > 0 {
 			lines = append(lines, dimStyle.Render(fmt.Sprintf("  ... %d more above", m.scrollOff)))
 		}
-		if end < len(m.entries) {
-			lines = append(lines, dimStyle.Render(fmt.Sprintf("  ... %d more below", len(m.entries)-end)))
+		if end < len(fe) {
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("  ... %d more below", len(fe)-end)))
 		}
 	}
 
 	lines = append(lines, "")
 	switch m.pane {
-	case fbPaneOuter:
-		lines = append(lines, dimStyle.Render("  ↑/↓: pick list | →/Enter/Tab/Space: enter list | Esc: cancel"))
 	case fbPaneFavorites:
-		lines = append(lines, dimStyle.Render("  ↑/↓: navigate | Enter: open | d: remove | ←/Esc: back"))
-	case fbPaneFiles:
-		if m.showFiles {
-			lines = append(lines, dimStyle.Render("  ↑/↓: nav | Enter: open/select | Tab/→: pick | Ctrl+↑/⌫: parent | f: ★ favorite | ←/Esc: back"))
-		} else {
-			lines = append(lines, dimStyle.Render("  ↑/↓: nav | Enter: open | Tab/→: pick folder | Ctrl+↑/⌫: parent | f: ★ favorite | ←/Esc: back"))
-		}
+		lines = append(lines, dimStyle.Render("  ↑/↓: navigate | Enter: open | d: remove | Esc/↓: filter"))
+	case fbPaneFilter:
+		lines = append(lines, dimStyle.Render("  type to filter | ↑: favorites | ↓/Enter: files | Alt+S: sort | Alt+D: dir | Esc: clear/close"))
+	default:
+		lines = append(lines, dimStyle.Render("  ↑/↓: nav | Enter: open/select | Ctrl+↑: parent | Ctrl+F: ★ | Alt+S: sort | Alt+D: dir | Esc: close"))
 	}
 
 	content := strings.Join(lines, "\n")
@@ -724,10 +887,10 @@ func (m *FileBrowserModel) View() string {
 	box := boxStyle.Render(content)
 
 	return lipgloss.Place(m.width, m.height,
-		lipgloss.Center, lipgloss.Center,
+		lipgloss.Center, lipgloss.Top,
 		box,
 		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+		lipgloss.WithWhitespaceForeground(ColorOverlayFill),
 	)
 }
 
@@ -774,17 +937,14 @@ func (m *FileBrowserModel) boxOrigin() (int, int) {
 func (m FileBrowserModel) computeHits() []fbHit {
 	var hits []fbHit
 	row := 0
-	// title
+	// header line (path + sort)
 	row++
 	// blank
 	row++
-	// favorites header
-	row++
 
-	if len(m.favorites) == 0 {
-		// "(none — press 'f' …)" placeholder
-		row++
-	} else {
+	// favorites section (only if visible)
+	if m.hasFavorites() {
+		row++ // "Favorites" header
 		favVisible := 5
 		if favVisible > len(m.favorites) {
 			favVisible = len(m.favorites)
@@ -804,26 +964,24 @@ func (m FileBrowserModel) computeHits() []fbHit {
 		if favScroll > 0 || favEnd < len(m.favorites) {
 			row++ // pagination indicator
 		}
+		row++ // blank spacer
 	}
 
-	// blank between sections
-	row++
-	// files header
-	row++
-	// path line
+	// filter bar
 	row++
 	// blank
 	row++
 
+	fe := m.filteredEntries()
 	if m.err != nil {
 		row++
-	} else if len(m.entries) == 0 {
+	} else if len(fe) == 0 {
 		row++
 	} else {
 		visible := m.visibleLines()
 		end := m.scrollOff + visible
-		if end > len(m.entries) {
-			end = len(m.entries)
+		if end > len(fe) {
+			end = len(fe)
 		}
 		for i := m.scrollOff; i < end; i++ {
 			hits = append(hits, fbHit{kind: fbHitFile, index: i, row: row})
@@ -873,6 +1031,99 @@ func (m FileBrowserModel) UpdateMouse(msg tea.MouseMsg) (FileBrowserModel, tea.C
 }
 
 // formatFileSize returns a human-readable file size string.
+// renderFileRow renders one table-format row for a file entry:
+//
+//	> name.txt          1.2 KB   Apr 10 14:30
+//	  folder/                     Apr 09 11:15
+func renderFileRow(
+	entry fileEntry, selected, showCreated bool, contentW int,
+	selPfx, dirSty, fileSty, sizeSty, dimSty lipgloss.Style,
+) string {
+	prefix := "  "
+	if selected {
+		prefix = selPfx.Render("> ")
+	}
+
+	// Right columns: size (8 chars) + gap (2) + date (12 chars) = 22
+	const sizeW = 8
+	const dateW = 12
+	const rightW = sizeW + 2 + dateW
+	nameW := contentW - 2 - rightW - 2 // 2 for prefix, 2 for gaps
+	if nameW < 10 {
+		nameW = 10
+	}
+
+	// Name
+	name := entry.name
+	if entry.isDir && name != ".." {
+		name += "/"
+	}
+	if len(name) > nameW {
+		name = name[:nameW-1] + "…"
+	}
+
+	var nameStyled string
+	if entry.isDir {
+		if selected {
+			nameStyled = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(name)
+		} else {
+			nameStyled = dirSty.Render(name)
+		}
+	} else {
+		if selected {
+			nameStyled = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true).Render(name)
+		} else {
+			nameStyled = fileSty.Render(name)
+		}
+	}
+	// Pad name to nameW using visible width.
+	nameVis := lipgloss.Width(nameStyled)
+	namePad := nameW - nameVis
+	if namePad < 0 {
+		namePad = 0
+	}
+
+	// Size column (right-aligned in sizeW chars).
+	var sizeStr string
+	if !entry.isDir {
+		sizeStr = formatFileSize(entry.size)
+	}
+	sizePad := sizeW - len(sizeStr)
+	if sizePad < 0 {
+		sizePad = 0
+	}
+	sizeCol := strings.Repeat(" ", sizePad) + sizeSty.Render(sizeStr)
+
+	// Date column.
+	var ts int64
+	if showCreated {
+		ts = entry.createdTime
+	} else {
+		ts = entry.modTime
+	}
+	dateStr := ""
+	if ts > 0 {
+		dateStr = formatCompactDate(ts)
+	}
+	datePad := dateW - len(dateStr)
+	if datePad < 0 {
+		datePad = 0
+	}
+	dateCol := strings.Repeat(" ", datePad) + dimSty.Render(dateStr)
+
+	return prefix + nameStyled + strings.Repeat(" ", namePad) + "  " + sizeCol + "  " + dateCol
+}
+
+// formatCompactDate formats a unix timestamp as a compact date string.
+func formatCompactDate(unix int64) string {
+	t := time.Unix(unix, 0)
+	now := time.Now()
+	if t.Year() == now.Year() {
+		return t.Format("Jan 02 15:04")
+	}
+	return t.Format("Jan 02  2006")
+}
+
 func formatFileSize(size int64) string {
 	const (
 		_        = iota

@@ -60,6 +60,9 @@ type SlackService interface {
 	// reconcile slackers' local lastSeen with whatever the official
 	// apps have already read while slackers was offline.
 	GetChannelLastRead(channelID string) (string, error)
+	// GetChannelUnreadCount returns Slack's authoritative unread
+	// message count for a channel. Returns 0 on error.
+	GetChannelUnreadCount(channelID string) (int, error)
 	// Warnings returns and clears any accumulated fallback warnings.
 	Warnings() []string
 }
@@ -152,7 +155,7 @@ func (c *slackClient) MarkConversation(channelID, timestamp string) error {
 		return nil
 	}
 	if !c.hasUser {
-		// Bot-only install — nothing we can legitimately mark.
+		debug.Log("[api] MarkConversation skipped — no user token")
 		return nil
 	}
 	debug.Log("[api] MarkConversation channel=%s ts=%s", channelID, timestamp)
@@ -183,6 +186,27 @@ func (c *slackClient) GetChannelLastRead(channelID string) (string, error) {
 		return nil
 	})
 	return lastRead, err
+}
+
+// GetChannelUnreadCount fetches conversations.info and returns the
+// server-side unread_count for the channel.
+func (c *slackClient) GetChannelUnreadCount(channelID string) (int, error) {
+	if channelID == "" {
+		return 0, nil
+	}
+	var count int
+	err := c.tryWithFallback("get unread count", func(api *slack.Client) error {
+		info, err := api.GetConversationInfo(&slack.GetConversationInfoInput{
+			ChannelID:     channelID,
+			IncludeLocale: false,
+		})
+		if err != nil {
+			return err
+		}
+		count = info.UnreadCount
+		return nil
+	})
+	return count, err
 }
 
 func (c *slackClient) addWarning(msg string) {
@@ -256,11 +280,12 @@ func (c *slackClient) ListChannels() ([]types.Channel, error) {
 
 		for _, conv := range convs {
 			ch := types.Channel{
-				ID:        conv.ID,
-				Name:      conv.Name,
-				IsDM:      conv.IsIM,
-				IsPrivate: conv.IsPrivate,
-				IsGroup:   conv.IsMpIM,
+				ID:          conv.ID,
+				Name:        conv.Name,
+				IsDM:        conv.IsIM,
+				IsPrivate:   conv.IsPrivate,
+				IsGroup:     conv.IsMpIM,
+				UnreadCount: conv.UnreadCount,
 			}
 
 			if conv.IsIM {

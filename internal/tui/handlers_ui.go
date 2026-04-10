@@ -165,6 +165,9 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 // handleMouse processes mouse click and scroll events.
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	x, y := msg.X, msg.Y
+	// Recalculate inputTop dynamically — it changes when the input
+	// textarea grows/shrinks with multi-line content.
+	m.inputTop = m.height - m.input.DisplayHeight() - 1
 	// Log every right-click that reaches the messages-pane handler so
 	// we can prove the build under test contains the friend-pill
 	// detection code (and tell the difference between "code not in

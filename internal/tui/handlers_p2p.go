@@ -13,6 +13,8 @@ package tui
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +26,35 @@ import (
 	"github.com/rw3iss/slackers/internal/secure"
 	"github.com/rw3iss/slackers/internal/types"
 )
+
+// newFileBrowserCfg returns a FileBrowserConfig with the user's
+// persisted sort preferences pre-filled. Callers set the remaining
+// fields (StartDir, Title, ShowFiles, etc.) on the returned value.
+func (m *Model) newFileBrowserCfg() FileBrowserConfig {
+	cfg := FileBrowserConfig{
+		SortBy:  "name",
+		SortAsc: true,
+	}
+	if m.cfg != nil {
+		cfg.Favorites = m.cfg.FavoriteFolders
+		if m.cfg.FileSortBy != "" {
+			cfg.SortBy = m.cfg.FileSortBy
+		}
+		if m.cfg.FileSortAsc != nil {
+			cfg.SortAsc = *m.cfg.FileSortAsc
+		}
+	}
+	return cfg
+}
+
+// sharedFolderName returns the basename of the user's shared folder
+// (for inclusion in status broadcasts), or "" if none is configured.
+func (m *Model) sharedFolderName() string {
+	if m.cfg == nil || m.cfg.SharedFolder == "" {
+		return ""
+	}
+	return filepath.Base(m.cfg.SharedFolder)
+}
 
 // ---- Plain helpers (package-level, no *Model receiver) -----------------
 
@@ -711,10 +742,39 @@ func (m *Model) updateFriendStatusDisplay() {
 	m.channels.SetFriendStatus(statuses)
 }
 
+// sortBrowseEntries sorts a slice of BrowseEntry in place.
+func sortBrowseEntries(entries []secure.BrowseEntry, sortBy string, asc bool) {
+	sort.Slice(entries, func(i, j int) bool {
+		var less bool
+		switch sortBy {
+		case "size":
+			less = entries[i].Size < entries[j].Size
+		case "modified":
+			less = entries[i].ModTime.Before(entries[j].ModTime)
+		case "created":
+			less = entries[i].CreateTime.Before(entries[j].CreateTime)
+		case "type":
+			ei := strings.ToLower(filepath.Ext(entries[i].Name))
+			ej := strings.ToLower(filepath.Ext(entries[j].Name))
+			if ei != ej {
+				less = ei < ej
+			} else {
+				less = strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+			}
+		default: // "name"
+			less = strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+		}
+		if !asc {
+			return !less
+		}
+		return less
+	})
+}
+
 // handleBrowseRequest reads the local shared folder and returns a
 // BrowseResponse. Called from the __browse_request__ handler in a
 // goroutine so os.ReadDir doesn't block the Update loop.
-func (m *Model) handleBrowseRequest(reqPath string) secure.BrowseResponse {
+func (m *Model) handleBrowseRequest(reqPath, sortBy, sortDir string) secure.BrowseResponse {
 	if m.cfg == nil || m.cfg.SharedFolder == "" {
 		return secure.BrowseResponse{Error: "no shared folder configured"}
 	}
@@ -736,13 +796,33 @@ func (m *Model) handleBrowseRequest(reqPath string) secure.BrowseResponse {
 			modTime = info.ModTime()
 		}
 		out = append(out, secure.BrowseEntry{
-			Name:    e.Name(),
-			Size:    size,
-			IsDir:   e.IsDir(),
-			ModTime: modTime,
+			Name:       e.Name(),
+			Size:       size,
+			IsDir:      e.IsDir(),
+			ModTime:    modTime,
+			CreateTime: modTime, // Go stdlib doesn't expose birth time portably
 		})
 	}
-	return secure.BrowseResponse{Path: reqPath, Entries: out}
+	// Sort entries: dirs first, then files, each group sorted by the
+	// requested key. Default to name ascending.
+	if sortBy == "" {
+		sortBy = "name"
+	}
+	asc := sortDir != "desc"
+	var dirs, files []secure.BrowseEntry
+	for _, e := range out {
+		if e.IsDir {
+			dirs = append(dirs, e)
+		} else {
+			files = append(files, e)
+		}
+	}
+	sortBrowseEntries(dirs, sortBy, asc)
+	sortBrowseEntries(files, sortBy, asc)
+	sorted := make([]secure.BrowseEntry, 0, len(out))
+	sorted = append(sorted, dirs...)
+	sorted = append(sorted, files...)
+	return secure.BrowseResponse{Path: reqPath, Entries: sorted}
 }
 
 // isOwnCard reports whether a contact card represents the local

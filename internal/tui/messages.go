@@ -666,8 +666,8 @@ func (m *MessageViewModel) SetItemSpacing(n int) {
 func (m *MessageViewModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	// Viewport height = pane height - 2 borders - 1 header line.
-	vpH := h - 3
+	// Viewport height = pane height - 1 header line - 1 bottom gutter.
+	vpH := h - 2
 	if vpH < 1 {
 		vpH = 1
 	}

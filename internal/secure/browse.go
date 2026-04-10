@@ -9,10 +9,11 @@ import (
 
 // BrowseEntry is one file or directory in a shared folder listing.
 type BrowseEntry struct {
-	Name    string    `json:"name"`
-	Size    int64     `json:"size"`
-	IsDir   bool      `json:"is_dir"`
-	ModTime time.Time `json:"mod_time"`
+	Name       string    `json:"name"`
+	Size       int64     `json:"size"`
+	IsDir      bool      `json:"is_dir"`
+	ModTime    time.Time `json:"mod_time"`
+	CreateTime time.Time `json:"create_time,omitempty"` // birth time (falls back to mod_time on most Linux fs)
 }
 
 // BrowseResponse is the payload returned by a MsgTypeBrowseResponse

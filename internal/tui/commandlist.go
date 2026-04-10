@@ -46,7 +46,8 @@ type CommandListModel struct {
 }
 
 // NewCommandList builds the overlay over the registry's full
-// command set. Pass r.All() in.
+// command set. Pass r.All() in — emotes are filtered out
+// automatically so only KindCommand entries appear here.
 func NewCommandList(all []*commands.Command) CommandListModel {
 	ti := textinput.New()
 	ti.Placeholder = "Filter commands..."
@@ -54,12 +55,20 @@ func NewCommandList(all []*commands.Command) CommandListModel {
 	ti.CharLimit = 64
 	ti.Focus()
 
+	// Filter out emotes — only commands belong in the Command List.
+	cmdsOnly := make([]*commands.Command, 0, len(all))
+	for _, c := range all {
+		if c.Kind == commands.KindCommand {
+			cmdsOnly = append(cmdsOnly, c)
+		}
+	}
+
 	m := CommandListModel{
-		all:      all,
-		filtered: all,
+		all:      cmdsOnly,
+		filtered: cmdsOnly,
 		filter:   ti,
 	}
-	m.list.SetCount(len(all))
+	m.list.SetCount(len(cmdsOnly))
 	m.list.WrapAround = true
 	return m
 }
@@ -145,7 +154,6 @@ func (m CommandListModel) Update(msg tea.Msg) (CommandListModel, tea.Cmd) {
 func (m CommandListModel) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
-	tagStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Commands"))
@@ -192,9 +200,6 @@ func (m CommandListModel) View() string {
 				style = ChannelSelectedStyle
 			}
 			row := cursor + style.Render(padded) + "  " + dimStyle.Render(c.Description)
-			if c.Kind == commands.KindEmote {
-				row += "  " + tagStyle.Render("[emote]")
-			}
 			b.WriteString(row)
 			b.WriteString("\n")
 		}

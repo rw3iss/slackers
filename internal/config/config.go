@@ -90,6 +90,13 @@ type Config struct {
 	// folder is shared.
 	SharedFolder string `json:"shared_folder,omitempty"`
 
+	// FileSortBy controls sorting in file browsers ("name", "size",
+	// "modified", "type"). Default is "name".
+	FileSortBy string `json:"file_sort_by,omitempty"`
+	// FileSortAsc controls sort direction in file browsers.
+	// nil or true = ascending, false = descending.
+	FileSortAsc *bool `json:"file_sort_asc,omitempty"`
+
 	// FriendPingSeconds controls how often the app polls friend
 	// connection state, propagates online/offline transitions in
 	// the sidebar, fires the profile-sync / request-pending pings

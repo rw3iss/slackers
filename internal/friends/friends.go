@@ -29,6 +29,12 @@ type Friend struct {
 	// persisted to disk.
 	AwayStatus  string `json:"-"`
 	AwayMessage string `json:"-"` // optional status text (e.g. "BRB lunch")
+	// HasSharedFolder indicates whether this friend is sharing a
+	// folder. SharedFolderName is the basename of the shared folder
+	// (for display only — browsing uses the P2P browse protocol).
+	// Both are runtime-only, learned from status_update messages.
+	HasSharedFolder  bool   `json:"-"`
+	SharedFolderName string `json:"-"`
 }
 
 // ContactCard is the shareable JSON format for exchanging friend info.
@@ -250,6 +256,20 @@ func (s *FriendStore) SetStatus(userID, statusType, message string) {
 	case "away":
 		s.friends[idx].Online = true // reachable, just away
 	}
+}
+
+// SetSharedFolder updates a friend's shared-folder info (learned from
+// incoming status_update messages). folderName is the basename of the
+// shared directory, or "" if the peer has disabled sharing.
+func (s *FriendStore) SetSharedFolder(userID, folderName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx, ok := s.byUserID[userID]
+	if !ok || idx >= len(s.friends) {
+		return
+	}
+	s.friends[idx].HasSharedFolder = folderName != ""
+	s.friends[idx].SharedFolderName = folderName
 }
 
 func (s *FriendStore) Count() int {

@@ -108,6 +108,15 @@ type P2PMessage struct {
 	// "online", "offline", "away", "back".
 	StatusType    string `json:"status_type,omitempty"`
 	StatusMessage string `json:"status_message,omitempty"`
+
+	// SharedFolder carries the basename of the sender's shared
+	// folder (or "" if none). Included in status_update messages
+	// so peers know whether "Browse Shared Files" should be offered.
+	SharedFolder string `json:"shared_folder,omitempty"`
+
+	// Browse request sort parameters (used by browse_request).
+	BrowseSortBy  string `json:"browse_sort_by,omitempty"`  // "name", "size", "modified", "type"
+	BrowseSortDir string `json:"browse_sort_dir,omitempty"` // "asc" or "desc"
 }
 
 // P2PNode manages the libp2p host and peer connections.
@@ -691,6 +700,11 @@ func (n *P2PNode) DownloadFileByPath(ctx context.Context, slackUserID, relativeP
 	if _, err := stream.Write(data); err != nil {
 		return fmt.Errorf("sending file request: %w", err)
 	}
+	// Close the write side so the server's reader sees EOF cleanly
+	// and doesn't block waiting for more request data.
+	if err := stream.CloseWrite(); err != nil {
+		return fmt.Errorf("closing write side: %w", err)
+	}
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -700,12 +714,17 @@ func (n *P2PNode) DownloadFileByPath(ctx context.Context, slackUserID, relativeP
 		return fmt.Errorf("creating %s: %w", destPath, err)
 	}
 	defer out.Close()
-	if _, err := io.Copy(out, stream); err != nil {
+	written, err := io.Copy(out, stream)
+	if err != nil {
 		os.Remove(destPath)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		return fmt.Errorf("receiving file: %w", err)
+	}
+	if written == 0 {
+		os.Remove(destPath)
+		return fmt.Errorf("server returned empty response (file may not exist or shared folder is not configured)")
 	}
 	return nil
 }
@@ -740,6 +759,8 @@ func (n *P2PNode) handleFileRequest(s network.Stream) {
 		}
 		defer f.Close()
 		io.Copy(s, f)
+		// Close the write side so the client's io.Copy sees EOF.
+		s.CloseWrite()
 		return
 	}
 
@@ -780,7 +801,7 @@ func (n *P2PNode) handleFileRequest(s network.Stream) {
 //
 // Errors per-peer are silently swallowed so one unreachable
 // friend doesn't break the broadcast to others.
-func (n *P2PNode) BroadcastStatus(statusType, statusMsg string) {
+func (n *P2PNode) BroadcastStatus(statusType, statusMsg, sharedFolder string) {
 	n.mu.RLock()
 	peers := make(map[string]peer.ID)
 	for uid, pid := range n.peerMap {
@@ -793,6 +814,7 @@ func (n *P2PNode) BroadcastStatus(statusType, statusMsg string) {
 		Timestamp:     time.Now().Unix(),
 		StatusType:    statusType,
 		StatusMessage: statusMsg,
+		SharedFolder:  sharedFolder,
 	}
 	for _, pid := range peers {
 		if n.host.Network().Connectedness(pid) != network.Connected {

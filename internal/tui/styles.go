@@ -74,6 +74,16 @@ var (
 
 	// IsDarkTheme is true when the active theme self-identifies as dark.
 	IsDarkTheme = true
+
+	// Computed background variants — set by ApplyTheme, cached for
+	// zero per-frame cost. Used by reactions, pills, badges, emoji
+	// picker, and other elements that need a subtle contrast against
+	// the main background without hardcoding palette indices.
+	ColorSubtleBg      lipgloss.Color // slight offset from main bg (reactions, pills)
+	ColorSubtleBgAlt   lipgloss.Color // a bit more contrast (select bg)
+	ColorSubtleBgHover lipgloss.Color // hover/emphasis (selected reaction, emoji cell)
+	ColorInvertedFg    lipgloss.Color // fg for inverted elements (pill selected on accent bg)
+	ColorOverlayFill   lipgloss.Color // whitespace fill for overlay backgrounds
 )
 
 // Footer hint format constants. Every overlay should reference
@@ -251,6 +261,29 @@ func ApplyTheme(t theme.Theme) {
 
 	IsDarkTheme = t.IsDark()
 
+	// Compute subtle background variants from the theme's main
+	// background color. These replace hardcoded "236"/"237"/"240"
+	// palette entries so reactions, pills, and badges blend with any
+	// theme. Cached here so the per-frame cost is zero.
+	if IsDarkTheme {
+		ColorSubtleBg = lipgloss.Color("236")    // slightly lighter than typical dark bg
+		ColorSubtleBgAlt = lipgloss.Color("237")  // a bit more contrast
+		ColorSubtleBgHover = lipgloss.Color("240") // hover/selected emphasis
+	} else {
+		ColorSubtleBg = lipgloss.Color("254")    // slightly darker than typical light bg
+		ColorSubtleBgAlt = lipgloss.Color("253")  // a bit more contrast
+		ColorSubtleBgHover = lipgloss.Color("250") // hover/selected emphasis
+	}
+	// Foreground for inverted elements (pill selected, code selected).
+	// Must contrast against ColorAccent background.
+	if IsDarkTheme {
+		ColorInvertedFg = lipgloss.Color("0")
+	} else {
+		ColorInvertedFg = lipgloss.Color("255")
+	}
+	// Whitespace fill for overlay backgrounds — matches the main theme bg.
+	ColorOverlayFill = ColorBackgroundBg
+
 	rebuildDerivedStyles()
 }
 
@@ -311,23 +344,23 @@ func rebuildDerivedStyles() {
 	MessagePendingStyle = lipgloss.NewStyle().
 		Foreground(ColorHighlight).
 		Italic(true)
-	MessageHighlightBgStyle = lipgloss.NewStyle().Background(lipgloss.Color("236"))
-	MessageSelectBgStyle = lipgloss.NewStyle().Background(lipgloss.Color("237"))
+	MessageHighlightBgStyle = lipgloss.NewStyle().Background(ColorSubtleBg)
+	MessageSelectBgStyle = lipgloss.NewStyle().Background(ColorSubtleBgAlt)
 	MessageDateSepStyle = lipgloss.NewStyle().Foreground(ColorDayLabel).Bold(true)
 	MessageFileStyle = lipgloss.NewStyle().Foreground(ColorFileButton)
 	MessageFileSelectedStyle = lipgloss.NewStyle().
 		Foreground(ColorFileButton).
 		Bold(true).
-		Background(lipgloss.Color("236"))
+		Background(ColorSubtleBg)
 	MessageFileUploadingStyle = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 	MessageThreadRuleStyle = lipgloss.NewStyle().Foreground(ColorPrimary)
 	MessageReplyLabelStyle = lipgloss.NewStyle().Foreground(ColorReplyLabel).Italic(true)
 	MessageReactionStyle = lipgloss.NewStyle().
-		Background(lipgloss.Color("236")).
-		Foreground(lipgloss.Color("252")).
+		Background(ColorSubtleBg).
+		Foreground(ColorDescText).
 		Padding(0, 1)
 	MessageReactionSelStyle = lipgloss.NewStyle().
-		Background(lipgloss.Color("240")).
+		Background(ColorSubtleBgHover).
 		Foreground(ColorPrimary).
 		Bold(true).
 		Padding(0, 1)
@@ -338,7 +371,7 @@ func rebuildDerivedStyles() {
 	MessageCogStyle = lipgloss.NewStyle().Foreground(ColorHighlight)
 	FriendCardPillStyle = lipgloss.NewStyle().
 		Foreground(ColorAccent).
-		Background(lipgloss.Color("236")).
+		Background(ColorSubtleBg).
 		Bold(true).
 		Padding(0, 1)
 	// FriendCardPillSelectedStyle is the highlighted version of the
@@ -347,7 +380,7 @@ func rebuildDerivedStyles() {
 	// onto a brighter background so the cursor location is
 	// unambiguous against neighbouring pills and message text.
 	FriendCardPillSelectedStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("0")).
+		Foreground(ColorInvertedFg).
 		Background(ColorAccent).
 		Bold(true).
 		Padding(0, 1)
@@ -372,21 +405,21 @@ func rebuildDerivedStyles() {
 	// does, so the active snippet pops against neighbouring
 	// text.
 	CodeSnippetSelectedStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("0")).
+		Foreground(ColorInvertedFg).
 		Background(ColorAccent).
 		Bold(true).
 		Italic(true)
 
 	// Emoji picker styles.
-	EmojiActiveBgStyle = lipgloss.NewStyle().Background(lipgloss.Color("236"))
+	EmojiActiveBgStyle = lipgloss.NewStyle().Background(ColorSubtleBg)
 	EmojiActiveIconStyle = lipgloss.NewStyle().
 		Bold(true).
 		Foreground(ColorPrimary).
-		Background(lipgloss.Color("236"))
+		Background(ColorSubtleBg)
 	EmojiInactiveIconStyle = lipgloss.NewStyle().Foreground(ColorMuted)
 	EmojiCellStyle = lipgloss.NewStyle()
-	EmojiSelectedCellStyle = lipgloss.NewStyle().Background(lipgloss.Color("240"))
-	EmojiFavCellStyle = lipgloss.NewStyle().Background(lipgloss.Color("235"))
+	EmojiSelectedCellStyle = lipgloss.NewStyle().Background(ColorSubtleBgHover)
+	EmojiFavCellStyle = lipgloss.NewStyle().Background(ColorSubtleBg)
 }
 
 // UserColors assigns a consistent color to a username by hashing.

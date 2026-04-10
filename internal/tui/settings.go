@@ -21,6 +21,10 @@ type SettingsSavedMsg struct{}
 // SettingsOpenFileBrowserMsg requests the model to open a file browser for settings.
 type SettingsOpenFileBrowserMsg struct{ CurrentPath string }
 
+// SettingsShareFolderBrowseMsg requests the model to open a folder browser
+// for selecting the Shared Folder path.
+type SettingsShareFolderBrowseMsg struct{ CurrentPath string }
+
 // SettingsModel provides an interactive config editor overlay.
 type SettingsModel struct {
 	fields       []settingsField
@@ -233,6 +237,12 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				value:       downloadPathValue(cfg.DownloadPath),
 				description: "File download location (Enter to browse)",
 			},
+			{
+				label:       "Shared Folder",
+				key:         "shared_folder",
+				value:       sharedFolderValue(cfg.SharedFolder),
+				description: "Local folder shared with friends (Enter to browse, empty = disabled)",
+			},
 
 			// ───── Friends & Secure Messaging ─────
 			header("Friends & Secure Messaging"),
@@ -408,6 +418,13 @@ func downloadPathValue(p string) string {
 	return p
 }
 
+func sharedFolderValue(p string) string {
+	if p == "" {
+		return "(none)"
+	}
+	return p
+}
+
 func themeValueLabel(name string) string {
 	if name == "" {
 		return "Default"
@@ -551,6 +568,17 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		if f.key == "download_path" {
 			return m, func() tea.Msg {
 				return SettingsOpenFileBrowserMsg{CurrentPath: f.value}
+			}
+		}
+
+		// Shared folder opens a folder browser.
+		if f.key == "shared_folder" {
+			cur := f.value
+			if cur == "(none)" {
+				cur = ""
+			}
+			return m, func() tea.Msg {
+				return SettingsShareFolderBrowseMsg{CurrentPath: cur}
 			}
 		}
 
@@ -772,6 +800,14 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 			m.cfg.ChannelSortAsc = &b
 		}
 		m.message = "Direction: " + value
+
+	case "shared_folder":
+		m.cfg.SharedFolder = value
+		if value == "" {
+			m.message = "Shared folder disabled"
+		} else {
+			m.message = "Shared folder: " + value
+		}
 	}
 
 	cfg := m.cfg
@@ -983,6 +1019,6 @@ func (m SettingsModel) View() string {
 		lipgloss.Center, lipgloss.Center,
 		box,
 		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+		lipgloss.WithWhitespaceForeground(ColorOverlayFill),
 	)
 }

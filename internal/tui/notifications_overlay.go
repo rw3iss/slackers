@@ -192,7 +192,7 @@ func (m NotificationsOverlayModel) View() string {
 		lipgloss.Center, lipgloss.Center,
 		box,
 		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+		lipgloss.WithWhitespaceForeground(ColorOverlayFill),
 	)
 }
 

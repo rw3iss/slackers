@@ -133,7 +133,7 @@ func (m FriendRequestModel) View() string {
 		noLabel = " Reject "
 	}
 
-	activeStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Background(lipgloss.Color("236"))
+	activeStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Background(ColorSubtleBg)
 	inactiveStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 
 	if m.selected == 0 {

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/notifications"
 	"github.com/rw3iss/slackers/internal/secure"
 	"github.com/rw3iss/slackers/internal/shortcuts"
@@ -328,16 +329,17 @@ func (m *Model) markSlackRead(ch *types.Channel) {
 	}
 	ts, ok := m.lastSeen[ch.ID]
 	if !ok || ts == "" || ts == "0" {
+		debug.Log("[markSlackRead] skipping %s (no lastSeen)", ch.ID)
 		return
 	}
 	channelID := ch.ID
 	cursor := ts
+	debug.Log("[markSlackRead] marking %s as read at ts=%s", channelID, cursor)
 	go func() {
 		if err := m.slackSvc.MarkConversation(channelID, cursor); err != nil {
-			// Log only — no need to surface to the user, the next
-			// open of the same channel will retry.
-			// (debug.Log happens inside the client wrapper.)
-			_ = err
+			debug.Log("[markSlackRead] ERROR marking %s: %v", channelID, err)
+		} else {
+			debug.Log("[markSlackRead] SUCCESS marked %s read at %s", channelID, cursor)
 		}
 	}()
 }

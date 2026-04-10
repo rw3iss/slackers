@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -184,6 +185,7 @@ func seedLastSeenCmd(svc slackpkg.SlackService, lastSeen map[string]string) tea.
 
 	return func() tea.Msg {
 		timestamps := make(map[string]string)
+		unread := make(map[string]string)
 		// Process in small batches to respect rate limits.
 		for i := 0; i < len(channelIDs); i += 5 {
 			end := i + 5
@@ -196,12 +198,20 @@ func seedLastSeenCmd(svc slackpkg.SlackService, lastSeen map[string]string) tea.
 			}
 			_, resultTS, _ := svc.CheckNewMessages(batch)
 			for id, ts := range resultTS {
-				// Reconcile with Slack's server-side last_read — if
-				// the user read this channel in another client while
-				// slackers was offline, use the higher cursor.
+				// Reconcile with Slack's server-side last_read.
 				lastRead, err := svc.GetChannelLastRead(id)
-				if err == nil && lastRead != "" && lastRead > ts {
-					ts = lastRead
+				if err == nil && lastRead != "" {
+					if lastRead >= ts {
+						// User already read this channel (via
+						// another client). Use the higher cursor.
+						ts = lastRead
+					} else {
+						// last_read < latest_ts → channel has
+						// unread messages. Use last_read as the
+						// baseline so the unread indicator appears.
+						unread[id] = ts
+						ts = lastRead
+					}
 				}
 				timestamps[id] = ts
 			}
@@ -210,8 +220,103 @@ func seedLastSeenCmd(svc slackpkg.SlackService, lastSeen map[string]string) tea.
 				time.Sleep(2 * time.Second)
 			}
 		}
-		return SeedLastSeenMsg{Timestamps: timestamps}
+		return SeedLastSeenMsg{Timestamps: timestamps, Unread: unread}
 	}
+}
+
+// StartupUnreadCheckMsg carries channels detected as having unread
+// messages at startup. May be sent multiple times (once per batch)
+// for progressive updates.
+type StartupUnreadCheckMsg struct {
+	Unread map[string]string // channelID → count string
+}
+
+// startupUnreadCheckCmd checks all previously-seeded Slack channels
+// for unread messages using conversations.info. Returns a tea.Cmd
+// that sends the first batch's results immediately, then chains
+// subsequent batches so the UI updates progressively.
+// unreadTarget is a channel to check for unreads, with its lastSeen
+// timestamp for priority sorting.
+type unreadTarget struct {
+	id string
+	ts string
+}
+
+func startupUnreadCheckCmd(svc slackpkg.SlackService, lastSeen map[string]string) tea.Cmd {
+	var targets []unreadTarget
+	for id, ts := range lastSeen {
+		if ts == "" || ts == "0" || strings.HasPrefix(id, "friend:") {
+			continue
+		}
+		targets = append(targets, unreadTarget{id, ts})
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	// Most recently active channels first.
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].ts > targets[j].ts
+	})
+
+	// Return a command that processes one batch and chains the next.
+	return startupUnreadBatch(svc, targets, 0)
+}
+
+// startupUnreadBatch processes one batch of channels and returns a
+// StartupUnreadCheckMsg. If more batches remain, a follow-up command
+// is chained via tea.Sequence so the UI updates after each batch.
+func startupUnreadBatch(svc slackpkg.SlackService, targets []unreadTarget, offset int) tea.Cmd {
+	const batchSize = 15
+	return func() tea.Msg {
+		end := offset + batchSize
+		if end > len(targets) {
+			end = len(targets)
+		}
+		if offset == 0 {
+			debug.Log("[startup-unread] checking %d channels for unreads", len(targets))
+		}
+		batch := targets[offset:end]
+		unread := make(map[string]string)
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		wg.Add(len(batch))
+		for _, t := range batch {
+			go func(id string) {
+				defer wg.Done()
+				count, err := svc.GetChannelUnreadCount(id)
+				if err != nil {
+					return
+				}
+				if count > 0 {
+					debug.Log("[startup-unread] UNREAD %s count=%d", id, count)
+					mu.Lock()
+					unread[id] = fmt.Sprintf("%d", count)
+					mu.Unlock()
+				}
+			}(t.id)
+		}
+		wg.Wait()
+		if end >= len(targets) {
+			debug.Log("[startup-unread] done (%d/%d)", end, len(targets))
+		}
+		return startupUnreadBatchResult{
+			Unread:    unread,
+			targets:   targets,
+			nextOff:   end,
+			svc:       svc,
+			done:      end >= len(targets),
+		}
+	}
+}
+
+// startupUnreadBatchResult is an internal message carrying one batch
+// of unread results plus the state needed to chain the next batch.
+type startupUnreadBatchResult struct {
+	Unread  map[string]string
+	targets []unreadTarget
+	nextOff int
+	svc     slackpkg.SlackService
+	done    bool
 }
 
 // ReconcileReadStateMsg carries the result of a background sync with
@@ -459,7 +564,7 @@ func loadFriendsCmd(store *friends.FriendStore, _ /* p2p */ *secure.P2PNode) tea
 // localStatus / localAwayMsg carry the local user's current
 // status, piggybacked on each ping so the remote peer learns
 // our state without a separate broadcast.
-func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _ /* currentFriend */, localStatus, localAwayMsg string) tea.Cmd {
+func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _ /* currentFriend */, localStatus, localAwayMsg, localSharedFolder string) tea.Cmd {
 	return func() tea.Msg {
 		if store == nil || p2p == nil {
 			return FriendPingMsg{}
@@ -468,16 +573,28 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 		// Filter to friends with a multiaddr — there's nothing
 		// to ping without one.
 		type pingTarget struct {
-			userID    string
-			multiaddr string
+			userID     string
+			multiaddr  string
+			lastOnline int64
+			isOnline   bool
 		}
 		var targets []pingTarget
 		for _, f := range all {
 			if f.Multiaddr == "" {
 				continue
 			}
-			targets = append(targets, pingTarget{f.UserID, f.Multiaddr})
+			targets = append(targets, pingTarget{f.UserID, f.Multiaddr, f.LastOnline, f.Online})
 		}
+		// Sort by priority: online friends first, then by most
+		// recently active. This ensures the friends the user is
+		// most likely interacting with get pinged in the first
+		// batch.
+		sort.Slice(targets, func(i, j int) bool {
+			if targets[i].isOnline != targets[j].isOnline {
+				return targets[i].isOnline // online first
+			}
+			return targets[i].lastOnline > targets[j].lastOnline
+		})
 
 		online := make(map[string]bool, len(targets))
 		status := make(map[string]FriendStatusInfo, len(targets))
@@ -528,6 +645,7 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 							SenderID:      uid,
 							StatusType:    localStatus,
 							StatusMessage: localAwayMsg,
+							SharedFolder:  localSharedFolder,
 						}
 						_ = p2p.SendMessage(uid, statusMsg)
 					}
@@ -549,6 +667,14 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 			}
 			wg.Wait()
 		}
+		// After all batches complete, do a final broadcast to any
+		// peers that may have connected to us inbound during the
+		// ping cycle. This catches the case where a friend starts
+		// their app and dials us while we were busy pinging others
+		// — without this follow-up, they wouldn't learn our status
+		// until the *next* ping cycle (up to 10s later).
+		p2p.BroadcastStatus(localStatus, localAwayMsg, localSharedFolder)
+
 		return FriendPingMsg{Online: online, Status: status}
 	}
 }

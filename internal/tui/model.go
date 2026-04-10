@@ -128,9 +128,12 @@ type FileUploadDoneMsg struct {
 	Err       error  // non-nil if upload failed
 }
 
-// SeedLastSeenMsg carries baseline timestamps without triggering unread markers.
+// SeedLastSeenMsg carries baseline timestamps. Channels where Slack's
+// server-side last_read is behind the latest message are included in
+// Unread so the handler can mark them with unread badges immediately.
 type SeedLastSeenMsg struct {
 	Timestamps map[string]string
+	Unread     map[string]string // channelID → latest message ts (for channels with unreads)
 }
 
 // ActivityCheckMsg triggers an away-status check.
@@ -172,6 +175,14 @@ type P2PReceivedMsg struct {
 	// so the model creates the types.Message with IsEmote=true
 	// and the renderer applies EmoteMessageStyle.
 	IsEmote bool
+
+	// SharedFolder carries the peer's shared folder basename
+	// (learned from status_update messages). Empty = no share.
+	SharedFolder string
+
+	// Browse request sort parameters (for __browse_request__).
+	BrowseSortBy  string
+	BrowseSortDir string
 }
 
 // SecureSessionReadyMsg signals that a secure session was established with a peer.
@@ -643,10 +654,11 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 			case secure.MsgTypeStatusUpdate:
 				// Peer announces a status change (online/away/back/offline).
 				p2pChan <- P2PReceivedMsg{
-					SenderID:  peerSlackID,
-					Text:      "__status_update__",
-					PubKey:    msg.StatusType,
-					Multiaddr: msg.StatusMessage,
+					SenderID:     peerSlackID,
+					Text:         "__status_update__",
+					PubKey:       msg.StatusType,
+					Multiaddr:    msg.StatusMessage,
+					SharedFolder: msg.SharedFolder,
 				}
 			case secure.MsgTypePing:
 				p2pChan <- P2PReceivedMsg{
@@ -657,7 +669,9 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 				p2pChan <- P2PReceivedMsg{
 					SenderID: peerSlackID,
 					Text:     "__browse_request__",
-					PubKey:   msg.Text, // relative path
+					PubKey:        msg.Text, // relative path
+					BrowseSortBy:  msg.BrowseSortBy,
+					BrowseSortDir: msg.BrowseSortDir,
 				}
 			case secure.MsgTypeBrowseResponse:
 				p2pChan <- P2PReceivedMsg{
@@ -1063,7 +1077,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.warning = ""
 			// Broadcast "back" to friends so their sidebar updates.
 			if m.p2pNode != nil {
-				go m.p2pNode.BroadcastStatus("back", "")
+				go m.p2pNode.BroadcastStatus("back", "", m.sharedFolderName())
 			}
 			if m.currentCh != nil {
 				return m, silentLoadHistoryCmd(m.slackSvc, m.currentCh.ID)
@@ -1190,13 +1204,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if startDir == "" {
 					startDir, _ = os.UserHomeDir()
 				}
-				m.fileBrowser = NewFileBrowser(FileBrowserConfig{
-					StartDir:    startDir,
-					Title:       "Select File to Send",
-					ShowFiles:   true,
-					ShowFolders: true,
-					Favorites:   m.cfg.FavoriteFolders,
-				})
+				fbCfg := m.newFileBrowserCfg()
+				fbCfg.StartDir = startDir
+				fbCfg.Title = "Select File to Send"
+				fbCfg.ShowFiles = true
+				fbCfg.ShowFolders = true
+				m.fileBrowser = NewFileBrowser(fbCfg)
 				m.fileBrowser.SetSize(m.width, m.height)
 				m.fbPurpose = fbPurposeAttach
 				m.overlay = overlayFileBrowser
@@ -2070,6 +2083,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastSeen[ch.ID] = "0"
 			}
 		}
+		debug.Log("[startup] ChannelsLoadedMsg: %d channels loaded", len(msg.Channels))
 		m.rebuildPollChannels()
 
 		// Restore last viewed channel on first load.
@@ -2086,9 +2100,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Run an initial seed poll to establish baseline timestamps
-		// without marking anything as unread.
+		// Seed baseline timestamps for new channels AND check ALL
+		// channels for unreads in parallel via conversations.info
+		// (the only reliable source for unread_count).
 		cmds = append(cmds, seedLastSeenCmd(m.slackSvc, m.lastSeen))
+		if m.slackSvc != nil {
+			cmds = append(cmds, startupUnreadCheckCmd(m.slackSvc, m.lastSeen))
+		}
 		return m, tea.Batch(cmds...)
 
 	case SilentHistoryMsg:
@@ -2112,6 +2130,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			latest := msg.Messages[len(msg.Messages)-1]
 			m.lastSeen[m.currentCh.ID] = fmt.Sprintf("%d.%06d", latest.Timestamp.Unix(), latest.Timestamp.Nanosecond()/1000)
 			m.persistLastSeen()
+			// Now that we have the latest message timestamp, mark
+			// the channel as read on Slack so other clients (web,
+			// mobile, desktop) clear their unread badge too.
+			m.markSlackRead(m.currentCh)
 		}
 		if m.initialLoad {
 			m.initialLoad = false
@@ -2175,6 +2197,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.currentCh != nil && evMsg.ChannelID == m.currentCh.ID {
 				if ts != "" {
 					m.lastSeen[evMsg.ChannelID] = ts
+					// Mark read upstream so other Slack clients (web/mobile/desktop)
+					// see the channel as read since the user is actively viewing it.
+					m.markSlackRead(m.currentCh)
 				}
 				// Dedupe: remove any optimistic "pending-" copy of this message.
 				m.messages.RemovePendingMatching(evMsg.Text)
@@ -2635,13 +2660,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case FriendImportBrowseMsg:
-		m.fileBrowser = NewFileBrowser(FileBrowserConfig{
-			Title:       "Select friend contact card JSON",
-			ShowFiles:   true,
-			ShowFolders: true,
-			FileTypes:   []string{".json"},
-			Favorites:   m.cfg.FavoriteFolders,
-		})
+		fbCfg := m.newFileBrowserCfg()
+		fbCfg.Title = "Select friend contact card JSON"
+		fbCfg.ShowFiles = true
+		fbCfg.ShowFolders = true
+		fbCfg.FileTypes = []string{".json"}
+		m.fileBrowser = NewFileBrowser(fbCfg)
 		m.fileBrowser.SetSize(m.width, m.height)
 		m.fbPurpose = fbPurposeFriendImport
 		m.overlay = overlayFileBrowser
@@ -2653,13 +2677,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case FriendsImportBrowseMsg:
-		m.fileBrowser = NewFileBrowser(FileBrowserConfig{
-			Title:       "Select friends list JSON",
-			ShowFiles:   true,
-			ShowFolders: true,
-			FileTypes:   []string{".json"},
-			Favorites:   m.cfg.FavoriteFolders,
-		})
+		fbCfg := m.newFileBrowserCfg()
+		fbCfg.Title = "Select friends list JSON"
+		fbCfg.ShowFiles = true
+		fbCfg.ShowFolders = true
+		fbCfg.FileTypes = []string{".json"}
+		m.fileBrowser = NewFileBrowser(fbCfg)
 		m.fileBrowser.SetSize(m.width, m.height)
 		m.fbPurpose = fbPurposeFriendsImport
 		m.overlay = overlayFileBrowser
@@ -2691,13 +2714,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ThemeImportBrowseMsg:
-		m.fileBrowser = NewFileBrowser(FileBrowserConfig{
-			Title:       "Select theme JSON to import",
-			ShowFiles:   true,
-			ShowFolders: true,
-			FileTypes:   []string{".json"},
-			Favorites:   m.cfg.FavoriteFolders,
-		})
+		fbCfg := m.newFileBrowserCfg()
+		fbCfg.Title = "Select theme JSON to import"
+		fbCfg.ShowFiles = true
+		fbCfg.ShowFolders = true
+		fbCfg.FileTypes = []string{".json"}
+		m.fileBrowser = NewFileBrowser(fbCfg)
 		m.fileBrowser.SetSize(m.width, m.height)
 		m.fbPurpose = fbPurposeImportTheme
 		m.overlay = overlayFileBrowser
@@ -3037,18 +3059,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case RemoteBrowseOpenMsg:
-		m.remoteBrowser = NewRemoteBrowser(msg.PeerUID, msg.PeerName)
+		sortBy, sortAsc := "name", true
+		if m.cfg != nil {
+			if m.cfg.FileSortBy != "" {
+				sortBy = m.cfg.FileSortBy
+			}
+			if m.cfg.FileSortAsc != nil {
+				sortAsc = *m.cfg.FileSortAsc
+			}
+		}
+		m.remoteBrowser = NewRemoteBrowser(msg.PeerUID, msg.PeerName, sortBy, sortAsc)
 		m.remoteBrowser.SetSize(m.width, m.height)
 		m.overlay = overlayRemoteBrowser
 		// Send the initial browse request for the root.
 		if m.p2pNode != nil {
 			uid := msg.PeerUID
+			sd := "asc"
+			if !sortAsc {
+				sd = "desc"
+			}
+			sb := sortBy
 			go func() {
 				req := secure.P2PMessage{
-					Type:      secure.MsgTypeBrowseRequest,
-					Text:      "", // root
-					SenderID:  uid,
-					Timestamp: time.Now().Unix(),
+					Type:          secure.MsgTypeBrowseRequest,
+					Text:          "", // root
+					SenderID:      uid,
+					Timestamp:     time.Now().Unix(),
+					BrowseSortBy:  sb,
+					BrowseSortDir: sd,
 				}
 				_ = m.p2pNode.SendMessage(uid, req)
 			}()
@@ -3066,12 +3104,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.p2pNode != nil {
 			uid := msg.PeerUID
 			path := msg.Path
+			sb := msg.SortBy
+			sd := msg.SortDir
 			go func() {
 				req := secure.P2PMessage{
-					Type:      secure.MsgTypeBrowseRequest,
-					Text:      path,
-					SenderID:  uid,
-					Timestamp: time.Now().Unix(),
+					Type:          secure.MsgTypeBrowseRequest,
+					Text:          path,
+					SenderID:      uid,
+					Timestamp:     time.Now().Unix(),
+					BrowseSortBy:  sb,
+					BrowseSortDir: sd,
 				}
 				_ = m.p2pNode.SendMessage(uid, req)
 			}()
@@ -3216,12 +3258,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.p2pNode != nil {
 			if msg.Cleared || (!msg.Enabled && prevEnabled) {
 				// Turning off or clearing → "back"
-				go m.p2pNode.BroadcastStatus("back", "")
+				go m.p2pNode.BroadcastStatus("back", "", m.sharedFolderName())
 				m.isAway = false
 				m.warning = "Away status cleared"
 			} else if msg.Enabled {
 				// Turning on → "away" with message
-				go m.p2pNode.BroadcastStatus("away", msg.Message)
+				go m.p2pNode.BroadcastStatus("away", msg.Message, m.sharedFolderName())
 				m.isAway = true
 				if msg.Message != "" {
 					m.warning = "Away: " + msg.Message
@@ -3373,15 +3415,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case SettingsOpenFileBrowserMsg:
-		m.fileBrowser = NewFileBrowser(FileBrowserConfig{
-			StartDir:    msg.CurrentPath,
-			Title:       "Select Download Folder",
-			ShowFiles:   false,
-			ShowFolders: true,
-			Favorites:   m.cfg.FavoriteFolders,
-		})
+		fbCfg := m.newFileBrowserCfg()
+		fbCfg.StartDir = msg.CurrentPath
+		fbCfg.Title = "Select Download Folder"
+		fbCfg.ShowFolders = true
+		m.fileBrowser = NewFileBrowser(fbCfg)
 		m.fileBrowser.SetSize(m.width, m.height)
 		m.fbPurpose = fbPurposeSettings
+		m.overlay = overlayFileBrowser
+		return m, nil
+
+	case SettingsShareFolderBrowseMsg:
+		startDir := msg.CurrentPath
+		if startDir == "" {
+			startDir, _ = os.UserHomeDir()
+		}
+		fbCfg := m.newFileBrowserCfg()
+		fbCfg.StartDir = startDir
+		fbCfg.Title = "Select Shared Folder"
+		fbCfg.ShowFolders = true
+		m.fileBrowser = NewFileBrowser(fbCfg)
+		m.fileBrowser.SetSize(m.width, m.height)
+		m.fbPurpose = fbPurposeShareFolder
 		m.overlay = overlayFileBrowser
 		return m, nil
 
@@ -3389,6 +3444,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Persist the new favorites list to user config; keep the
 		// browser open so the user can keep working with it.
 		m.cfg.FavoriteFolders = msg.Favorites
+		config.SaveDebounced(m.cfg)
+		return m, nil
+
+	case FileBrowserSortChangedMsg:
+		m.cfg.FileSortBy = msg.SortBy
+		b := msg.SortAsc
+		m.cfg.FileSortAsc = &b
 		config.SaveDebounced(m.cfg)
 		return m, nil
 
@@ -3432,6 +3494,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !msg.IsDir {
 				path := msg.Path
 				return m, func() tea.Msg { return FriendsImportFileMsg{Path: path} }
+			}
+		case fbPurposeShareFolder:
+			if msg.IsDir {
+				m.cfg.SharedFolder = msg.Path
+				if err := config.Save(m.cfg); err != nil {
+					m.warning = "Failed to persist shared folder: " + err.Error()
+				}
+				// Update the P2P node's shared folder lookup.
+				if m.p2pNode != nil {
+					cfgRef := m.cfg
+					m.p2pNode.SharedFolderLookup = func(relativePath string) (string, error) {
+						return secure.ValidateSharedPath(cfgRef.SharedFolder, relativePath)
+					}
+				}
+				m.settings = NewSettingsModel(m.cfg, m.version)
+				m.settings.SetSize(m.width, m.height)
+				m.overlay = overlaySettings
+				return m, nil
 			}
 		}
 		return m, nil
@@ -3844,7 +3924,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case SeedLastSeenMsg:
-		// Establish baseline timestamps without marking anything as unread.
+		debug.Log("[startup] SeedLastSeenMsg: %d timestamps, %d unreads from new channels", len(msg.Timestamps), len(msg.Unread))
 		for id, ts := range msg.Timestamps {
 			if ts != "" {
 				m.lastSeen[id] = ts
@@ -3852,7 +3932,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.channels.SetLatestTimestamps(msg.Timestamps)
 		m.persistLastSeen()
+		if len(msg.Unread) > 0 {
+			for id := range msg.Unread {
+				if m.currentCh != nil && m.currentCh.ID == id {
+					continue
+				}
+				debug.Log("[startup] seed marking %s as unread", id)
+				m.channels.MarkUnread(id)
+			}
+		}
 		return m, nil
+
+	case StartupUnreadCheckMsg:
+		// Legacy single-shot (kept for compatibility).
+		for id := range msg.Unread {
+			if m.currentCh == nil || m.currentCh.ID != id {
+				m.channels.MarkUnread(id)
+			}
+		}
+		return m, nil
+
+	case startupUnreadBatchResult:
+		// Progressive batch: mark unreads immediately, chain next batch.
+		for id := range msg.Unread {
+			if m.currentCh == nil || m.currentCh.ID != id {
+				debug.Log("[startup-unread] marking %s as unread", id)
+				m.channels.MarkUnread(id)
+			}
+		}
+		if msg.done {
+			debug.Log("[startup-unread] all batches done, triggering immediate reconcile")
+			// Trigger an immediate reconcile so channels the user
+			// already read in Slack get cleared without waiting
+			// for the 60s timer.
+			return m, func() tea.Msg { return ReconcileReadStateTickMsg{} }
+		}
+		// Chain the next batch with a tiny delay.
+		return m, func() tea.Msg {
+			time.Sleep(200 * time.Millisecond)
+			return startupUnreadBatch(msg.svc, msg.targets, msg.nextOff)()
+		}
 
 	case ReconcileReadStateTickMsg:
 		// Periodic two-way read-state sync with Slack's server.
@@ -3933,7 +4052,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.warning = "Away (idle)"
 				// Broadcast auto-away to friends.
 				if m.p2pNode != nil {
-					go m.p2pNode.BroadcastStatus("away", "idle")
+					go m.p2pNode.BroadcastStatus("away", "idle", m.sharedFolderName())
 				}
 			}
 		}
@@ -3987,6 +4106,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					localMsg = m.cfg.AwayMsg
 				}
 				senderID := msg.SenderID
+				sf := m.sharedFolderName()
 				go func() {
 					reply := secure.P2PMessage{
 						Type:          secure.MsgTypeStatusUpdate,
@@ -3994,6 +4114,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						SenderID:      senderID,
 						StatusType:    localStatus,
 						StatusMessage: localMsg,
+						SharedFolder:  sf,
 					}
 					_ = m.p2pNode.SendMessage(senderID, reply)
 				}()
@@ -4023,13 +4144,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Text == "__status_update__" {
 			statusType := msg.PubKey   // reused field for routing
 			statusMsg := msg.Multiaddr // reused field for routing
+			// Check if this is a "new connection" (friend was offline).
+			wasOnline := false
 			if m.friendStore != nil {
+				if f := m.friendStore.Get(msg.SenderID); f != nil {
+					wasOnline = f.Online
+				}
 				m.friendStore.SetStatus(msg.SenderID, statusType, statusMsg)
+				m.friendStore.SetSharedFolder(msg.SenderID, msg.SharedFolder)
 				m.channels.SetFriendChannels(m.buildFriendChannels())
 				m.updateFriendStatusDisplay()
 				if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
 					m.setChannelHeader()
 				}
+			}
+			// If the friend just came online (was offline before), reply
+			// with our status so they learn it immediately — the same
+			// logic as the __ping__ reply, but triggered on the first
+			// status_update from a reconnecting friend. Subsequent
+			// status_updates from an already-online friend are NOT
+			// replied to (prevents infinite loop).
+			if !wasOnline && (statusType == "online" || statusType == "back") && m.p2pNode != nil {
+				localStatus := "online"
+				localMsg := ""
+				if m.cfg != nil && m.cfg.AwayEnabled {
+					localStatus = "away"
+					localMsg = m.cfg.AwayMsg
+				}
+				senderID := msg.SenderID
+				sf := m.sharedFolderName()
+				go func() {
+					reply := secure.P2PMessage{
+						Type:          secure.MsgTypeStatusUpdate,
+						Timestamp:     time.Now().Unix(),
+						SenderID:      senderID,
+						StatusType:    localStatus,
+						StatusMessage: localMsg,
+						SharedFolder:  sf,
+					}
+					_ = m.p2pNode.SendMessage(senderID, reply)
+				}()
 			}
 			if m.p2pChan != nil {
 				return m, waitForP2PMsg(m.p2pChan)
@@ -4040,10 +4194,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle browse request: friend wants to list our shared folder.
 		if msg.Text == "__browse_request__" {
 			reqPath := msg.PubKey
+			sortBy := msg.BrowseSortBy
+			sortDir := msg.BrowseSortDir
 			senderID := msg.SenderID
 			if m.p2pNode != nil && m.cfg != nil && m.cfg.SharedFolder != "" {
 				go func() {
-					resp := m.handleBrowseRequest(reqPath)
+					resp := m.handleBrowseRequest(reqPath, sortBy, sortDir)
 					raw, _ := json.Marshal(resp)
 					reply := secure.P2PMessage{
 						Type:      secure.MsgTypeBrowseResponse,
@@ -4734,7 +4890,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			localAwayMsg = m.cfg.AwayMsg
 		}
 		return m, friendPingCmdWithCurrent(
-			m.friendStore, m.p2pNode, "", localStatus, localAwayMsg,
+			m.friendStore, m.p2pNode, "", localStatus, localAwayMsg, m.sharedFolderName(),
 		)
 
 	case FriendRequestSentMsg:
@@ -4811,7 +4967,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			localStatus = "away"
 			localAwayMsg = m.cfg.AwayMsg
 		}
-		return m, friendPingCmdWithCurrent(m.friendStore, m.p2pNode, currentFriend, localStatus, localAwayMsg)
+		return m, friendPingCmdWithCurrent(m.friendStore, m.p2pNode, currentFriend, localStatus, localAwayMsg, m.sharedFolderName())
 
 	case FriendSendResultMsg:
 		// Flip the history entry's Pending flag based on the
@@ -5488,14 +5644,19 @@ func (m *Model) buildSidebarOptionsItems(ch types.Channel) []sidebarOptionsItem 
 		{"Hide Channel", SidebarActionHide},
 		{"Rename Channel", SidebarActionRename},
 	}
-	// Friend channels: contact card viewer + browse + remove.
+	// Friend channels: contact card viewer + browse (if shared) + remove.
 	if ch.IsFriend {
 		items = append(items, sidebarOptionsItem{
 			label: "View Contact Info", action: SidebarActionViewContact,
 		})
-		items = append(items, sidebarOptionsItem{
-			label: "Browse Shared Files", action: SidebarActionBrowseFiles,
-		})
+		// Only offer "Browse Shared Files" if the friend has a shared folder.
+		if m.friendStore != nil {
+			if f := m.friendStore.Get(ch.UserID); f != nil && f.HasSharedFolder {
+				items = append(items, sidebarOptionsItem{
+					label: "Browse Shared Files", action: SidebarActionBrowseFiles,
+				})
+			}
+		}
 		items = append(items, sidebarOptionsItem{
 			label: "Remove Friend", action: SidebarActionRemoveFriend,
 		})

@@ -1415,14 +1415,9 @@ func connTypeOrDefault(s string) string {
 }
 
 func (m FriendsConfigModel) handleEditFriendKey(msg tea.KeyMsg) (FriendsConfigModel, tea.Cmd) {
-	// Virtual row layout (after the field rows):
-	//   len(editFields)     → [ Test Connection ]
-	//   len(editFields)+1   → [ Clear Chat History ]
-	//   len(editFields)+2   → [ Friends Config Menu ]   (standalone only)
-	maxIdx := len(m.editFields) + 1
-	if m.editFriendStandalone {
-		maxIdx = len(m.editFields) + 2
-	}
+	vRows := m.editFriendVirtualRows()
+	maxIdx := len(m.editFields) + len(vRows) - 1
+
 	// Active confirmation prompt: y/Enter confirms the destructive
 	// action, anything else cancels it.
 	if m.pendingClearHistory != "" {
@@ -1457,21 +1452,10 @@ func (m FriendsConfigModel) handleEditFriendKey(msg tea.KeyMsg) (FriendsConfigMo
 			}
 		}
 	case "enter":
-		// Test Connection virtual row (both modes).
-		if m.editSelected == len(m.editFields) {
-			return m, m.runTestConnection()
-		}
-		// Clear Chat History virtual row (both modes).
-		if m.editSelected == len(m.editFields)+1 {
-			return m, m.requestClearChatHistory()
-		}
-		// Standalone "Friends Config Menu" navigation row.
-		if m.editFriendStandalone && m.editSelected == len(m.editFields)+2 {
-			m.page = fcPageMenu
-			m.editFriend = nil
-			m.editFriendStandalone = false
-			m.editSelected = 0
-			return m, nil
+		// Virtual row dispatch.
+		vIdx := m.editSelected - len(m.editFields)
+		if vIdx >= 0 && vIdx < len(vRows) {
+			return m.dispatchVirtualRow(vRows[vIdx].action)
 		}
 		f := m.editFields[m.editSelected]
 		// Read-only fields: silently ignore (no message — the user can
@@ -1570,6 +1554,114 @@ func (m *FriendsConfigModel) doClearChatHistory(uid string) tea.Cmd {
 		return FriendChatHistoryClearedMsg{FriendUserID: uid}
 	}
 	return tea.Batch(statusCmd, notifyCmd)
+}
+
+// editFriendVirtualAction identifies a virtual row action in the
+// Edit Friend page.
+type editFriendVirtualAction int
+
+const (
+	vaCopyProfile editFriendVirtualAction = iota
+	vaBrowseShared
+	vaTestConnection
+	vaClearHistory
+	vaFriendsMenu
+)
+
+// editFriendVRow describes one virtual (non-field) row in the
+// Edit Friend page.
+type editFriendVRow struct {
+	label  string
+	desc   string
+	action editFriendVirtualAction
+}
+
+// editFriendVirtualRows builds the list of virtual rows for the
+// current friend, conditional on friend state and overlay mode.
+func (m FriendsConfigModel) editFriendVirtualRows() []editFriendVRow {
+	rows := []editFriendVRow{
+		{"[ Copy Friend Profile ]", "Copy this friend's profile as JSON to clipboard", vaCopyProfile},
+	}
+	if m.editFriend != nil && m.editFriend.HasSharedFolder {
+		name := m.editFriend.SharedFolderName
+		if name == "" {
+			name = "shared"
+		}
+		rows = append(rows, editFriendVRow{
+			"[ Browse Shared Files: " + name + " ]",
+			"Open this friend's shared folder in the remote file browser",
+			vaBrowseShared,
+		})
+	}
+	rows = append(rows,
+		editFriendVRow{"[ Test Connection ]", "Dial the friend with the current multiaddr and report online status", vaTestConnection},
+		editFriendVRow{"[ Clear Chat History ]", "Wipe the locally-saved chat history file for this friend (confirmation required)", vaClearHistory},
+	)
+	if m.editFriendStandalone {
+		rows = append(rows, editFriendVRow{"[ Friends Config Menu ]", "Open the main Friends Config menu", vaFriendsMenu})
+	}
+	return rows
+}
+
+// dispatchVirtualRow handles Enter on a virtual row.
+func (m FriendsConfigModel) dispatchVirtualRow(action editFriendVirtualAction) (FriendsConfigModel, tea.Cmd) {
+	switch action {
+	case vaCopyProfile:
+		return m, m.copyFriendProfile()
+	case vaBrowseShared:
+		if m.editFriend != nil {
+			friendID := m.editFriend.UserID
+			friendName := m.editFriend.Name
+			return m, func() tea.Msg {
+				return RemoteBrowseOpenMsg{PeerUID: friendID, PeerName: friendName}
+			}
+		}
+	case vaTestConnection:
+		return m, m.runTestConnection()
+	case vaClearHistory:
+		return m, m.requestClearChatHistory()
+	case vaFriendsMenu:
+		m.page = fcPageMenu
+		m.editFriend = nil
+		m.editFriendStandalone = false
+		m.editSelected = 0
+		return m, nil
+	}
+	return m, nil
+}
+
+// copyFriendProfile marshals the friend being edited to JSON and copies
+// it to the system clipboard.
+func (m *FriendsConfigModel) copyFriendProfile() tea.Cmd {
+	if m.editFriend == nil {
+		return m.setStatusMessage("No friend selected", 0)
+	}
+	type friendProfile struct {
+		Name           string `json:"name,omitempty"`
+		Email          string `json:"email,omitempty"`
+		SlackerID      string `json:"slacker_id,omitempty"`
+		PublicKey      string `json:"public_key,omitempty"`
+		Multiaddr      string `json:"multiaddr,omitempty"`
+		ConnectionType string `json:"connection_type,omitempty"`
+		UserID         string `json:"user_id,omitempty"`
+	}
+	profile := friendProfile{
+		Name:           m.editFriend.Name,
+		Email:          m.editFriend.Email,
+		SlackerID:      m.editFriend.SlackerID,
+		PublicKey:       m.editFriend.PublicKey,
+		Multiaddr:      m.editFriend.Multiaddr,
+		ConnectionType: m.editFriend.ConnectionType,
+		UserID:         m.editFriend.UserID,
+	}
+	data, err := json.MarshalIndent(profile, "", "  ")
+	if err != nil {
+		return m.setStatusMessage("Failed to marshal profile: "+err.Error(), 0)
+	}
+	if copyToClipboard(string(data)) {
+		return m.setStatusMessage("Friend profile copied to clipboard", 0)
+	}
+	return m.setStatusMessage("Clipboard unavailable — could not copy", 0)
 }
 
 // runTestConnection validates that the friend's Multiaddr and Public
@@ -1936,12 +2028,8 @@ func (m FriendsConfigModel) viewEditFriendStandalone(title string) string {
 	b.WriteString(titleStyle.Render(title))
 	b.WriteString("\n\n")
 
-	// fields + Test Connection + Clear Chat History (always) +
-	// Friends Config Menu (standalone only)
-	totalRows := len(m.editFields) + 2
-	if m.editFriendStandalone {
-		totalRows = len(m.editFields) + 3
-	}
+	vRows := m.editFriendVirtualRows()
+	totalRows := len(m.editFields) + len(vRows)
 	maxVisible := m.height - 14
 	if maxVisible < 3 {
 		maxVisible = 3
@@ -1977,6 +2065,10 @@ func (m FriendsConfigModel) viewEditFriendStandalone(title string) string {
 				if val == "" {
 					val = "(empty)"
 				}
+				// Abbreviate long values (multiaddr, public key) when not selected.
+				if i != m.editSelected && (f.key == "multiaddr" || f.key == "public_key") && len(val) > 40 {
+					val = val[:20] + "…" + val[len(val)-17:]
+				}
 				b.WriteString(valueStyle.Render(val))
 			}
 			b.WriteString("\n")
@@ -1988,22 +2080,16 @@ func (m FriendsConfigModel) viewEditFriendStandalone(title string) string {
 			}
 			continue
 		}
-		// Virtual rows in order:
-		//   N    → [ Test Connection ]
-		//   N+1  → [ Clear Chat History ]
-		//   N+2  → [ Friends Config Menu ]   (standalone only)
-		var label, desc string
-		switch i {
-		case len(m.editFields):
-			label = "[ Test Connection ]"
-			desc = "Dial the friend with the current multiaddr and report online status"
-		case len(m.editFields) + 1:
-			label = "[ Clear Chat History ]"
-			desc = "Wipe the locally-saved chat history file for this friend (confirmation required — back it up first if you want to keep it)"
-		default:
-			label = "[ Friends Config Menu ]"
-			desc = "Open the main Friends Config menu"
+		// Virtual button rows (built dynamically).
+		vIdx := i - len(m.editFields)
+		if vIdx == 0 {
+			b.WriteString("\n") // empty separator row before buttons
 		}
+		if vIdx < 0 || vIdx >= len(vRows) {
+			continue
+		}
+		label := vRows[vIdx].label
+		desc := vRows[vIdx].desc
 		if i == m.editSelected {
 			b.WriteString(selectedItemStyle.Render("> " + label))
 		} else {
@@ -2015,6 +2101,7 @@ func (m FriendsConfigModel) viewEditFriendStandalone(title string) string {
 			b.WriteString(descStyle.Render(desc))
 			b.WriteString("\n")
 		}
+		b.WriteString("\n") // spacing between buttons
 	}
 
 	b.WriteString("\n")

@@ -1158,7 +1158,7 @@ func (m *ThemeColorPickerModel) View() string {
 		if previewBg != "" {
 			previewStyle = previewStyle.Background(lipgloss.Color(previewBg))
 		} else {
-			previewStyle = previewStyle.Background(lipgloss.Color("236"))
+			previewStyle = previewStyle.Background(ColorSubtleBg)
 		}
 		if m.bold {
 			previewStyle = previewStyle.Bold(true)

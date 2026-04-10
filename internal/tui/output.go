@@ -489,7 +489,7 @@ func (o *OutputViewModel) rebuildRender() {
 	selStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
 	snippetStyle := lipgloss.NewStyle().Foreground(ColorAccent).Italic(true)
 	snippetSelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("0")).
+		Foreground(ColorInvertedFg).
 		Background(ColorAccent).
 		Bold(true)
 

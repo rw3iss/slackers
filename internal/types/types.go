@@ -5,13 +5,14 @@ import "time"
 
 // Channel represents a Slack channel, DM, or group conversation.
 type Channel struct {
-	ID        string
-	Name      string
-	IsDM      bool
-	IsPrivate bool
-	IsGroup   bool
-	IsFriend  bool
-	UserID    string // for DMs: the other user's ID
+	ID          string
+	Name        string
+	IsDM        bool
+	IsPrivate   bool
+	IsGroup     bool
+	IsFriend    bool
+	UserID      string // for DMs: the other user's ID
+	UnreadCount int    // populated from Slack at load time (DMs/mpims from conversations.list)
 }
 
 // FileInfo represents an attached file.
