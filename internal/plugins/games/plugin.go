@@ -75,8 +75,8 @@ func (p *GamesPlugin) Commands() []*commands.Command {
 						Status: commands.StatusOK,
 						Title:  "Mini Games",
 						Sections: []commands.Section{
-							{Text: "snake  — Classic snake game", Selectable: true, Title: "snake"},
-							{Text: "tetris — Block stacking puzzle (coming soon)", Selectable: true, Title: "tetris"},
+							{Text: "snake  — Classic snake game", Selectable: true, Title: "snake", RunCommand: "/games snake"},
+							{Text: "tetris — Block stacking puzzle", Selectable: true, Title: "tetris", RunCommand: "/games tetris"},
 						},
 					}
 				default:

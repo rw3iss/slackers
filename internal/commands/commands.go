@@ -167,6 +167,10 @@ type Section struct {
 	// informational text the user cannot cursor to. Defaults
 	// to true.
 	Selectable bool
+	// RunCommand, when non-empty, is executed as a slash command
+	// when the user presses Enter on this section (instead of
+	// copying to clipboard). Example: "/games snake".
+	RunCommand string
 }
 
 // Result is the value a command returns to its caller.

@@ -61,10 +61,15 @@ type OutputCloseMsg struct{}
 // Output view. Items are produced either from the simple
 // Body-string path (one item containing the whole body) or from
 // the commands.Result.Sections structured path.
+// outputRunCommandMsg is dispatched when the user selects a section
+// that has a RunCommand set (instead of copying to clipboard).
+type outputRunCommandMsg struct{ Command string }
+
 type outputItem struct {
 	title      string
 	text       string
 	selectable bool
+	runCommand string // if set, Enter runs this command instead of copying
 	// snippets are the code spans parsed out of text (backtick
 	// inline or triple-backtick fenced). Each snippet records
 	// its raw copy-paste payload; the highlight substitution
@@ -216,6 +221,7 @@ func sectionsToItems(sections []commands.Section) []outputItem {
 			title:      s.Title,
 			text:       s.Text,
 			selectable: s.Selectable,
+			runCommand: s.RunCommand,
 		}
 		it.snippets = parseSnippets(s.Text)
 		out = append(out, it)
@@ -326,9 +332,18 @@ func (o OutputViewModel) Update(msg tea.Msg) (OutputViewModel, tea.Cmd) {
 			}
 			return o, nil
 		case "c", "enter":
+			// If the selected item has a RunCommand, execute it
+			// instead of copying to clipboard.
+			if m.String() == "enter" && o.selectedItem >= 0 && o.selectedItem < len(o.items) {
+				item := o.items[o.selectedItem]
+				if item.runCommand != "" {
+					cmd := item.runCommand
+					return o, func() tea.Msg {
+						return outputRunCommandMsg{Command: cmd}
+					}
+				}
+			}
 			// Copy selected item / snippet to clipboard.
-			// Both 'c' and Enter trigger the copy so users
-			// can use whichever feels more natural.
 			if text := o.SelectedCopyText(); text != "" {
 				if copyToClipboard(text) {
 					return o, func() tea.Msg {

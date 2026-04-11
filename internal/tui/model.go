@@ -3163,6 +3163,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.outputActive = false
 		return m, nil
 
+	case outputRunCommandMsg:
+		// A section with RunCommand was selected — execute it.
+		m.outputActive = false
+		if m.cmdRegistry != nil && msg.Command != "" {
+			res := m.cmdRegistry.Run(msg.Command, &m)
+			cmd := m.applyCommandResult(res)
+			return m, cmd
+		}
+		return m, nil
+
 	case outputCopiedMsg:
 		// Forwarded from OutputViewModel when the user hits 'c'
 		// on a selected item or snippet. Surface the feedback
