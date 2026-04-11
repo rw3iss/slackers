@@ -34,10 +34,13 @@ type SettingsShareFolderBrowseMsg struct{ CurrentPath string }
 // SettingsModel provides an interactive config editor overlay.
 type SettingsModel struct {
 	fields       []settingsField
+	filtered     []int // indices into fields matching the filter
 	selected     int
 	scrollOffset int
 	editing      bool
+	filtering    bool // true when the filter input has focus
 	input        textinput.Model
+	filter       textinput.Model
 	cfg          *config.Config
 	width        int
 	height       int
@@ -63,21 +66,39 @@ func header(label string) settingsField {
 // `from`, walking in direction `dir` (+1 or -1). Returns `from` if there
 // are no other selectable rows. Wraps around at the ends.
 func (m SettingsModel) nextSelectable(from, dir int) int {
-	n := len(m.fields)
-	if n == 0 {
-		return 0
+	indices := m.visibleFieldIndices()
+	if len(indices) == 0 {
+		return from
 	}
-	idx := from
-	for i := 0; i < n; i++ {
-		idx += dir
-		if idx < 0 {
-			idx = n - 1
+	// Find current position in the filtered list.
+	pos := -1
+	for i, idx := range indices {
+		if idx == from {
+			pos = i
+			break
 		}
-		if idx >= n {
-			idx = 0
+	}
+	if pos < 0 {
+		// Current selection not in filtered list — go to first.
+		for _, idx := range indices {
+			if !m.fields[idx].isHeader {
+				return idx
+			}
 		}
-		if !m.fields[idx].isHeader {
-			return idx
+		return from
+	}
+	// Walk in direction, skipping headers.
+	n := len(indices)
+	for step := 0; step < n; step++ {
+		pos += dir
+		if pos < 0 {
+			pos = n - 1
+		}
+		if pos >= n {
+			pos = 0
+		}
+		if !m.fields[indices[pos]].isHeader {
+			return indices[pos]
 		}
 	}
 	return from
@@ -108,7 +129,13 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 	ti := textinput.New()
 	ti.CharLimit = 64
 
+	fi := textinput.New()
+	fi.Placeholder = "Filter settings..."
+	fi.Prompt = "🔍 "
+	fi.CharLimit = 32
+
 	return SettingsModel{
+		filter: fi,
 		fields: []settingsField{
 			// ───── Appearance ─────
 			header("Appearance"),
@@ -466,6 +493,43 @@ func maskToken(t string) string {
 	return t[:12] + "..."
 }
 
+// rebuildFiltered updates the filtered indices based on the filter text.
+func (m *SettingsModel) rebuildFiltered() {
+	q := strings.TrimSpace(strings.ToLower(m.filter.Value()))
+	if q == "" {
+		m.filtered = nil // nil = show all
+		return
+	}
+	m.filtered = nil
+	for i, f := range m.fields {
+		if f.isHeader {
+			continue
+		}
+		if strings.Contains(strings.ToLower(f.label), q) ||
+			strings.Contains(strings.ToLower(f.description), q) ||
+			strings.Contains(strings.ToLower(f.key), q) {
+			m.filtered = append(m.filtered, i)
+		}
+	}
+	// Reset selection.
+	if len(m.filtered) > 0 {
+		m.selected = m.filtered[0]
+	}
+	m.scrollOffset = 0
+}
+
+// visibleFieldIndices returns the field indices to show.
+func (m SettingsModel) visibleFieldIndices() []int {
+	if m.filtered != nil {
+		return m.filtered
+	}
+	indices := make([]int, len(m.fields))
+	for i := range m.fields {
+		indices[i] = i
+	}
+	return indices
+}
+
 // SetSize sets the overlay dimensions.
 func (m *SettingsModel) SetSize(w, h int) {
 	m.width = w
@@ -492,10 +556,35 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 }
 
 func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
+	// Filter input mode.
+	if m.filtering {
+		switch msg.String() {
+		case "esc":
+			if m.filter.Value() != "" {
+				m.filter.SetValue("")
+				m.rebuildFiltered()
+			} else {
+				m.filtering = false
+				m.filter.Blur()
+			}
+			return m, nil
+		case "down", "enter":
+			m.filtering = false
+			m.filter.Blur()
+			return m, nil
+		case "up":
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.filter, cmd = m.filter.Update(msg)
+		m.rebuildFiltered()
+		return m, cmd
+	}
+
 	switch msg.String() {
-	case "up", "k":
+	case "up":
 		m.selected = m.nextSelectable(m.selected, -1)
-	case "down", "j":
+	case "down":
 		m.selected = m.nextSelectable(m.selected, +1)
 	case "pgup":
 		for i := 0; i < 5; i++ {
@@ -509,6 +598,11 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		m.selected = m.firstSelectable()
 	case "end":
 		m.selected = m.lastSelectable()
+	case "/":
+		// Focus the filter input.
+		m.filtering = true
+		m.filter.Focus()
+		return m, nil
 	case "enter", "tab":
 		f := m.fields[m.selected]
 
@@ -900,6 +994,13 @@ func (m SettingsModel) View() string {
 	var headerBuf strings.Builder
 	headerBuf.WriteString(titleStyle.Render("Settings") + strings.Repeat(" ", verPad) + verStyle.Render(verText))
 	headerBuf.WriteString("\n\n")
+	// Filter bar.
+	filterPrefix := "  "
+	if m.filtering {
+		filterPrefix = "> "
+	}
+	headerBuf.WriteString(filterPrefix + m.filter.View())
+	headerBuf.WriteString("\n\n")
 
 	// Height is inner content height; lipgloss adds 4 (border + padding),
 	// so the rendered box is m.height - 1 (one row of breathing room at the
@@ -928,25 +1029,36 @@ func (m SettingsModel) View() string {
 	if available < 3 {
 		available = 3
 	}
+	// Build the list of field indices to show.
+	fieldIndices := m.visibleFieldIndices()
 	visibleFields := available
-	if visibleFields > len(m.fields) {
-		visibleFields = len(m.fields)
+	if visibleFields > len(fieldIndices) {
+		visibleFields = len(fieldIndices)
+	}
+
+	// Map selected to position in filtered list.
+	selPos := 0
+	for i, idx := range fieldIndices {
+		if idx == m.selected {
+			selPos = i
+			break
+		}
 	}
 
 	// Auto-scroll to keep selected in view.
-	if m.selected < m.scrollOffset {
-		m.scrollOffset = m.selected
+	if selPos < m.scrollOffset {
+		m.scrollOffset = selPos
 	}
-	if m.selected >= m.scrollOffset+visibleFields {
-		m.scrollOffset = m.selected - visibleFields + 1
+	if selPos >= m.scrollOffset+visibleFields {
+		m.scrollOffset = selPos - visibleFields + 1
 	}
 	if m.scrollOffset < 0 {
 		m.scrollOffset = 0
 	}
 
 	end := m.scrollOffset + visibleFields
-	if end > len(m.fields) {
-		end = len(m.fields)
+	if end > len(fieldIndices) {
+		end = len(fieldIndices)
 	}
 
 	groupHeaderStyle := lipgloss.NewStyle().
@@ -959,13 +1071,14 @@ func (m SettingsModel) View() string {
 	bodyBuf := &b
 	bodyBuf.Reset()
 
-	for i := m.scrollOffset; i < end; i++ {
+	for vi := m.scrollOffset; vi < end; vi++ {
+		i := fieldIndices[vi]
 		f := m.fields[i]
 
 		// Group separator: blank line above (skip for the first visible row),
 		// then a bold underlined label, no value, no description.
 		if f.isHeader {
-			if i > m.scrollOffset {
+			if vi > m.scrollOffset {
 				b.WriteString("\n")
 			}
 			b.WriteString("  ")
@@ -1024,7 +1137,7 @@ func (m SettingsModel) View() string {
 		if len(f.options) > 0 {
 			bodyBuf.WriteString(dimStyle.Render("  Enter/Tab: cycle | Esc/Ctrl-S: close"))
 		} else {
-			bodyBuf.WriteString(dimStyle.Render("  Enter: edit | Esc/Ctrl-S: close"))
+			bodyBuf.WriteString(dimStyle.Render("  /: filter | Enter: edit | Esc/Ctrl-S: close"))
 		}
 	}
 
