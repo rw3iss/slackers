@@ -564,7 +564,7 @@ func (m FileBrowserModel) updateFiles(msg tea.KeyMsg) (FileBrowserModel, tea.Cmd
 		return m, func() tea.Msg {
 			return FileBrowserSelectMsg{Path: path, IsDir: false}
 		}
-	case "tab", "right":
+	case "tab", "right", " ":
 		if len(fe) == 0 {
 			return m, nil
 		}
@@ -862,7 +862,7 @@ func (m *FileBrowserModel) View() string {
 	case fbPaneFilter:
 		lines = append(lines, dimStyle.Render("  type to filter | ↑: favorites | ↓/Enter: files | Alt+S: sort | Alt+D: dir | Esc: clear/close"))
 	default:
-		lines = append(lines, dimStyle.Render("  ↑/↓: nav | Enter: open/select | Ctrl+↑: parent | Ctrl+F: ★ | Alt+S: sort | Alt+D: dir | Esc: close"))
+		lines = append(lines, dimStyle.Render("  ↑/↓: nav | Enter: open | →/Space: select | Ctrl+↑: parent | Ctrl+F: ★ | Alt+S: sort | Alt+D: dir | Esc: close"))
 	}
 
 	content := strings.Join(lines, "\n")
