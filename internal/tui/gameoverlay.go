@@ -53,7 +53,7 @@ func defaultGameSettings() GameSettings {
 		SnakeCols:     30,
 		SnakeRows:     20,
 		TetrisCols:    30,
-		TetrisRows:    20,
+		TetrisRows:    30,
 		BlockScale:    1,
 	}
 }
