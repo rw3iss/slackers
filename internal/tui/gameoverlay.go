@@ -67,10 +67,12 @@ type GameOverlayModel struct {
 	width    int
 	height   int
 	settings GameSettings
-	// Input: store pending action, applied on next tick.
-	// This prevents buffered key repeats from "throwing" pieces —
-	// only the most recent input before each tick matters.
-	pendingTetrisAction string // "left", "right", "rotate", "down", "drop"
+	// Input: store the most recent movement key + when it was last
+	// pressed. On each tick, the action fires IF it was refreshed
+	// recently (within 150ms). Holding a key keeps refreshing the
+	// timestamp so the action repeats; releasing lets it go stale.
+	pendingTetrisAction string
+	pendingTetrisAt     time.Time
 	// Settings menu state.
 	showSettings   bool
 	settingSel     int // 0=size, 1=speed, 2=save, 3=cancel
@@ -278,22 +280,25 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 				}
 			}
 			if m.tetris != nil {
-				// Store the action — applied on the next tick.
-				// This prevents buffered key repeats from "throwing"
-				// pieces after the key is released. Only the most
-				// recent input before each tick takes effect.
+				// Store the action + refresh the timestamp. The tick
+				// handler only applies the action if the timestamp is
+				// fresh (key still held). Releasing the key = no more
+				// refreshes = action goes stale = movement stops.
+				now := time.Now()
 				switch key {
 				case "left", "a":
 					m.pendingTetrisAction = "left"
+					m.pendingTetrisAt = now
 				case "right", "d":
 					m.pendingTetrisAction = "right"
+					m.pendingTetrisAt = now
 				case "up", "w":
 					m.pendingTetrisAction = "rotate"
+					m.pendingTetrisAt = now
 				case "down", "s":
 					m.pendingTetrisAction = "down"
+					m.pendingTetrisAt = now
 				case "enter":
-					// Hard drop executes immediately — it's a
-					// one-shot action, not a held key.
 					m.tetris.Drop()
 				}
 			}
@@ -314,20 +319,24 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			}
 		}
 		if m.tetris != nil {
-			// Apply the most recent pending input, then clear it.
-			// Only one action per tick — buffered repeats are
-			// overwritten, so releasing the key = no more actions.
-			switch m.pendingTetrisAction {
-			case "left":
-				m.tetris.MoveLeft()
-			case "right":
-				m.tetris.MoveRight()
-			case "rotate":
-				m.tetris.Rotate()
-			case "down":
-				m.tetris.Tick() // soft drop (extra tick)
+			// Apply the pending action only if the timestamp is
+			// fresh — meaning the key is still being held (terminal
+			// keeps sending repeats that refresh the timestamp).
+			// 150ms staleness window covers ~3 tick intervals.
+			if m.pendingTetrisAction != "" && time.Since(m.pendingTetrisAt) < 150*time.Millisecond {
+				switch m.pendingTetrisAction {
+				case "left":
+					m.tetris.MoveLeft()
+				case "right":
+					m.tetris.MoveRight()
+				case "rotate":
+					m.tetris.Rotate()
+				case "down":
+					m.tetris.Tick() // soft drop (extra tick)
+				}
+			} else {
+				m.pendingTetrisAction = ""
 			}
-			m.pendingTetrisAction = ""
 			m.tetris.Tick()
 			if m.tetris.IsGameOver() {
 				if m.tetris.Score() > m.settings.TetrisHighScore {
