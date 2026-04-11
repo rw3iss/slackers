@@ -335,6 +335,7 @@ func (m *Model) recordFriendRequest(senderID, senderName, pubKey, multiaddr stri
 	if m.notifStore == nil {
 		return
 	}
+	debug.Log("[notif] recordFriendRequest from=%s name=%s", senderID, senderName)
 	m.notifStore.Add(notifications.Notification{
 		Type:            notifications.TypeFriendRequest,
 		ChannelID:       "friend:" + senderID,

@@ -2345,6 +2345,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.messages.RemovePendingMatching(evMsg.Text)
 				m.messages.AppendMessage(evMsg)
 			} else {
+				debug.Log("[notif] socket event: unread msg in channel=%s from=%s text=%q",
+					evMsg.ChannelID, evMsg.UserID, truncateStr(evMsg.Text, 50))
 				m.channels.MarkUnread(evMsg.ChannelID)
 				// Record an unread-message notification.
 				userName := evMsg.UserName
@@ -2494,10 +2496,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				refreshCurrent = true
 				continue
 			}
+			debug.Log("[notif] poll detected unread channel=%s bg=%v", id, msg.IsBackground)
 			m.channels.MarkUnread(id)
 			newUnread++
 		}
 		if newUnread > 0 && m.cfg.Notifications {
+			debug.Log("[notif] BELL: %d new unread channels from poll", newUnread)
 			sendNotification("multiple channels", newUnread)
 			setWindowUrgent()
 		}

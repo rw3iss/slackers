@@ -3,11 +3,14 @@ package tui
 import (
 	"fmt"
 	"os"
+
+	"github.com/rw3iss/slackers/internal/debug"
 )
 
 // sendNotification emits terminal escape sequences to alert the user of new messages.
 // It uses BEL (works everywhere) and OSC 9 (desktop notification on modern terminals).
 func sendNotification(channelName string, messageCount int) {
+	debug.Log("[notif] sendNotification: channel=%s count=%d", channelName, messageCount)
 	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
 	if err != nil {
 		return
@@ -28,6 +31,7 @@ func sendNotification(channelName string, messageCount int) {
 
 // setWindowUrgent sets the terminal urgency hint so the taskbar/tab flashes.
 func setWindowUrgent() {
+	debug.Log("[notif] setWindowUrgent")
 	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
 	if err != nil {
 		return

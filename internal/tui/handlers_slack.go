@@ -549,6 +549,8 @@ func (m *Model) recordUnreadMessage(channelID, messageID, userID, userName, text
 	if m.notifStore == nil {
 		return
 	}
+	debug.Log("[notif] recordUnreadMessage ch=%s msgID=%s user=%s name=%s text=%q",
+		channelID, messageID, userID, userName, truncateStr(text, 40))
 	m.notifStore.Add(notifications.Notification{
 		Type:      notifications.TypeUnreadMessage,
 		ChannelID: channelID,
@@ -559,11 +561,20 @@ func (m *Model) recordUnreadMessage(channelID, messageID, userID, userName, text
 	})
 }
 
+// truncateStr truncates a string to maxLen, adding "…" if truncated.
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "…"
+}
+
 // recordReaction drops a TypeReaction notification.
 func (m *Model) recordReaction(channelID, messageID, reactorID, reactorName, emoji, targetText string) {
 	if m.notifStore == nil {
 		return
 	}
+	debug.Log("[notif] recordReaction ch=%s reactor=%s emoji=%s", channelID, reactorName, emoji)
 	m.notifStore.Add(notifications.Notification{
 		Type:             notifications.TypeReaction,
 		ChannelID:        channelID,
