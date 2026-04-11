@@ -90,6 +90,11 @@ func (m *GameOverlayModel) initGame() {
 		maxH = 8
 	}
 
+	// Base snake board size at 1.0x scale. The multiplier is always
+	// applied to these constants, never to the current board size.
+	const snakeBaseW = 60
+	const snakeBaseH = 30
+
 	switch m.gameName {
 	case "snake":
 		var w, h int
@@ -101,8 +106,8 @@ func (m *GameOverlayModel) initGame() {
 			if sm <= 0 {
 				sm = 1.0
 			}
-			w = int(float64(270) * sm)
-			h = int(float64(135) * sm)
+			w = int(float64(snakeBaseW) * sm)
+			h = int(float64(snakeBaseH) * sm)
 		}
 		// Clamp to available space.
 		if w > maxW {
