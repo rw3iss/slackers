@@ -363,7 +363,7 @@ func (m GameOverlayModel) buildSettingItems() []settingItem {
 		items = append(items,
 			settingItem{key: "cols", label: "Columns", value: fmt.Sprintf("%d", m.settings.TetrisCols), desc: "Board width in logical cells (4-60)"},
 			settingItem{key: "rows", label: "Rows", value: fmt.Sprintf("%d", m.settings.TetrisRows), desc: "Board height in logical cells (6-80)"},
-			settingItem{key: "blockscale", label: "Block Scale", value: bsVal, desc: "Render size per block: 1 = normal, 2 = double"},
+			settingItem{key: "blockscale", label: "Block Scale", value: bsVal, desc: "←/→ to change: 1 = normal, 2 = double", toggle: true},
 		)
 	}
 	hvLabel := "off"
@@ -414,6 +414,19 @@ func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd)
 		if m.settingSel < maxSel {
 			m.settingSel++
 		}
+	case "left", "right":
+		if m.settingSel >= 0 && m.settingSel < len(items) {
+			item := items[m.settingSel]
+			if item.key == "blockscale" {
+				if key == "left" && m.settings.BlockScale > 1 {
+					m.settings.BlockScale = 1
+				} else if key == "right" && m.settings.BlockScale < 2 {
+					m.settings.BlockScale = 2
+				}
+			} else if item.key == "halvevert" {
+				m.settings.HalveVertical = !m.settings.HalveVertical
+			}
+		}
 	case "enter":
 		if m.settingSel >= 0 && m.settingSel < len(items) {
 			item := items[m.settingSel]
@@ -433,8 +446,12 @@ func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd)
 					m.settingInput = fmt.Sprintf("%d", m.settings.TetrisRows)
 				}
 			case "blockscale":
-				m.settingEditing = true
-				m.settingInput = fmt.Sprintf("%d", m.settings.BlockScale)
+				// Toggle between 1 and 2.
+				if m.settings.BlockScale >= 2 {
+					m.settings.BlockScale = 1
+				} else {
+					m.settings.BlockScale = 2
+				}
 			case "halvevert":
 				m.settings.HalveVertical = !m.settings.HalveVertical
 			case "speed":
@@ -669,9 +686,21 @@ func (m GameOverlayModel) renderSettings() string {
 		}
 
 		if item.value != "" {
-			val := valStyle.Render(item.value)
-			if m.settingEditing && i == m.settingSel {
+			var val string
+			if item.key == "blockscale" && i == m.settingSel {
+				// Horizontal selector: ◀ 1  2 ▶
+				opt1Style := dimStyle
+				opt2Style := dimStyle
+				if m.settings.BlockScale <= 1 {
+					opt1Style = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+				} else {
+					opt2Style = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+				}
+				val = "◀ " + opt1Style.Render("1") + "  " + opt2Style.Render("2") + " ▶"
+			} else if m.settingEditing && i == m.settingSel {
 				val = lipgloss.NewStyle().Foreground(ColorHighlight).Bold(true).Render(m.settingInput + "▌")
+			} else {
+				val = valStyle.Render(item.value)
 			}
 			b.WriteString(cursor + style.Render(item.label+": ") + val)
 		} else {
