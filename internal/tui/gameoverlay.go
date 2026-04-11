@@ -229,23 +229,17 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			return m.updateSettings(key)
 		}
 
-		// Throttle game movement keys: max 1 input per 30ms,
-		// max 5 queued inputs per window. Control keys (ctrl+*,
-		// p, r, esc) bypass throttling.
+		// Input pool: max 2 pending movement commands. New inputs
+		// are dropped while the pool is full. The pool drains by 1
+		// on each game tick, so held keys produce a steady stream
+		// without flooding. Control keys bypass the pool.
 		isControl := key == "ctrl+q" || key == "ctrl+s" || key == "p" ||
 			key == "r" || key == "esc" || key == " "
 		if !isControl && !m.paused {
-			now := time.Now()
-			elapsed := now.Sub(m.lastInput)
-			if elapsed < 30*time.Millisecond {
-				m.inputQueue++
-				if m.inputQueue > 5 {
-					return m, nil // drop excess input
-				}
-			} else {
-				m.inputQueue = 0
+			if m.inputQueue >= 2 {
+				return m, nil // pool full, drop input
 			}
-			m.lastInput = now
+			m.inputQueue++
 		}
 
 		// Universal game controls.
@@ -315,6 +309,11 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 	case gameTickMsg:
 		if m.paused || m.showSettings {
 			return m, nil
+		}
+		// Drain one slot from the input pool so held keys
+		// produce a steady stream tied to the game speed.
+		if m.inputQueue > 0 {
+			m.inputQueue--
 		}
 		if m.snake != nil {
 			m.snake.Tick()
