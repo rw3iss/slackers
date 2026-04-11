@@ -42,5 +42,6 @@
   "shortcuts_editor": ["alt+k"],
   "command_list": ["alt+c"],
   "away_status": ["alt+a"],
-  "downloads": ["alt+d"]
+  "downloads": ["alt+d"],
+  "open_downloads_folder": ["alt+o"]
 }

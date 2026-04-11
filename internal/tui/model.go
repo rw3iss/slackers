@@ -1225,6 +1225,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overlay = overlayAwayStatus
 			return m, nil
 
+		case key.Matches(msg, m.keymap.OpenDownloadsFolder):
+			dlPath := ""
+			if m.cfg != nil {
+				dlPath = m.cfg.DownloadPath
+			}
+			if dlPath == "" {
+				home, _ := os.UserHomeDir()
+				dlPath = filepath.Join(home, "Downloads")
+			}
+			fbCfg := m.newFileBrowserCfg()
+			fbCfg.StartDir = dlPath
+			fbCfg.Title = "Downloads Folder"
+			fbCfg.ShowFiles = true
+			fbCfg.ShowFolders = true
+			m.fileBrowser = NewFileBrowser(fbCfg)
+			m.fileBrowser.SetSize(m.width, m.height)
+			m.fbPurpose = fbPurposeAttach
+			m.overlay = overlayFileBrowser
+			return m, nil
+
 		case key.Matches(msg, m.keymap.Downloads):
 			if m.overlay == overlayDownloads {
 				m.overlay = overlayNone

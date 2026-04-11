@@ -50,7 +50,8 @@ type KeyMap struct {
 	ShortcutsEditor  key.Binding
 	CommandList      key.Binding
 	AwayStatus       key.Binding
-	Downloads        key.Binding
+	Downloads           key.Binding
+	OpenDownloadsFolder key.Binding
 }
 
 // binding creates a key.Binding from a ShortcutMap action name.
@@ -111,7 +112,8 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		ShortcutsEditor:  binding(sm, "shortcuts_editor", "alt+k", "edit keyboard shortcuts"),
 		CommandList:      binding(sm, "command_list", "alt+c", "open the command list"),
 		AwayStatus:       binding(sm, "away_status", "alt+a", "set away status"),
-		Downloads:        binding(sm, "downloads", "alt+d", "downloads manager"),
+		Downloads:           binding(sm, "downloads", "alt+d", "downloads manager"),
+		OpenDownloadsFolder: binding(sm, "open_downloads_folder", "alt+o", "browse downloads folder"),
 	}
 }
 

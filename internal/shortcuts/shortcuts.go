@@ -62,6 +62,7 @@ var ActionDescriptions = map[string]string{
 	"command_list":       "Open the slash-command browser (also: /commands)",
 	"away_status":        "Set your away status and message",
 	"downloads":          "Open the downloads manager",
+	"open_downloads_folder": "Browse the downloads folder",
 }
 
 // ActionOrder defines the display order for the shortcuts editor.
@@ -79,7 +80,7 @@ var ActionOrder = []string{
 	"befriend", "emoji_picker", "select_message",
 	"friend_details", "notifications", "share_my_info",
 	"help", "settings", "shortcuts_editor", "command_list", "away_status",
-	"downloads",
+	"downloads", "open_downloads_folder",
 }
 
 // DefaultShortcuts returns the built-in default shortcut mappings.

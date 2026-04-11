@@ -94,6 +94,7 @@ var helpLayout = []helpSection{
 			{"away_status", "Set your away status and message", ""},
 			{"notifications", "Open the notifications view (unread, reactions, friend requests)", ""},
 			{"downloads", "Open the downloads manager", ""},
+			{"open_downloads_folder", "Browse the downloads folder", ""},
 			{"befriend", "Send friend request to current DM user", ""},
 			{"emoji_picker", "Open emoji picker (insert emoji)", ""},
 			{"select_message", "Message select mode (also: s in chat, ↑/↓ in chat)", ""},
