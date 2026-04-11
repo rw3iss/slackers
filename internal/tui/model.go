@@ -20,6 +20,7 @@ import (
 	"github.com/rw3iss/slackers/internal/commands"
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/debug"
+	"github.com/rw3iss/slackers/internal/downloads"
 	"github.com/rw3iss/slackers/internal/emotes"
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/notifications"
@@ -69,6 +70,7 @@ const (
 	overlayPlugins
 	overlayGame
 	overlayPluginConfig
+	overlayDownloads
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -490,8 +492,10 @@ type Model struct {
 	apiHost       *api.Host
 	pluginManager  *plugins.Manager
 	pluginsOverlay PluginsModel
-	gameOverlay    GameOverlayModel
-	pluginConfig   PluginConfigModel
+	gameOverlay      GameOverlayModel
+	pluginConfig     PluginConfigModel
+	downloadsOverlay DownloadsModel
+	downloadMgr      *downloads.Manager
 	// backgroundGame is non-nil when a game is running but hidden
 	// (user pressed Esc to return to chat). The game is paused
 	// and can be restored via /games or the taskbar indicator.
@@ -839,6 +843,14 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		eventChan:  make(chan slackpkg.SocketEvent, 100),
 		cmdSuggest: NewCmdSuggest(),
 	}
+	// Create the download manager.
+	dlPath := cfg.DownloadPath
+	if dlPath == "" {
+		home, _ := os.UserHomeDir()
+		dlPath = filepath.Join(home, "Downloads")
+	}
+	m.downloadMgr = downloads.NewManager(dlPath, 5)
+
 	// Create the plugin API host — wraps Model services into a
 	// stable interface that plugins can depend on.
 	m.apiHost = api.NewHost(version, cfg, slackSvc, friendStore, p2pNode, nil)
@@ -1573,6 +1585,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayPlugins {
 			var cmd tea.Cmd
 			m.pluginsOverlay, cmd = m.pluginsOverlay.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayDownloads {
+			var cmd tea.Cmd
+			m.downloadsOverlay, cmd = m.downloadsOverlay.Update(msg)
 			return m, cmd
 		}
 		if m.overlay == overlayPluginConfig {
@@ -3261,6 +3278,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pluginsOverlay.Refresh(m.pluginManager.List())
 		return m, nil
 
+	case DownloadsOpenMsg:
+		m.downloadsOverlay = NewDownloadsModel(m.downloadMgr)
+		m.downloadsOverlay.SetSize(m.width, m.height)
+		m.overlay = overlayDownloads
+		return m, RefreshDownloadsCmd()
+
+	case DownloadsCloseMsg:
+		m.overlay = overlayNone
+		return m, nil
+
+	case downloadRefreshMsg:
+		if m.overlay == overlayDownloads {
+			return m, RefreshDownloadsCmd()
+		}
+		return m, nil
+
+	case DownloadCompleteMsg:
+		if m.downloadMgr != nil {
+			if msg.Err != nil {
+				m.downloadMgr.Fail(msg.ID, msg.Err.Error())
+				m.warning = "Download failed: " + msg.FileName
+			} else {
+				m.downloadMgr.Complete(msg.ID)
+				m.warning = "Downloaded: " + msg.FileName + " → " + msg.DestPath
+			}
+		}
+		return m, nil
+
 	case PluginConfigOpenMsg:
 		p := m.pluginManager.GetPlugin(msg.Name)
 		info := m.pluginManager.Get(msg.Name)
@@ -3309,20 +3354,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case RemoteBrowseDownloadMsg:
-		// Download a file from the friend's shared folder.
+		// Download a file via the download manager.
 		downloadPath := m.cfg.DownloadPath
 		if downloadPath == "" {
 			home, _ := os.UserHomeDir()
 			downloadPath = filepath.Join(home, "Downloads")
 		}
 		destPath := filepath.Join(downloadPath, msg.FileName)
-		m.warning = fmt.Sprintf("Downloading %s from %s...", msg.FileName, m.remoteBrowser.peerName)
+		peerName := m.remoteBrowser.peerName
+		m.warning = fmt.Sprintf("Downloading %s from %s...", msg.FileName, peerName)
+
+		// Register with the download manager.
+		dlID := ""
+		if m.downloadMgr != nil {
+			dlID = m.downloadMgr.Add(msg.FileName, destPath, "", msg.PeerUID, peerName, msg.FileSize)
+		}
+
 		uid := msg.PeerUID
 		relPath := msg.RelativePath
+		id := dlID
 		return m, func() tea.Msg {
 			ctx := context.Background()
 			err := m.p2pNode.DownloadFileByPath(ctx, uid, relPath, destPath)
-			return FileDownloadCompleteMsg{DestPath: destPath, Err: err}
+			return DownloadCompleteMsg{
+				ID:       id,
+				FileName: msg.FileName,
+				DestPath: destPath,
+				Err:      err,
+			}
 		}
 
 	case EmoteListOpenMsg:
@@ -5392,6 +5451,8 @@ func (m Model) viewInner() string {
 		return m.gameOverlay.View()
 	case overlayPluginConfig:
 		return m.pluginConfig.View()
+	case overlayDownloads:
+		return m.downloadsOverlay.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the
@@ -5462,6 +5523,19 @@ func (m Model) renderBaseView() string {
 	// Notifications indicator overlay.
 	if x0, _, y, visible := m.notificationsButtonClickArea(); visible {
 		base = overlayOnRow(base, y, x0, renderNotificationsButton(m.notifStore.Count()))
+	}
+	// Active downloads taskbar indicator.
+	if dlBtn := renderDownloadsButton(m.downloadMgr); dlBtn != "" {
+		btnW := lipgloss.Width(dlBtn)
+		paneEnd := m.width - 2
+		if m.backgroundGame != nil {
+			paneEnd -= lipgloss.Width(m.renderGameTaskbarButton()) + 1
+		}
+		x := paneEnd - btnW
+		if x < 0 {
+			x = 0
+		}
+		base = overlayOnRow(base, 0, x, dlBtn)
 	}
 	// Background game taskbar indicator.
 	if m.backgroundGame != nil {

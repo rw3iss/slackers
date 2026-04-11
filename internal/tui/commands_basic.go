@@ -631,6 +631,19 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 	})
 
 	register(commands.Command{
+		Name:        "downloads",
+		Aliases:     []string{"dl"},
+		Description: "Open the downloads manager",
+		Usage:       "/downloads",
+		Run: func(ctx *commands.Context) commands.Result {
+			return commands.Result{
+				Status: commands.StatusOK,
+				Cmd:    func() tea.Msg { return DownloadsOpenMsg{} },
+			}
+		},
+	})
+
+	register(commands.Command{
 		Name:        "plugin",
 		Description: "Manage plugins (enable, disable, uninstall, info)",
 		Usage:       "/plugin <action> [name]",

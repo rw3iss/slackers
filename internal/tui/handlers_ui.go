@@ -330,6 +330,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			// the top-centre of the message pane. Takes priority
 			// over the underlying row content since the button
 			// visually overlays it. Opens the notifications panel,
+			// Downloads taskbar button.
+			if dx0, dx1, dy, dVisible := m.downloadsButtonClickArea(); dVisible && y == dy && x >= dx0 && x < dx1 {
+				return m, func() tea.Msg { return DownloadsOpenMsg{} }
+			}
 			// Background game taskbar button.
 			if gx0, gx1, gy, gVisible := m.gameTaskbarClickArea(); gVisible && y == gy && x >= gx0 && x < gx1 {
 				if m.backgroundGame != nil {
