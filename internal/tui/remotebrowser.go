@@ -402,7 +402,7 @@ func (m RemoteBrowserModel) View() string {
 
 	if m.confirmDL {
 		lines = append(lines, "")
-		lines = append(lines, selPfx.Render(fmt.Sprintf("  Download %s? y=yes, any key=cancel", m.dlEntry)))
+		lines = append(lines, selPfx.Render(fmt.Sprintf("  Download %s? Enter/y=yes, any key=cancel", m.dlEntry)))
 	}
 
 	if m.message != "" {
