@@ -975,9 +975,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		// Quit must work from anywhere — checked before any overlay
-		// early-return below.
-		if key.Matches(msg, m.keymap.Quit) {
+		// Quit must work from anywhere — EXCEPT when a game overlay
+		// has exclusive keyboard control (game uses Ctrl+Q to hide).
+		if key.Matches(msg, m.keymap.Quit) && m.overlay != overlayGame {
 			clearWindowUrgent()
 			// Flush any pending debounced config save so
 			// last-second edits (theme change, shortcut
