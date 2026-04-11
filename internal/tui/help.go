@@ -101,6 +101,18 @@ var helpLayout = []helpSection{
 		},
 	},
 	{
+		title: "Plugins & Games",
+		entries: []helpEntry{
+			{"", "Open plugin manager", "/plugins"},
+			{"", "Play a game (snake, tetris)", "/games <name>"},
+			{"", "Show weather forecast", "/weather [city]"},
+			{"", "Plugin config / info", "/plugin info <name>"},
+			{"", "In-game settings", "Ctrl+S"},
+			{"", "Hide game to background", "Ctrl+Q"},
+			{"", "See also: /help plugins", ""},
+		},
+	},
+	{
 		title: "Friend Chats (P2P)",
 		entries: []helpEntry{
 			{"friend_details", "Open friend config for the current friend chat", ""},

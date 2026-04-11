@@ -8,6 +8,7 @@ specific topic.
 - `friends`   — friends list, contact cards, P2P chat
 - `themes`    — built-in themes, custom themes, the editor
 - `commands`  — slash command syntax and the command list
+- `plugins`   — plugin system, games, weather, plugin config
 - `setup`     — first-time configuration and OAuth login
 - `p2p`       — secure mode, libp2p, NAT, port forwarding
 - `secure`    — encryption details (X25519 + ChaCha20-Poly1305)
