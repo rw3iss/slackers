@@ -130,12 +130,12 @@ func (m *GameOverlayModel) initGame() {
 			rows = 30
 		}
 		if m.settings.FullScreen {
-			cols = maxW - 8 // subtract preview panel width
+			cols = maxW - 14 // subtract side panel width
 			rows = maxH - 2
 		}
-		// Clamp to window (board + 8 for preview, + 2 for border).
-		if cols > maxW-8 {
-			cols = maxW - 8
+		// Clamp to window (board + 14 for side panel, + 2 for border).
+		if cols > maxW-14 {
+			cols = maxW - 14
 		}
 		if rows > maxH-2 {
 			rows = maxH - 2
@@ -219,9 +219,9 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			return m, nil
 		case "esc":
 			// Escape does nothing in game — only closes settings.
-			// The game cannot be exited with Escape.
 			return m, nil
-		case "p":
+		case "p", " ":
+			// Space and P both toggle pause.
 			if !m.isGameOver() {
 				m.paused = !m.paused
 				if !m.paused {
@@ -261,9 +261,6 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 					m.tetris.Rotate()
 				case "down", "s":
 					m.tetris.Tick() // soft drop
-				case " ":
-					// Space is already handled for pause above,
-					// but we can use it for hard drop when not pausing.
 				case "enter":
 					m.tetris.Drop() // hard drop
 				}

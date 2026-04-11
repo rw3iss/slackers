@@ -102,7 +102,7 @@ func NewTetrisGameSized(w, h int) *TetrisGame {
 	if h < 10 {
 		h = 10
 	}
-	cw := w + 8 // board + border + preview
+	cw := w + 14 // board(w) + borders(2) + gap(1) + preview panel(11)
 	ch := h + 2
 	board := make([][]lipgloss.Color, h)
 	for i := range board {
@@ -301,23 +301,29 @@ func (g *TetrisGame) RenderFrame() string {
 		}
 	}
 
-	// Draw next piece preview.
-	previewX := g.width + 3
-	g.canvas.DrawText(previewX, 1, "Next:", lipgloss.Color("#888888"), "")
+	// Side panel: next piece + stats.
+	panelX := g.width + 3
+	labelColor := lipgloss.Color("#888888")
+	statColor := lipgloss.Color("#cccccc")
+
+	g.canvas.DrawText(panelX, 1, "Next:", labelColor, "")
 	nextShape := tetrominoes[g.next].Rotations[0]
 	nextColor := tetrominoes[g.next].Color
 	for y := 0; y < 4; y++ {
 		for x := 0; x < 4; x++ {
 			if nextShape[y][x] {
-				g.canvas.Set(previewX+x, 3+y, '█', nextColor, "")
+				g.canvas.Set(panelX+x, 3+y, '█', nextColor, "")
 			}
 		}
 	}
 
-	// Score info.
-	header := "Score: " + itoa(g.score) + "  Level: " + itoa(g.level) + "  Lines: " + itoa(g.lines)
-	if g.gameOver {
-		header = "GAME OVER — " + header
-	}
-	return header + "\n" + g.canvas.Render(g.canvasW, g.canvasH)
+	// Stats below the preview.
+	g.canvas.DrawText(panelX, 8, "Score:", labelColor, "")
+	g.canvas.DrawText(panelX, 9, itoa(g.score), statColor, "")
+	g.canvas.DrawText(panelX, 11, "Level:", labelColor, "")
+	g.canvas.DrawText(panelX, 12, itoa(g.level), statColor, "")
+	g.canvas.DrawText(panelX, 14, "Lines:", labelColor, "")
+	g.canvas.DrawText(panelX, 15, itoa(g.lines), statColor, "")
+
+	return g.canvas.Render(g.canvasW, g.canvasH)
 }
