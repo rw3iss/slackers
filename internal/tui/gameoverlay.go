@@ -53,7 +53,7 @@ func defaultGameSettings() GameSettings {
 		SnakeCols:     30,
 		SnakeRows:     20,
 		TetrisCols:    30,
-		TetrisRows:    30,
+		TetrisRows:    40,
 		BlockScale:    1,
 	}
 }
@@ -142,7 +142,7 @@ func (m *GameOverlayModel) initGame() {
 			cols = 30
 		}
 		if rows <= 0 {
-			rows = 30
+			rows = 40
 		}
 		// Compute render scale factors.
 		bs := m.settings.BlockScale
