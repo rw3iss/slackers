@@ -4282,12 +4282,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case P2PReceivedMsg:
+		debug.Log("[p2p-recv] sender=%s text=%s", msg.SenderID, msg.Text)
 		// Any P2P message from a known friend proves they're
 		// running right now — mark them online immediately so
 		// the sidebar and chat header reflect it without
 		// waiting for the next 10-second ping cycle. The
 		// disconnect handler below overrides this for the
-		// explicit "I'm going offline" case.
+		// explicit "I'm going offline" case. Status updates are
+		// excluded — they set the status via their own handler.
 		if msg.SenderID != "" && msg.SenderID != "unknown" && msg.Text != "__disconnect__" && msg.Text != "__status_update__" {
 			if m.friendStore != nil && m.friendStore.Get(msg.SenderID) != nil {
 				wasOnline := m.friendStore.Get(msg.SenderID).Online

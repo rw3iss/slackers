@@ -629,6 +629,12 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 					if on != before {
 						debug.Log("[friend-ping] uid=%s state %v → %v", uid, before, on)
 					}
+					// Check if the friend has explicitly set their status
+					// to "offline" (hidden mode) — if so, respect it even
+					// though the transport connection is up.
+					if f := store.Get(uid); f != nil && f.AwayStatus == "offline" {
+						on = false
+					}
 					store.SetOnline(uid, on)
 					if on {
 						store.UpdateLastOnline(uid)
