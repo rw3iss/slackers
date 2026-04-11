@@ -152,3 +152,13 @@ func KeysForAction(m ShortcutMap, action string) []string {
 	}
 	return nil
 }
+
+// DisplayKey returns the first key binding for an action as a
+// human-readable string (e.g. "Alt+D"). Returns "" if no binding.
+func DisplayKey(m ShortcutMap, action string) string {
+	keys := KeysForAction(m, action)
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}

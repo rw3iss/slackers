@@ -3399,7 +3399,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		destPath := filepath.Join(downloadPath, msg.FileName)
 		peerName := m.remoteBrowser.peerName
-		m.warning = fmt.Sprintf("Downloading %s from %s...", msg.FileName, peerName)
+		// Show download status in both the status bar and the remote browser.
+		dlKey := shortcuts.DisplayKey(m.shortcutMap, "downloads")
+		hint := ""
+		if dlKey != "" {
+			hint = " — " + dlKey + " to view downloads"
+		}
+		m.warning = fmt.Sprintf("Downloading %s from %s...%s", msg.FileName, peerName, hint)
+		m.remoteBrowser.message = fmt.Sprintf("⬇ Downloading %s...%s", msg.FileName, hint)
 
 		// Register with the download manager.
 		dlID := ""

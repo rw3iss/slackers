@@ -76,6 +76,7 @@ type RemoteBrowserModel struct {
 	sortAsc     bool
 	filter      textinput.Model
 	filtered    []secure.BrowseEntry // entries after filter applied
+	message     string // status message shown at the bottom
 }
 
 // NewRemoteBrowser creates the overlay for the given friend.
@@ -402,6 +403,11 @@ func (m RemoteBrowserModel) View() string {
 	if m.confirmDL {
 		lines = append(lines, "")
 		lines = append(lines, selPfx.Render(fmt.Sprintf("  Download %s? y=yes, any key=cancel", m.dlEntry)))
+	}
+
+	if m.message != "" {
+		lines = append(lines, "")
+		lines = append(lines, lipgloss.NewStyle().Foreground(ColorHighlight).Render("  "+m.message))
 	}
 
 	lines = append(lines, "")
