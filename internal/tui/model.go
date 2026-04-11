@@ -4288,7 +4288,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// waiting for the next 10-second ping cycle. The
 		// disconnect handler below overrides this for the
 		// explicit "I'm going offline" case.
-		if msg.SenderID != "" && msg.SenderID != "unknown" && msg.Text != "__disconnect__" {
+		if msg.SenderID != "" && msg.SenderID != "unknown" && msg.Text != "__disconnect__" && msg.Text != "__status_update__" {
 			if m.friendStore != nil && m.friendStore.Get(msg.SenderID) != nil {
 				wasOnline := m.friendStore.Get(msg.SenderID).Online
 				m.friendStore.SetOnline(msg.SenderID, true)
@@ -5112,7 +5112,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// connected peers (nearly empty at startup).
 		localStatus, localAwayMsg, suppressStatus := m.effectiveStatus()
 		if suppressStatus {
-			localStatus = ""
+			// Send "offline" so friends mark us offline even though
+			// the transport connection is up.
+			localStatus = "offline"
+			localAwayMsg = ""
 		}
 		return m, friendPingCmdWithCurrent(
 			m.friendStore, m.p2pNode, "", localStatus, localAwayMsg, m.sharedFolderName(),
@@ -5188,7 +5191,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// learn our state without a separate broadcast.
 		localStatus, localAwayMsg, suppressStatus := m.effectiveStatus()
 		if suppressStatus {
-			localStatus = ""
+			localStatus = "offline"
+			localAwayMsg = ""
 		}
 		return m, friendPingCmdWithCurrent(m.friendStore, m.p2pNode, currentFriend, localStatus, localAwayMsg, m.sharedFolderName())
 
