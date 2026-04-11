@@ -2494,16 +2494,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, id := range msg.ChannelIDs {
 			if m.currentCh != nil && id == m.currentCh.ID {
 				refreshCurrent = true
+				// Update lastSeen so the poll doesn't re-detect this.
+				if ts, ok := msg.LatestTS[id]; ok {
+					m.lastSeen[id] = ts
+				}
 				continue
 			}
-			debug.Log("[notif] poll detected unread channel=%s bg=%v", id, msg.IsBackground)
+			// Only count as new if not already marked unread —
+			// prevents re-firing the bell for the same channel
+			// on every poll cycle.
+			alreadyUnread := m.channels.IsUnread(id)
+			debug.Log("[notif] poll detected unread channel=%s bg=%v alreadyUnread=%v", id, msg.IsBackground, alreadyUnread)
 			m.channels.MarkUnread(id)
-			newUnread++
+			if !alreadyUnread {
+				newUnread++
+			}
+			// Advance lastSeen so the next poll doesn't re-detect.
+			if ts, ok := msg.LatestTS[id]; ok {
+				m.lastSeen[id] = ts
+			}
 		}
 		if newUnread > 0 && m.cfg.Notifications {
 			debug.Log("[notif] BELL: %d new unread channels from poll", newUnread)
 			sendNotification("multiple channels", newUnread)
 			setWindowUrgent()
+		}
+		if len(msg.ChannelIDs) > 0 {
+			m.persistLastSeen()
 		}
 
 		// Reschedule the correct timer based on which poll triggered this.

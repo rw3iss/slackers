@@ -271,6 +271,11 @@ func (m *ChannelListModel) MarkUnread(channelID string) {
 	m.unread[channelID] = true
 }
 
+// IsUnread returns true if the channel is currently marked unread.
+func (m *ChannelListModel) IsUnread(channelID string) bool {
+	return m.unread[channelID]
+}
+
 func (m *ChannelListModel) ClearUnread(channelID string) {
 	delete(m.unread, channelID)
 }
