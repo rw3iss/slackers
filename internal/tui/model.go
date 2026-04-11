@@ -1224,6 +1224,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overlay = overlayAwayStatus
 			return m, nil
 
+		case key.Matches(msg, m.keymap.Downloads):
+			if m.overlay == overlayDownloads {
+				m.overlay = overlayNone
+			} else {
+				m.downloadsOverlay = NewDownloadsModel(m.downloadMgr)
+				m.downloadsOverlay.SetSize(m.width, m.height)
+				m.overlay = overlayDownloads
+				return m, RefreshDownloadsCmd()
+			}
+			return m, nil
+
 		case key.Matches(msg, m.keymap.Settings):
 			if m.overlay == overlaySettings {
 				m.overlay = overlayNone

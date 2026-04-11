@@ -93,6 +93,7 @@ var helpLayout = []helpSection{
 			{"command_list", "Open the slash-command browser (also: /commands)", ""},
 			{"away_status", "Set your away status and message", ""},
 			{"notifications", "Open the notifications view (unread, reactions, friend requests)", ""},
+			{"downloads", "Open the downloads manager", ""},
 			{"befriend", "Send friend request to current DM user", ""},
 			{"emoji_picker", "Open emoji picker (insert emoji)", ""},
 			{"select_message", "Message select mode (also: s in chat, ↑/↓ in chat)", ""},

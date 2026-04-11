@@ -41,5 +41,6 @@
   "share_my_info": ["alt+m"],
   "shortcuts_editor": ["alt+k"],
   "command_list": ["alt+c"],
-  "away_status": ["alt+a"]
+  "away_status": ["alt+a"],
+  "downloads": ["alt+d"]
 }
