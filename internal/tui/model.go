@@ -3317,6 +3317,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case DownloadRetryMsg:
+		// Re-initiate a failed download.
+		if m.downloadMgr != nil && m.p2pNode != nil && msg.PeerUID != "" {
+			relPath := msg.RelPath
+			if relPath == "" {
+				relPath = msg.FileName
+			}
+			dlID := m.downloadMgr.Add(msg.FileName, msg.DestPath, "", relPath, msg.PeerUID, msg.PeerName, msg.Size)
+			m.warning = fmt.Sprintf("Retrying %s...", msg.FileName)
+			uid := msg.PeerUID
+			destPath := msg.DestPath
+			fileName := msg.FileName
+			id := dlID
+			return m, func() tea.Msg {
+				ctx := context.Background()
+				err := m.p2pNode.DownloadFileByPath(ctx, uid, relPath, destPath)
+				return DownloadCompleteMsg{
+					ID:       id,
+					FileName: fileName,
+					DestPath: destPath,
+					Err:      err,
+				}
+			}
+		}
+		return m, nil
+
 	case PluginConfigOpenMsg:
 		p := m.pluginManager.GetPlugin(msg.Name)
 		info := m.pluginManager.Get(msg.Name)
@@ -3378,7 +3404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Register with the download manager.
 		dlID := ""
 		if m.downloadMgr != nil {
-			dlID = m.downloadMgr.Add(msg.FileName, destPath, "", msg.PeerUID, peerName, msg.FileSize)
+			dlID = m.downloadMgr.Add(msg.FileName, destPath, "", msg.RelativePath, msg.PeerUID, peerName, msg.FileSize)
 		}
 
 		uid := msg.PeerUID

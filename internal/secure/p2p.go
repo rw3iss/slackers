@@ -699,6 +699,7 @@ func (n *P2PNode) DownloadFileByPath(ctx context.Context, slackUserID, relativeP
 		return fmt.Errorf("opening file stream: %w", err)
 	}
 	defer stream.Close()
+	debugLog("[file-dl] requesting path=%q from peer=%s", relativePath, slackUserID)
 	req := P2PMessage{Type: MsgTypeFileRequestByPath, Text: relativePath}
 	data, _ := json.Marshal(req)
 	data = append(data, '\n')
@@ -752,14 +753,17 @@ func (n *P2PNode) handleFileRequest(s network.Stream) {
 	// Path-based download from the shared folder.
 	if req.Type == MsgTypeFileRequestByPath && req.Text != "" {
 		if n.SharedFolderLookup == nil {
+			debugLog("[file-serve] SharedFolderLookup is nil, cannot serve %q", req.Text)
 			return
 		}
 		localPath, err := n.SharedFolderLookup(req.Text)
 		if err != nil {
+			debugLog("[file-serve] path validation failed for %q: %v", req.Text, err)
 			return
 		}
 		f, err := os.Open(localPath)
 		if err != nil {
+			debugLog("[file-serve] cannot open %q: %v", localPath, err)
 			return
 		}
 		defer f.Close()

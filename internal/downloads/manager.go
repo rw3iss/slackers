@@ -41,6 +41,7 @@ type Download struct {
 	FileName    string
 	DestPath    string
 	URL         string    // for HTTP downloads
+	RelPath     string    // relative path for P2P shared folder downloads
 	PeerUID     string    // for P2P downloads
 	PeerName    string    // display name of the peer
 	Size        int64     // total size in bytes (0 if unknown)
@@ -86,7 +87,7 @@ func NewManager(downloadDir string, maxActive int) *Manager {
 
 // Add creates a new download entry and returns its ID.
 // The download doesn't start until Start is called.
-func (m *Manager) Add(fileName, destPath, url, peerUID, peerName string, size int64) string {
+func (m *Manager) Add(fileName, destPath, url, relPath, peerUID, peerName string, size int64) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.nextID++
@@ -96,6 +97,7 @@ func (m *Manager) Add(fileName, destPath, url, peerUID, peerName string, size in
 		FileName:  fileName,
 		DestPath:  destPath,
 		URL:       url,
+		RelPath:   relPath,
 		PeerUID:   peerUID,
 		PeerName:  peerName,
 		Size:      size,

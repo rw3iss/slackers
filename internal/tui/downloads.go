@@ -35,6 +35,27 @@ type DownloadCompleteMsg struct {
 	Err      error
 }
 
+// DownloadRetryMsg requests retrying a failed download.
+type DownloadRetryMsg struct {
+	ID       string
+	FileName string
+	DestPath string
+	RelPath  string
+	PeerUID  string
+	PeerName string
+	Size     int64
+}
+
+// RemoteDownloadRequestMsg requests starting a P2P file download
+// (used by retry and the remote browser).
+type RemoteDownloadRequestMsg struct {
+	PeerUID  string
+	PeerName string
+	RelPath  string
+	FileName string
+	FileSize int64
+}
+
 // downloadRefreshMsg triggers a UI refresh of the downloads overlay.
 type downloadRefreshMsg struct{}
 
@@ -98,7 +119,25 @@ func (m DownloadsModel) Update(msg tea.Msg) (DownloadsModel, tea.Cmd) {
 					}
 					m.message = "Download cancelled"
 				} else if m.section == dlSectionFailed {
-					m.message = "Retry not yet implemented"
+					// Retry: find the failed download and re-request it.
+					if m.manager != nil {
+						dl := m.manager.Get(id)
+						if dl != nil {
+							m.manager.Remove(id)
+							m.message = "Retrying " + dl.FileName + "..."
+							return m, func() tea.Msg {
+								return DownloadRetryMsg{
+									ID:       id,
+									FileName: dl.FileName,
+									DestPath: dl.DestPath,
+									RelPath:  dl.RelPath,
+									PeerUID:  dl.PeerUID,
+									PeerName: dl.PeerName,
+									Size:     dl.Size,
+								}
+							}
+						}
+					}
 				}
 			default:
 				m.confirmID = ""
