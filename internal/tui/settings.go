@@ -700,6 +700,16 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		m.input.Focus()
 		m.input.CursorEnd()
 		m.message = ""
+	default:
+		// Any printable character auto-focuses the filter and types it.
+		key := msg.String()
+		if len(key) == 1 && key[0] >= ' ' && key[0] <= '~' {
+			m.filtering = true
+			m.filter.Focus()
+			m.filter, _ = m.filter.Update(msg)
+			m.rebuildFiltered()
+			return m, nil
+		}
 	}
 	return m, nil
 }
