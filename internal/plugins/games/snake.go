@@ -24,14 +24,16 @@ type Point struct {
 
 // SnakeGame holds the state of a snake game.
 type SnakeGame struct {
-	width    int
-	height   int
-	snake    []Point
-	dir      Direction
-	food     Point
-	score    int
-	gameOver bool
-	canvas   *ui.Canvas
+	width         int
+	height        int
+	snake         []Point
+	dir           Direction
+	food          Point
+	score         int
+	gameOver      bool
+	canvas        *ui.Canvas
+	halveVertical bool
+	vertSkip      bool // alternates to skip every other vertical tick
 }
 
 const (
@@ -96,6 +98,14 @@ func (g *SnakeGame) Tick() {
 	if g.gameOver {
 		return
 	}
+	// When halveVertical is on and the snake is moving vertically,
+	// skip every other tick to halve vertical speed.
+	if g.halveVertical && (g.dir == DirUp || g.dir == DirDown) {
+		g.vertSkip = !g.vertSkip
+		if g.vertSkip {
+			return
+		}
+	}
 	head := g.snake[0]
 	var next Point
 	switch g.dir {
@@ -136,6 +146,11 @@ func (g *SnakeGame) Score() int { return g.score }
 
 // IsGameOver returns whether the game has ended.
 func (g *SnakeGame) IsGameOver() bool { return g.gameOver }
+
+// SetHalveVertical enables halved vertical speed — the snake
+// moves vertically at half the rate it moves horizontally,
+// compensating for terminal characters being taller than wide.
+func (g *SnakeGame) SetHalveVertical(on bool) { g.halveVertical = on }
 
 // SetDirection changes the snake's direction.
 func (g *SnakeGame) SetDirection(d Direction) {

@@ -87,6 +87,8 @@ type TetrisGame struct {
 	canvas   *ui.Canvas
 	canvasW  int
 	canvasH  int
+	hScale   int // horizontal render scale (chars per cell)
+	vScale   int // vertical render scale (rows per cell)
 }
 
 // NewTetrisGame creates a new tetris game with default dimensions.
@@ -116,6 +118,8 @@ func NewTetrisGameSized(w, h int) *TetrisGame {
 		canvasW: cw,
 		canvasH: ch,
 		level:   1,
+		hScale:  1,
+		vScale:  1,
 		next:    rand.Intn(len(tetrominoes)),
 	}
 	g.spawnPiece()
@@ -262,31 +266,78 @@ func (g *TetrisGame) Lines() int { return g.lines }
 // IsGameOver returns whether the game has ended.
 func (g *TetrisGame) IsGameOver() bool { return g.gameOver }
 
+// SetRenderScale sets the horizontal and vertical character scale
+// for rendering. hScale=2 means each cell is 2 chars wide.
+// Rebuilds the canvas to the new dimensions.
+func (g *TetrisGame) SetRenderScale(h, v int) {
+	if h < 1 {
+		h = 1
+	}
+	if v < 1 {
+		v = 1
+	}
+	g.hScale = h
+	g.vScale = v
+	// Rebuild canvas to fit scaled board + side panel.
+	g.canvasW = g.width*h + 2 + 14 // scaled board + borders + panel
+	g.canvasH = g.height*v + 2     // scaled board + top/bottom border
+	g.canvas = ui.NewCanvas("tetris", g.canvasW, g.canvasH)
+}
+
+// setScaledBlock fills a scaled block on the canvas.
+func (g *TetrisGame) setScaledBlock(logX, logY int, ch rune, fg, bg lipgloss.Color) {
+	sx := logX * g.hScale
+	sy := logY * g.vScale
+	for dy := 0; dy < g.vScale; dy++ {
+		for dx := 0; dx < g.hScale; dx++ {
+			g.canvas.Set(sx+dx, sy+dy, ch, fg, bg)
+		}
+	}
+}
+
 // RenderFrame draws the current state to the canvas.
 func (g *TetrisGame) RenderFrame() string {
 	g.canvas.Clear()
 	wallColor := lipgloss.Color("#444444")
 	bgColor := lipgloss.Color("#111111")
+	hs := g.hScale
+	vs := g.vScale
 
 	// Draw board background + border.
+	boardRenderW := g.width * hs
+	boardRenderH := g.height * vs
+	// Left border.
+	for ry := 0; ry < boardRenderH; ry++ {
+		g.canvas.Set(0, ry+vs, '│', wallColor, "")
+	}
+	// Right border.
+	for ry := 0; ry < boardRenderH; ry++ {
+		g.canvas.Set(boardRenderW+1, ry+vs, '│', wallColor, "")
+	}
+	// Board cells.
 	for y := 0; y < g.height; y++ {
-		g.canvas.Set(0, y+1, '│', wallColor, "")
-		g.canvas.Set(g.width+1, y+1, '│', wallColor, "")
 		for x := 0; x < g.width; x++ {
 			color := g.board[y][x]
+			ch := rune('·')
+			fc := bgColor
 			if color != "" {
-				g.canvas.Set(x+1, y+1, '█', color, "")
-			} else {
-				g.canvas.Set(x+1, y+1, '·', bgColor, "")
+				ch = '█'
+				fc = color
+			}
+			// Render scaled cell.
+			for dy := 0; dy < vs; dy++ {
+				for dx := 0; dx < hs; dx++ {
+					g.canvas.Set(x*hs+1+dx, y*vs+vs+dy, ch, fc, "")
+				}
 			}
 		}
 	}
 	// Bottom border.
-	for x := 0; x <= g.width+1; x++ {
-		g.canvas.Set(x, g.height+1, '─', wallColor, "")
+	for rx := 0; rx <= boardRenderW+1; rx++ {
+		g.canvas.Set(rx, boardRenderH+vs, '─', wallColor, "")
 	}
 
-	// Draw current piece.
+	// Draw current piece (scaled).
 	shape := tetrominoes[g.current].Rotations[g.rotation]
 	color := tetrominoes[g.current].Color
 	for y := 0; y < 4; y++ {
@@ -295,35 +346,44 @@ func (g *TetrisGame) RenderFrame() string {
 				by := g.pieceY + y
 				bx := g.pieceX + x
 				if by >= 0 && by < g.height && bx >= 0 && bx < g.width {
-					g.canvas.Set(bx+1, by+1, '█', color, "")
+					for dy := 0; dy < vs; dy++ {
+						for dx := 0; dx < hs; dx++ {
+							g.canvas.Set(bx*hs+1+dx, by*vs+vs+dy, '█', color, "")
+						}
+					}
 				}
 			}
 		}
 	}
 
 	// Side panel: next piece + stats.
-	panelX := g.width + 3
+	panelX := boardRenderW + 3
 	labelColor := lipgloss.Color("#888888")
 	statColor := lipgloss.Color("#cccccc")
 
-	g.canvas.DrawText(panelX, 1, "Next:", labelColor, "")
+	g.canvas.DrawText(panelX, vs, "Next:", labelColor, "")
 	nextShape := tetrominoes[g.next].Rotations[0]
 	nextColor := tetrominoes[g.next].Color
 	for y := 0; y < 4; y++ {
 		for x := 0; x < 4; x++ {
 			if nextShape[y][x] {
-				g.canvas.Set(panelX+x, 3+y, '█', nextColor, "")
+				for dy := 0; dy < vs; dy++ {
+					for dx := 0; dx < hs; dx++ {
+						g.canvas.Set(panelX+x*hs+dx, vs+2+y*vs+dy, '█', nextColor, "")
+					}
+				}
 			}
 		}
 	}
 
 	// Stats below the preview.
-	g.canvas.DrawText(panelX, 8, "Score:", labelColor, "")
-	g.canvas.DrawText(panelX, 9, itoa(g.score), statColor, "")
-	g.canvas.DrawText(panelX, 11, "Level:", labelColor, "")
-	g.canvas.DrawText(panelX, 12, itoa(g.level), statColor, "")
-	g.canvas.DrawText(panelX, 14, "Lines:", labelColor, "")
-	g.canvas.DrawText(panelX, 15, itoa(g.lines), statColor, "")
+	statsY := vs + 2 + 4*vs + 1
+	g.canvas.DrawText(panelX, statsY, "Score:", labelColor, "")
+	g.canvas.DrawText(panelX, statsY+1, itoa(g.score), statColor, "")
+	g.canvas.DrawText(panelX, statsY+3, "Level:", labelColor, "")
+	g.canvas.DrawText(panelX, statsY+4, itoa(g.level), statColor, "")
+	g.canvas.DrawText(panelX, statsY+6, "Lines:", labelColor, "")
+	g.canvas.DrawText(panelX, statsY+7, itoa(g.lines), statColor, "")
 
 	return g.canvas.Render(g.canvasW, g.canvasH)
 }
