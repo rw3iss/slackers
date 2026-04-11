@@ -47,8 +47,8 @@ func defaultGameSettings() GameSettings {
 	return GameSettings{
 		SizeMultiplier: 1.0,
 		SpeedFactor:    1.0,
-		TetrisCols:     20,
-		TetrisRows:     30,
+		TetrisCols:     0, // 0 = auto-fill window
+		TetrisRows:     0, // 0 = auto-fill window
 	}
 }
 
@@ -82,10 +82,10 @@ func NewGameOverlay(name string, settings GameSettings) GameOverlayModel {
 }
 
 func (m *GameOverlayModel) initGame() {
-	// Available space inside the overlay: subtract border (2),
-	// padding (6), header (2 lines), footer (2 lines), score (1 line).
-	maxW := m.width - 10
-	maxH := m.height - 10
+	// Available space inside the overlay — the game window is always
+	// full-screen, so we use nearly the entire terminal.
+	maxW := m.width - 6 // borders + minimal padding
+	maxH := m.height - 6
 	if maxW < 10 {
 		maxW = 10
 	}
@@ -93,25 +93,16 @@ func (m *GameOverlayModel) initGame() {
 		maxH = 8
 	}
 
-	// Base snake board size at 1.0x scale. The multiplier is always
-	// applied to these constants, never to the current board size.
-	const snakeBaseW = 60
-	const snakeBaseH = 30
-
 	switch m.gameName {
 	case "snake":
-		var w, h int
-		if m.settings.FullScreen {
-			w = maxW
-			h = maxH
-		} else {
-			sm := m.settings.SizeMultiplier
-			if sm <= 0 {
-				sm = 1.0
-			}
-			w = int(float64(snakeBaseW) * sm)
-			h = int(float64(snakeBaseH) * sm)
+		// The multiplier scales relative to the available space.
+		// 1.0x = fill the window. <1.0 = smaller board.
+		sm := m.settings.SizeMultiplier
+		if sm <= 0 {
+			sm = 1.0
 		}
+		w := int(float64(maxW) * sm)
+		h := int(float64(maxH) * sm)
 		// Clamp to available space.
 		if w > maxW {
 			w = maxW
@@ -119,7 +110,6 @@ func (m *GameOverlayModel) initGame() {
 		if h > maxH {
 			h = maxH
 		}
-		// Minimums.
 		if w < 10 {
 			w = 10
 		}
@@ -131,17 +121,14 @@ func (m *GameOverlayModel) initGame() {
 	case "tetris":
 		cols := m.settings.TetrisCols
 		rows := m.settings.TetrisRows
+		// Default: fill the window.
 		if cols <= 0 {
-			cols = 20
+			cols = maxW - 14
 		}
 		if rows <= 0 {
-			rows = 30
-		}
-		if m.settings.FullScreen {
-			cols = maxW - 14 // subtract side panel width
 			rows = maxH - 2
 		}
-		// Clamp to window (board + 14 for side panel, + 2 for border).
+		// Clamp to window (board + 14 for side panel).
 		if cols > maxW-14 {
 			cols = maxW - 14
 		}
@@ -555,25 +542,13 @@ func (m GameOverlayModel) View() string {
 		footer = "↑↓←→/WASD: move" + HintSep + "P: pause" + HintSep + "R: restart" + HintSep + "Ctrl+S: settings" + HintSep + "Ctrl+Q: hide"
 	}
 
-	maxBoxW := 70
-	if m.settings.FullScreen {
-		maxBoxW = m.width - 2
-	} else {
-		// Scale box width based on board size.
-		sm := m.settings.SizeMultiplier
-		if sm > 1.0 {
-			maxBoxW = int(float64(70) * sm)
-		}
-		if maxBoxW > m.width-2 {
-			maxBoxW = m.width - 2
-		}
-	}
+	// Game window is always full-screen.
 	scaffold := OverlayScaffold{
 		Title:       title,
 		Footer:      footer,
 		Width:       m.width,
 		Height:      m.height,
-		MaxBoxWidth: maxBoxW,
+		MaxBoxWidth: m.width - 2,
 		BorderColor: ColorPrimary,
 	}
 	return scaffold.Render(b.String())
