@@ -67,8 +67,10 @@ type GameOverlayModel struct {
 	width    int
 	height   int
 	settings GameSettings
-	// Input throttling: only accept one movement key per 20ms.
-	lastInput time.Time
+	// Input: store pending action, applied on next tick.
+	// This prevents buffered key repeats from "throwing" pieces —
+	// only the most recent input before each tick matters.
+	pendingTetrisAction string // "left", "right", "rotate", "down", "drop"
 	// Settings menu state.
 	showSettings   bool
 	settingSel     int // 0=size, 1=speed, 2=save, 3=cancel
@@ -228,20 +230,6 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			return m.updateSettings(key)
 		}
 
-		// Throttle movement keys: accept at most one per 20ms.
-		// Excess key repeats from holding a key are silently
-		// dropped. No queue — when the user releases the key,
-		// input stops immediately. Control keys bypass throttle.
-		isControl := key == "ctrl+q" || key == "ctrl+s" || key == "p" ||
-			key == "r" || key == "esc" || key == " "
-		if !isControl && !m.paused {
-			now := time.Now()
-			if now.Sub(m.lastInput) < 20*time.Millisecond {
-				return m, nil // too soon, drop
-			}
-			m.lastInput = now
-		}
-
 		// Universal game controls.
 		switch key {
 		case "ctrl+q":
@@ -290,17 +278,23 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 				}
 			}
 			if m.tetris != nil {
+				// Store the action — applied on the next tick.
+				// This prevents buffered key repeats from "throwing"
+				// pieces after the key is released. Only the most
+				// recent input before each tick takes effect.
 				switch key {
 				case "left", "a":
-					m.tetris.MoveLeft()
+					m.pendingTetrisAction = "left"
 				case "right", "d":
-					m.tetris.MoveRight()
+					m.pendingTetrisAction = "right"
 				case "up", "w":
-					m.tetris.Rotate()
+					m.pendingTetrisAction = "rotate"
 				case "down", "s":
-					m.tetris.Tick() // soft drop
+					m.pendingTetrisAction = "down"
 				case "enter":
-					m.tetris.Drop() // hard drop
+					// Hard drop executes immediately — it's a
+					// one-shot action, not a held key.
+					m.tetris.Drop()
 				}
 			}
 		}
@@ -320,6 +314,20 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			}
 		}
 		if m.tetris != nil {
+			// Apply the most recent pending input, then clear it.
+			// Only one action per tick — buffered repeats are
+			// overwritten, so releasing the key = no more actions.
+			switch m.pendingTetrisAction {
+			case "left":
+				m.tetris.MoveLeft()
+			case "right":
+				m.tetris.MoveRight()
+			case "rotate":
+				m.tetris.Rotate()
+			case "down":
+				m.tetris.Tick() // soft drop (extra tick)
+			}
+			m.pendingTetrisAction = ""
 			m.tetris.Tick()
 			if m.tetris.IsGameOver() {
 				if m.tetris.Score() > m.settings.TetrisHighScore {
