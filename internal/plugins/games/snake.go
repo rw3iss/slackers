@@ -174,6 +174,9 @@ func (g *SnakeGame) SetDirection(d Direction) {
 	case g.dir == DirLeft && d == DirRight:
 	case g.dir == DirRight && d == DirLeft:
 	default:
+		if d != g.dir {
+			g.vertCount = 0 // reset vertical tick counter on direction change
+		}
 		g.dir = d
 	}
 }
@@ -190,6 +193,15 @@ func (g *SnakeGame) setScaled(lx, ly int, ch rune, fg, bg lipgloss.Color) {
 func (g *SnakeGame) RenderFrame() string {
 	g.canvas.Clear()
 	hs := g.hScale
+	boardBG := lipgloss.Color("#0a0a0a")
+
+	// Fill the playable area with a subtle background so the
+	// board boundary is visually clear at any scale.
+	for y := 1; y < g.height-1; y++ {
+		for x := 1; x < g.width-1; x++ {
+			g.setScaled(x, y, ' ', boardBG, boardBG)
+		}
+	}
 
 	// Draw walls.
 	for x := 0; x < g.width; x++ {
