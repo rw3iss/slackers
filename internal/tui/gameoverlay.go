@@ -33,8 +33,9 @@ type gameTickMsg struct{}
 // GameSettings holds user-configurable game parameters.
 // Persisted via the plugin settings system.
 type GameSettings struct {
-	SizeMultiplier float64 // 0.5, 1.0, 2.0, 3.0, 4.0
+	SizeMultiplier float64 // 0.5 to 4.0 (1.0 = default 30x15)
 	SpeedFactor    float64 // 0.1 to 5.0 (1.0 = normal)
+	FullScreen     bool    // if true, board fills the window
 }
 
 func defaultGameSettings() GameSettings {
@@ -71,14 +72,39 @@ func NewGameOverlay(name string, settings GameSettings) GameOverlayModel {
 }
 
 func (m *GameOverlayModel) initGame() {
-	sm := m.settings.SizeMultiplier
-	if sm <= 0 {
-		sm = 1.0
+	// Available space inside the overlay: subtract border (2),
+	// padding (6), header (2 lines), footer (2 lines), score (1 line).
+	maxW := m.width - 10
+	maxH := m.height - 10
+	if maxW < 10 {
+		maxW = 10
 	}
+	if maxH < 8 {
+		maxH = 8
+	}
+
 	switch m.gameName {
 	case "snake":
-		w := int(float64(30) * sm)
-		h := int(float64(15) * sm)
+		var w, h int
+		if m.settings.FullScreen {
+			w = maxW
+			h = maxH
+		} else {
+			sm := m.settings.SizeMultiplier
+			if sm <= 0 {
+				sm = 1.0
+			}
+			w = int(float64(30) * sm)
+			h = int(float64(15) * sm)
+		}
+		// Clamp to available space.
+		if w > maxW {
+			w = maxW
+		}
+		if h > maxH {
+			h = maxH
+		}
+		// Minimums.
 		if w < 10 {
 			w = 10
 		}
@@ -248,29 +274,35 @@ func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd)
 		return m, nil
 	}
 
+	// Menu items: 0=fullscreen, 1=size, 2=speed, 3=save, 4=cancel
+	maxSel := 4
 	switch key {
 	case "up", "k":
 		if m.settingSel > 0 {
 			m.settingSel--
 		}
 	case "down", "j":
-		if m.settingSel < 3 {
+		if m.settingSel < maxSel {
 			m.settingSel++
 		}
 	case "enter":
 		switch m.settingSel {
-		case 0: // size
-			m.settingEditing = true
-			m.settingInput = fmt.Sprintf("%.1f", m.settings.SizeMultiplier)
-		case 1: // speed
+		case 0: // fullscreen toggle
+			m.settings.FullScreen = !m.settings.FullScreen
+		case 1: // size
+			if !m.settings.FullScreen {
+				m.settingEditing = true
+				m.settingInput = fmt.Sprintf("%.1f", m.settings.SizeMultiplier)
+			}
+		case 2: // speed
 			m.settingEditing = true
 			m.settingInput = fmt.Sprintf("%.1f", m.settings.SpeedFactor)
-		case 2: // save
+		case 3: // save
 			m.showSettings = false
 			m.initGame()
 			m.paused = false
 			return m, m.TickCmd()
-		case 3: // cancel
+		case 4: // cancel
 			m.showSettings = false
 			m.paused = false
 			return m, m.TickCmd()
@@ -289,7 +321,7 @@ func (m *GameOverlayModel) applySettingInput() {
 		return
 	}
 	switch m.settingSel {
-	case 0: // size
+	case 1: // size (index shifted by fullscreen toggle at 0)
 		if val < 0.5 {
 			val = 0.5
 		}
@@ -297,7 +329,7 @@ func (m *GameOverlayModel) applySettingInput() {
 			val = 4.0
 		}
 		m.settings.SizeMultiplier = val
-	case 1: // speed
+	case 2: // speed
 		if val < 0.1 {
 			val = 0.1
 		}
@@ -365,12 +397,25 @@ func (m GameOverlayModel) View() string {
 		footer = "↑↓←→/WASD: move" + HintSep + "P: pause" + HintSep + "R: restart" + HintSep + "Ctrl+S: settings" + HintSep + "Ctrl+Q: quit"
 	}
 
+	maxBoxW := 70
+	if m.settings.FullScreen {
+		maxBoxW = m.width - 2
+	} else {
+		// Scale box width based on board size.
+		sm := m.settings.SizeMultiplier
+		if sm > 1.0 {
+			maxBoxW = int(float64(70) * sm)
+		}
+		if maxBoxW > m.width-2 {
+			maxBoxW = m.width - 2
+		}
+	}
 	scaffold := OverlayScaffold{
 		Title:       title,
 		Footer:      footer,
 		Width:       m.width,
 		Height:      m.height,
-		MaxBoxWidth: 70,
+		MaxBoxWidth: maxBoxW,
 		BorderColor: ColorPrimary,
 	}
 	return scaffold.Render(b.String())
@@ -387,12 +432,23 @@ func (m GameOverlayModel) renderSettings() string {
 	b.WriteString(titleStyle.Render("  Game Settings"))
 	b.WriteString("\n\n")
 
+	fsLabel := "off"
+	if m.settings.FullScreen {
+		fsLabel = "on"
+	}
+	sizeVal := fmt.Sprintf("%.1fx", m.settings.SizeMultiplier)
+	sizeDesc := "Multiplier: 0.5 to 4.0 (1.0 = default 30x15)"
+	if m.settings.FullScreen {
+		sizeVal = "(full screen)"
+		sizeDesc = "Disabled in full screen mode"
+	}
 	items := []struct {
 		label string
 		value string
 		desc  string
 	}{
-		{"Board Size", fmt.Sprintf("%.1fx", m.settings.SizeMultiplier), "Multiplier: 0.5 to 4.0 (1.0 = default)"},
+		{"Full Screen", fsLabel, "Fill the entire window (Enter to toggle)"},
+		{"Board Size", sizeVal, sizeDesc},
 		{"Speed", fmt.Sprintf("%.1fx", m.settings.SpeedFactor), "Speed factor: 0.1 (slow) to 5.0 (fast)"},
 		{"[ Save & Restart ]", "", "Apply settings and restart the game"},
 		{"[ Cancel ]", "", "Return to game without changes"},
