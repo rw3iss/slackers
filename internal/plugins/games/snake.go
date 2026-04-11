@@ -34,7 +34,7 @@ type SnakeGame struct {
 	canvas        *ui.Canvas
 	hScale        int  // horizontal render scale (chars per cell)
 	halveVertical bool
-	vertSkip      bool // alternates to skip every other vertical tick
+	vertCount     int // counts vertical ticks for speed reduction
 }
 
 const (
@@ -101,11 +101,12 @@ func (g *SnakeGame) Tick() {
 		return
 	}
 	// When halveVertical is on and the snake is moving vertically,
-	// skip every other tick to halve vertical speed.
+	// skip 1 out of every 4 ticks (75% speed) to compensate for
+	// terminal characters being taller than wide.
 	if g.halveVertical && (g.dir == DirUp || g.dir == DirDown) {
-		g.vertSkip = !g.vertSkip
-		if g.vertSkip {
-			return
+		g.vertCount++
+		if g.vertCount%4 == 0 {
+			return // skip this tick
 		}
 	}
 	head := g.snake[0]
