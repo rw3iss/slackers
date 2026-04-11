@@ -4313,11 +4313,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Text == "__ping__" && m.p2pNode != nil {
 				localStatus, localMsg, suppress := m.effectiveStatus()
 				if suppress {
-					// Hidden mode — don't reply to pings.
-					if m.p2pChan != nil {
-						return m, waitForP2PMsg(m.p2pChan)
-					}
-					return m, nil
+					// Hidden mode — reply with "offline" so the
+					// pinging friend marks us offline instead of
+					// inferring online from the transport connection.
+					localStatus = "offline"
+					localMsg = ""
 				}
 				senderID := msg.SenderID
 				sf := m.sharedFolderName()
@@ -4381,11 +4381,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !wasOnline && (statusType == "online" || statusType == "back") && m.p2pNode != nil {
 				localStatus, localMsg, suppress := m.effectiveStatus()
 				if suppress {
-					// Hidden — don't reply with our status.
-					if m.p2pChan != nil {
-						return m, waitForP2PMsg(m.p2pChan)
-					}
-					return m, nil
+					// Hidden — reply with "offline" so the friend
+					// marks us offline immediately.
+					localStatus = "offline"
+					localMsg = ""
 				}
 				senderID := msg.SenderID
 				sf := m.sharedFolderName()

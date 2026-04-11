@@ -40,6 +40,45 @@ A lightweight, terminal-based Slack client.
 
 For a deep dive into the architecture and design decisions, see [How_It_Works.md](How_It_Works.md).
 
+### Plugins
+
+Slackers has a plugin system for extending functionality with custom commands, games, tools, and integrations. Two plugins ship built-in: **games** and **weather**. Both are auto-enabled on first launch.
+
+**Plugin Manager** -- type `/plugins` to open an overlay listing every installed plugin with its name, version, author, and status. From the manager you can toggle enable/disable (`e`), uninstall (`d` with confirmation), or press Enter to open a plugin's config screen.
+
+**Games plugin** -- classic terminal mini-games.
+
+| Command | Description |
+|---------|-------------|
+| `/games` | Open the games menu |
+| `/games snake` | Start snake |
+| `/games tetris` | Start tetris |
+| `/games quit` | Quit the running game |
+
+In-game controls: arrow keys to move, `Space` / `P` to pause, `R` to restart after game over, `Ctrl-S` to open game settings (board size, speed, block scale), `Ctrl-Q` to hide the game to background (paused). A paused game shows a taskbar button in the message pane header -- click it or run `/games` again to resume.
+
+**Weather plugin** -- fetches forecasts from [wttr.in](https://wttr.in) and displays them in the Output view.
+
+| Command | Description |
+|---------|-------------|
+| `/weather` | Show forecast for your default city |
+| `/weather London` | Show forecast for London |
+
+Configure your default city in the Plugin Manager (select the weather plugin, press Enter, edit the "City / Zipcode" field).
+
+**Plugin management commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/plugins` | Open the Plugin Manager overlay |
+| `/plugin enable <name>` | Enable a plugin |
+| `/plugin disable <name>` | Disable a plugin |
+| `/plugin uninstall <name>` | Remove a plugin and its config |
+| `/plugin info <name>` | Show plugin details |
+| `/plugin list` | List all plugins |
+
+Plugin state is stored in `~/.config/slackers/plugins/`.
+
 ## Install
 
 Download a binary from the [Releases](https://github.com/rw3iss/slackers/releases) page, or build from source:
@@ -144,6 +183,16 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Ctrl-S` | Settings |
 | `Ctrl-Q` / `Ctrl-C` | Quit |
 
+**In-game (game overlay active):**
+
+| Key | Action |
+|-----|--------|
+| `Arrow keys` | Move (snake) / shift piece (tetris) |
+| `Space` / `P` | Pause / unpause |
+| `R` | Restart (after game over) |
+| `Ctrl-S` | Open game settings (board size, speed) |
+| `Ctrl-Q` | Hide game to background (paused) |
+
 All overlay panels (help, settings, search, hidden channels) are scrollable with arrow keys, PgUp/PgDn, and mouse wheel.
 
 </details>
@@ -226,6 +275,10 @@ the input, or press **Enter** to run it directly.
 | `/settings` | Open the settings overlay |
 | `/shortcuts` | Open the keyboard shortcuts editor |
 | `/config` | Show the current config (tokens redacted) |
+| `/plugins` | Open the Plugin Manager |
+| `/plugin enable\|disable\|uninstall\|info\|list <name>` | Manage plugins |
+| `/games [snake\|tetris\|quit]` | Play mini games or open the game menu |
+| `/weather [city]` | Show weather forecast (default city or specified) |
 
 Commands open results in a temporary **Output view** that replaces
 the messages pane. The sidebar, input bar, and Tab focus cycling
@@ -374,6 +427,7 @@ That folder contains:
 | `friend_history/` | Encrypted P2P chat history per friend |
 | `secure.key` | Your local Curve25519 key pair (do not share) |
 | `shortcuts.json` | Custom keyboard-shortcut overrides |
+| `plugins/` | Plugin index and per-plugin config |
 | `debug.log` | Debug output (when `--debug` is set) |
 
 ### Manual backup
