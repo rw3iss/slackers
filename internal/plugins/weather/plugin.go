@@ -75,3 +75,23 @@ func (p *WeatherPlugin) Shortcuts() map[string][]string {
 }
 
 func (p *WeatherPlugin) MessageFilter(senderID, data string) bool { return false }
+
+func (p *WeatherPlugin) ConfigFields() []plugins.ConfigField {
+	return []plugins.ConfigField{
+		{
+			Key:         "city",
+			Label:       "City / Zipcode",
+			Value:       p.city,
+			Description: "City name or zipcode for weather lookups (e.g. 'London', '10001')",
+		},
+	}
+}
+
+func (p *WeatherPlugin) SetConfig(key, value string) {
+	switch key {
+	case "city":
+		if value != "" {
+			p.city = value
+		}
+	}
+}

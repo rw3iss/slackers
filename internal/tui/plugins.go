@@ -71,7 +71,13 @@ func (m PluginsModel) Update(msg tea.Msg) (PluginsModel, tea.Cmd) {
 			if m.selected < len(m.plugins)-1 {
 				m.selected++
 			}
-		case "e", "enter":
+		case "enter":
+			// Open plugin config.
+			if m.selected >= 0 && m.selected < len(m.plugins) {
+				name := m.plugins[m.selected].Name
+				return m, func() tea.Msg { return PluginConfigOpenMsg{Name: name} }
+			}
+		case "e":
 			// Toggle enable/disable.
 			if m.selected >= 0 && m.selected < len(m.plugins) {
 				name := m.plugins[m.selected].Name
@@ -157,6 +163,7 @@ func (m PluginsModel) View() string {
 			if i == m.selected && p.Description != "" {
 				b.WriteString("    " + descStyle.Render(p.Description) + "\n")
 			}
+			b.WriteString("\n") // spacing between plugins
 		}
 	}
 
@@ -166,7 +173,7 @@ func (m PluginsModel) View() string {
 		b.WriteString("\n")
 	}
 
-	footer := "↑↓: navigate" + HintSep + "e/Enter: enable/disable" + HintSep + "d: uninstall" + HintSep + FooterHintClose
+	footer := "↑↓: navigate" + HintSep + "Enter: config" + HintSep + "e: enable/disable" + HintSep + "d: uninstall" + HintSep + FooterHintClose
 	scaffold := OverlayScaffold{
 		Title:       "Plugin Manager",
 		Footer:      footer,

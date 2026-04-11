@@ -38,6 +38,22 @@ type Plugin interface {
 	// Return true if the message was handled. senderID is the friend's
 	// user ID, data is the JSON payload.
 	MessageFilter(senderID, data string) bool
+
+	// ConfigFields returns user-editable config fields for the plugin
+	// config screen. Each field has a key, label, current value, and
+	// description. Return nil if the plugin has no user config.
+	ConfigFields() []ConfigField
+
+	// SetConfig is called when the user saves a config field.
+	SetConfig(key, value string)
+}
+
+// ConfigField describes one editable setting in a plugin's config.
+type ConfigField struct {
+	Key         string // internal key (e.g. "city")
+	Label       string // display label (e.g. "City / Zipcode")
+	Value       string // current value
+	Description string // help text shown when selected
 }
 
 // PluginState tracks a plugin's lifecycle state.

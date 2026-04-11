@@ -52,8 +52,8 @@ func defaultGameSettings() GameSettings {
 		HalveVertical: true,
 		SnakeCols:     30,
 		SnakeRows:     20,
-		TetrisCols:    10,
-		TetrisRows:    15,
+		TetrisCols:    30,
+		TetrisRows:    30,
 		BlockScale:    1,
 	}
 }
@@ -78,10 +78,12 @@ type GameOverlayModel struct {
 }
 
 // NewGameOverlay creates a game overlay for the given game name.
-func NewGameOverlay(name string, settings GameSettings) GameOverlayModel {
+func NewGameOverlay(name string, settings GameSettings, w, h int) GameOverlayModel {
 	m := GameOverlayModel{
 		gameName: name,
 		settings: settings,
+		width:    w,
+		height:   h,
 	}
 	m.initGame()
 	return m
@@ -526,6 +528,37 @@ func (m *GameOverlayModel) applySettingInput(items []settingItem) {
 	m.settingInput = ""
 }
 
+// centerFrame horizontally centers the game frame within the overlay.
+func (m GameOverlayModel) centerFrame(frame string) string {
+	lines := strings.Split(frame, "\n")
+	if len(lines) == 0 {
+		return frame
+	}
+	// Find the widest rendered line.
+	maxW := 0
+	for _, line := range lines {
+		w := lipgloss.Width(line)
+		if w > maxW {
+			maxW = w
+		}
+	}
+	// Available content width inside the overlay box.
+	contentW := m.width - 10 // borders + padding
+	if contentW <= maxW {
+		return frame
+	}
+	pad := strings.Repeat(" ", (contentW-maxW)/2)
+	var centered strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			centered.WriteString("\n")
+		}
+		centered.WriteString(pad)
+		centered.WriteString(line)
+	}
+	return centered.String()
+}
+
 // Settings returns current settings (for persistence).
 func (m GameOverlayModel) Settings() GameSettings {
 	return m.settings
@@ -562,14 +595,14 @@ func (m GameOverlayModel) View() string {
 	if m.showSettings {
 		b.WriteString(m.renderSettings())
 	} else if m.snake != nil {
-		b.WriteString(m.snake.RenderFrame())
+		b.WriteString(m.centerFrame(m.snake.RenderFrame()))
 		if m.snake.IsGameOver() {
 			b.WriteString("\n\n")
 			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorError).Render("  GAME OVER!"))
 			b.WriteString("  " + dimStyle.Render("R: restart · Ctrl+Q: quit"))
 		}
 	} else if m.tetris != nil {
-		b.WriteString(m.tetris.RenderFrame())
+		b.WriteString(m.centerFrame(m.tetris.RenderFrame()))
 		if m.tetris.IsGameOver() {
 			b.WriteString("\n\n")
 			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorError).Render("  GAME OVER!"))

@@ -68,6 +68,7 @@ const (
 	overlayNotifications
 	overlayPlugins
 	overlayGame
+	overlayPluginConfig
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -490,6 +491,7 @@ type Model struct {
 	pluginManager  *plugins.Manager
 	pluginsOverlay PluginsModel
 	gameOverlay    GameOverlayModel
+	pluginConfig   PluginConfigModel
 	// backgroundGame is non-nil when a game is running but hidden
 	// (user pressed Esc to return to chat). The game is paused
 	// and can be restored via /games or the taskbar indicator.
@@ -1568,6 +1570,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayPlugins {
 			var cmd tea.Cmd
 			m.pluginsOverlay, cmd = m.pluginsOverlay.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayPluginConfig {
+			var cmd tea.Cmd
+			m.pluginConfig, cmd = m.pluginConfig.Update(msg)
 			return m, cmd
 		}
 		// Normal key handling (no overlay)
@@ -3181,7 +3188,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Close any existing background game of a different type.
 		m.backgroundGame = nil
-		m.gameOverlay = NewGameOverlay(msg.GameName, defaultGameSettings())
+		m.gameOverlay = NewGameOverlay(msg.GameName, defaultGameSettings(), m.width, m.height)
 		m.gameOverlay.SetSize(m.width, m.height)
 		m.overlay = overlayGame
 		m.warning = "Game: " + msg.GameName + " — Esc: hide · Ctrl+Q: quit"
@@ -3229,6 +3236,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.pluginsOverlay.Refresh(m.pluginManager.List())
+		return m, nil
+
+	case PluginConfigOpenMsg:
+		p := m.pluginManager.GetPlugin(msg.Name)
+		info := m.pluginManager.Get(msg.Name)
+		m.pluginConfig = NewPluginConfigModel(msg.Name, info, p)
+		m.pluginConfig.SetSize(m.width, m.height)
+		m.overlay = overlayPluginConfig
+		return m, nil
+
+	case PluginConfigCloseMsg:
+		// Return to plugins manager.
+		m.pluginsOverlay = NewPluginsModel(m.pluginManager.List())
+		m.pluginsOverlay.SetSize(m.width, m.height)
+		m.overlay = overlayPlugins
 		return m, nil
 
 	case PluginUninstallMsg:
@@ -5332,6 +5354,8 @@ func (m Model) viewInner() string {
 		return m.pluginsOverlay.View()
 	case overlayGame:
 		return m.gameOverlay.View()
+	case overlayPluginConfig:
+		return m.pluginConfig.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the

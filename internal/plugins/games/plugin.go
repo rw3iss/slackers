@@ -92,3 +92,5 @@ func (p *GamesPlugin) Commands() []*commands.Command {
 
 func (p *GamesPlugin) Shortcuts() map[string][]string        { return nil }
 func (p *GamesPlugin) MessageFilter(senderID, data string) bool { return false }
+func (p *GamesPlugin) ConfigFields() []plugins.ConfigField     { return nil }
+func (p *GamesPlugin) SetConfig(key, value string)             {}

@@ -246,6 +246,17 @@ func (m *Manager) Get(name string) *PluginInfo {
 	}
 }
 
+// GetPlugin returns the live Plugin instance, or nil if not found.
+func (m *Manager) GetPlugin(name string) Plugin {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, ok := m.plugins[name]
+	if !ok {
+		return nil
+	}
+	return entry.plugin
+}
+
 // Names returns the names of all registered plugins (for command completion).
 func (m *Manager) Names() []string {
 	m.mu.RLock()
