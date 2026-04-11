@@ -32,6 +32,7 @@ type SnakeGame struct {
 	score         int
 	gameOver      bool
 	canvas        *ui.Canvas
+	hScale        int  // horizontal render scale (chars per cell)
 	halveVertical bool
 	vertSkip      bool // alternates to skip every other vertical tick
 }
@@ -60,6 +61,7 @@ func NewSnakeGameSized(w, h int) *SnakeGame {
 		width:  w,
 		height: h,
 		dir:    DirRight,
+		hScale: 1,
 		canvas: ui.NewCanvas("snake", w, h),
 	}
 	// Initial snake in the center.
@@ -152,6 +154,16 @@ func (g *SnakeGame) IsGameOver() bool { return g.gameOver }
 // compensating for terminal characters being taller than wide.
 func (g *SnakeGame) SetHalveVertical(on bool) { g.halveVertical = on }
 
+// SetHScale sets the horizontal render scale (chars per cell).
+func (g *SnakeGame) SetHScale(s int) {
+	if s < 1 {
+		s = 1
+	}
+	g.hScale = s
+	// Rebuild canvas for scaled width.
+	g.canvas = ui.NewCanvas("snake", g.width*s, g.height)
+}
+
 // SetDirection changes the snake's direction.
 func (g *SnakeGame) SetDirection(d Direction) {
 	// Prevent 180-degree turns.
@@ -165,41 +177,44 @@ func (g *SnakeGame) SetDirection(d Direction) {
 	}
 }
 
+// setScaled fills hScale cells horizontally for one logical cell.
+func (g *SnakeGame) setScaled(lx, ly int, ch rune, fg, bg lipgloss.Color) {
+	for dx := 0; dx < g.hScale; dx++ {
+		g.canvas.Set(lx*g.hScale+dx, ly, ch, fg, bg)
+	}
+}
+
 // RenderFrame draws the current game state to the canvas and
 // returns the rendered string.
 func (g *SnakeGame) RenderFrame() string {
 	g.canvas.Clear()
+	hs := g.hScale
 
 	// Draw walls.
 	for x := 0; x < g.width; x++ {
-		g.canvas.Set(x, 0, '█', colorWall, colorBG)
-		g.canvas.Set(x, g.height-1, '█', colorWall, colorBG)
+		g.setScaled(x, 0, '█', colorWall, colorBG)
+		g.setScaled(x, g.height-1, '█', colorWall, colorBG)
 	}
 	for y := 0; y < g.height; y++ {
-		g.canvas.Set(0, y, '█', colorWall, colorBG)
-		g.canvas.Set(g.width-1, y, '█', colorWall, colorBG)
+		for dx := 0; dx < hs; dx++ {
+			g.canvas.Set(dx, y, '█', colorWall, colorBG)
+			g.canvas.Set((g.width-1)*hs+dx, y, '█', colorWall, colorBG)
+		}
 	}
 
 	// Draw food.
-	g.canvas.Set(g.food.X, g.food.Y, '●', colorFood, colorBG)
+	g.setScaled(g.food.X, g.food.Y, '●', colorFood, colorBG)
 
 	// Draw snake.
 	for i, p := range g.snake {
 		color := colorSnakeBody
-		ch := rune('█')
 		if i == 0 {
 			color = colorSnakeHead
 		}
-		g.canvas.Set(p.X, p.Y, ch, color, colorBG)
+		g.setScaled(p.X, p.Y, '█', color, colorBG)
 	}
 
-	// Score header.
-	scoreText := "Score: " + itoa(g.score)
-	if g.gameOver {
-		scoreText = "GAME OVER — Score: " + itoa(g.score)
-	}
-	header := scoreText + "\n"
-	return header + g.canvas.Render(g.width, g.height)
+	return g.canvas.Render(g.width*hs, g.height)
 }
 
 func itoa(n int) string {

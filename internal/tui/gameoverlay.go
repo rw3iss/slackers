@@ -35,23 +35,26 @@ type gameTickMsg struct{}
 
 // GameSettings holds user-configurable game parameters.
 type GameSettings struct {
-	SizeMultiplier   float64 // snake: 0.5 to 4.0 (1.0 = default)
-	SpeedFactor      float64 // 0.1 to 5.0 (1.0 = normal)
-	FullScreen       bool    // if true, board fills the window
-	TetrisCols       int     // tetris logical columns (default 10)
-	TetrisRows       int     // tetris logical rows (default 15)
-	BlockScale       int     // tetris block render scale: 1 or 2
-	HalveVertical    bool    // double horizontal to compensate for tall terminal chars
+	SpeedFactor    float64 // 0.1 to 5.0 (1.0 = normal)
+	HalveVertical  bool    // double horizontal to compensate for tall terminal chars
+	SnakeCols      int     // snake board columns (default 30)
+	SnakeRows      int     // snake board rows (default 20)
+	TetrisCols     int     // tetris logical columns (default 10)
+	TetrisRows     int     // tetris logical rows (default 15)
+	BlockScale     int     // tetris block render scale: 1 or 2
+	SnakeHighScore int     // persisted high score
+	TetrisHighScore int    // persisted high score
 }
 
 func defaultGameSettings() GameSettings {
 	return GameSettings{
-		SizeMultiplier: 1.0,
-		SpeedFactor:    1.0,
-		TetrisCols:     10,
-		TetrisRows:     15,
-		BlockScale:     1,
-		HalveVertical:  true, // on by default — terminals have tall chars
+		SpeedFactor:   1.0,
+		HalveVertical: true,
+		SnakeCols:     30,
+		SnakeRows:     20,
+		TetrisCols:    10,
+		TetrisRows:    15,
+		BlockScale:    1,
 	}
 }
 
@@ -98,26 +101,36 @@ func (m *GameOverlayModel) initGame() {
 
 	switch m.gameName {
 	case "snake":
-		sm := m.settings.SizeMultiplier
-		if sm <= 0 {
-			sm = 1.0
+		cols := m.settings.SnakeCols
+		rows := m.settings.SnakeRows
+		if cols <= 0 {
+			cols = 30
 		}
-		w := int(float64(maxW) * sm)
-		h := int(float64(maxH) * sm)
-		if w > maxW {
-			w = maxW
+		if rows <= 0 {
+			rows = 20
 		}
-		if h > maxH {
-			h = maxH
+		// Apply halve-vertical: double horizontal chars per cell.
+		hScale := 1
+		if m.settings.HalveVertical {
+			hScale = 2
 		}
-		if w < 10 {
-			w = 10
+		// Clamp logical size so rendered board fits window.
+		maxLogicalCols := maxW / hScale
+		if cols > maxLogicalCols {
+			cols = maxLogicalCols
 		}
-		if h < 8 {
-			h = 8
+		if rows > maxH {
+			rows = maxH
 		}
-		m.snake = games.NewSnakeGameSized(w, h)
+		if cols < 6 {
+			cols = 6
+		}
+		if rows < 6 {
+			rows = 6
+		}
+		m.snake = games.NewSnakeGameSized(cols, rows)
 		m.snake.SetHalveVertical(m.settings.HalveVertical)
+		m.snake.SetHScale(hScale)
 		m.tetris = nil
 	case "tetris":
 		cols := m.settings.TetrisCols
@@ -304,12 +317,18 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 		if m.snake != nil {
 			m.snake.Tick()
 			if m.snake.IsGameOver() {
+				if m.snake.Score() > m.settings.SnakeHighScore {
+					m.settings.SnakeHighScore = m.snake.Score()
+				}
 				return m, nil
 			}
 		}
 		if m.tetris != nil {
 			m.tetris.Tick()
 			if m.tetris.IsGameOver() {
+				if m.tetris.Score() > m.settings.TetrisHighScore {
+					m.settings.TetrisHighScore = m.tetris.Score()
+				}
 				return m, nil
 			}
 		}
@@ -328,36 +347,21 @@ type settingItem struct {
 }
 
 func (m GameOverlayModel) buildSettingItems() []settingItem {
-	fsLabel := "off"
-	if m.settings.FullScreen {
-		fsLabel = "on"
-	}
-	items := []settingItem{
-		{key: "fullscreen", label: "Full Screen", value: fsLabel, desc: "Fill the entire window (Enter to toggle)", toggle: true},
-	}
+	var items []settingItem
 	if m.gameName == "snake" {
-		sizeVal := fmt.Sprintf("%.1fx", m.settings.SizeMultiplier)
-		sizeDesc := "Multiplier: 0.5 to 4.0"
-		if m.settings.FullScreen {
-			sizeVal = "(full screen)"
-			sizeDesc = "Disabled in full screen mode"
-		}
-		items = append(items, settingItem{key: "size", label: "Board Size", value: sizeVal, desc: sizeDesc})
+		items = append(items,
+			settingItem{key: "cols", label: "Columns", value: fmt.Sprintf("%d", m.settings.SnakeCols), desc: "Board width in cells (6-100)"},
+			settingItem{key: "rows", label: "Rows", value: fmt.Sprintf("%d", m.settings.SnakeRows), desc: "Board height in cells (6-60)"},
+		)
 	}
 	if m.gameName == "tetris" {
-		colVal := fmt.Sprintf("%d", m.settings.TetrisCols)
-		rowVal := fmt.Sprintf("%d", m.settings.TetrisRows)
-		if m.settings.FullScreen {
-			colVal = "(auto)"
-			rowVal = "(auto)"
-		}
 		bsVal := fmt.Sprintf("%d", m.settings.BlockScale)
 		if m.settings.BlockScale < 1 {
 			bsVal = "1"
 		}
 		items = append(items,
-			settingItem{key: "cols", label: "Columns", value: colVal, desc: "Board width in logical cells (4-60)"},
-			settingItem{key: "rows", label: "Rows", value: rowVal, desc: "Board height in logical cells (6-80)"},
+			settingItem{key: "cols", label: "Columns", value: fmt.Sprintf("%d", m.settings.TetrisCols), desc: "Board width in logical cells (4-60)"},
+			settingItem{key: "rows", label: "Rows", value: fmt.Sprintf("%d", m.settings.TetrisRows), desc: "Board height in logical cells (6-80)"},
 			settingItem{key: "blockscale", label: "Block Scale", value: bsVal, desc: "Render size per block: 1 = normal, 2 = double"},
 		)
 	}
@@ -413,21 +417,18 @@ func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd)
 		if m.settingSel >= 0 && m.settingSel < len(items) {
 			item := items[m.settingSel]
 			switch item.key {
-			case "fullscreen":
-				m.settings.FullScreen = !m.settings.FullScreen
-			case "size":
-				if !m.settings.FullScreen {
-					m.settingEditing = true
-					m.settingInput = fmt.Sprintf("%.1f", m.settings.SizeMultiplier)
-				}
 			case "cols":
-				if !m.settings.FullScreen {
-					m.settingEditing = true
+				m.settingEditing = true
+				if m.gameName == "snake" {
+					m.settingInput = fmt.Sprintf("%d", m.settings.SnakeCols)
+				} else {
 					m.settingInput = fmt.Sprintf("%d", m.settings.TetrisCols)
 				}
 			case "rows":
-				if !m.settings.FullScreen {
-					m.settingEditing = true
+				m.settingEditing = true
+				if m.gameName == "snake" {
+					m.settingInput = fmt.Sprintf("%d", m.settings.SnakeRows)
+				} else {
 					m.settingInput = fmt.Sprintf("%d", m.settings.TetrisRows)
 				}
 			case "blockscale":
@@ -465,19 +466,23 @@ func (m *GameOverlayModel) applySettingInput(items []settingItem) {
 	}
 	item := items[m.settingSel]
 	switch item.key {
-	case "size":
-		val, err := strconv.ParseFloat(m.settingInput, 64)
+	case "cols":
+		val, err := strconv.Atoi(m.settingInput)
 		if err != nil {
 			return
 		}
-		if val < 0.5 {
-			val = 0.5
+		if val < 4 {
+			val = 4
 		}
-		if val > 4.0 {
-			val = 4.0
+		if val > 100 {
+			val = 100
 		}
-		m.settings.SizeMultiplier = val
-	case "cols":
+		if m.gameName == "snake" {
+			m.settings.SnakeCols = val
+		} else {
+			m.settings.TetrisCols = val
+		}
+	case "rows":
 		val, err := strconv.Atoi(m.settingInput)
 		if err != nil {
 			return
@@ -485,22 +490,14 @@ func (m *GameOverlayModel) applySettingInput(items []settingItem) {
 		if val < 6 {
 			val = 6
 		}
-		if val > 60 {
-			val = 60
-		}
-		m.settings.TetrisCols = val
-	case "rows":
-		val, err := strconv.Atoi(m.settingInput)
-		if err != nil {
-			return
-		}
-		if val < 10 {
-			val = 10
-		}
 		if val > 80 {
 			val = 80
 		}
-		m.settings.TetrisRows = val
+		if m.gameName == "snake" {
+			m.settings.SnakeRows = val
+		} else {
+			m.settings.TetrisRows = val
+		}
 	case "blockscale":
 		val, err := strconv.Atoi(m.settingInput)
 		if err != nil {
@@ -542,11 +539,19 @@ func (m GameOverlayModel) View() string {
 
 	// Header with score.
 	if m.snake != nil {
+		hi := m.settings.SnakeHighScore
 		b.WriteString("  " + scoreStyle.Render(fmt.Sprintf("Score: %d", m.snake.Score())))
+		if hi > 0 {
+			b.WriteString("  " + dimStyle.Render(fmt.Sprintf("Best: %d", hi)))
+		}
 	}
 	if m.tetris != nil {
+		hi := m.settings.TetrisHighScore
 		b.WriteString("  " + scoreStyle.Render(fmt.Sprintf("Score: %d  Level: %d  Lines: %d",
 			m.tetris.Score(), m.tetris.Level(), m.tetris.Lines())))
+		if hi > 0 {
+			b.WriteString("  " + dimStyle.Render(fmt.Sprintf("Best: %d", hi)))
+		}
 	}
 	if m.paused && !m.showSettings {
 		b.WriteString("  " + lipgloss.NewStyle().Foreground(ColorHighlight).Render("[PAUSED]"))
@@ -591,6 +596,8 @@ func (m GameOverlayModel) View() string {
 		Footer:      footer,
 		Width:       m.width,
 		Height:      m.height,
+		BoxWidth:    m.width - 2,
+		BoxHeight:   m.height - 2,
 		MaxBoxWidth: m.width - 2,
 		BorderColor: ColorPrimary,
 	}
