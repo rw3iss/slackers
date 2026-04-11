@@ -334,7 +334,7 @@ func (m DownloadsModel) scaffold(body string) string {
 	var actions string
 	switch m.section {
 	case dlSectionActive:
-		actions = "Enter: cancel" + HintSep + "d: cancel"
+		actions = "Enter/d: cancel"
 	case dlSectionFailed:
 		actions = "Enter: retry"
 	case dlSectionCompleted:
