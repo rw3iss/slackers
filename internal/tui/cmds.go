@@ -629,14 +629,8 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 					if on != before {
 						debug.Log("[friend-ping] uid=%s state %v → %v", uid, before, on)
 					}
-					if !on {
-						// Only mark offline from connectivity —
-						// online status is set by the status_update
-						// reply, not by IsConnected. This prevents
-						// a brief online flash for hidden friends
-						// before their "offline" reply arrives.
-						store.SetOnline(uid, false)
-					} else {
+					store.SetOnline(uid, on) // blocked by guard if AwayStatus=="offline"
+					if on {
 						store.UpdateLastOnline(uid)
 						// Send our status so the friend's handler
 						// fires and sets our status on their side.
@@ -657,9 +651,8 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 					// by incoming status_update messages or prior
 					// pong responses).
 					f := store.Get(uid)
-					// Respect the friend's explicit offline status
-					// (hidden mode) — report them as offline even
-					// though the transport connection is up.
+					// Check the friend's stored status — if they
+					// sent "offline" (hidden), report offline.
 					reportOnline := on
 					if f != nil && f.AwayStatus == "offline" {
 						reportOnline = false
