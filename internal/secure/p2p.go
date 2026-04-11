@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -660,10 +661,17 @@ func (n *P2PNode) DownloadFileFromPeer(ctx context.Context, slackUserID, fileID,
 		return fmt.Errorf("sending file request: %w", err)
 	}
 
-	// Create destination file.
+	// Create destination file — avoid overwriting existing files.
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
+	}
+	preExisted := false
+	if _, statErr := os.Stat(destPath); statErr == nil {
+		preExisted = true
+		ext := filepath.Ext(destPath)
+		base := strings.TrimSuffix(destPath, ext)
+		destPath = base + "_download" + ext
 	}
 	out, err := os.Create(destPath)
 	if err != nil {
@@ -673,7 +681,9 @@ func (n *P2PNode) DownloadFileFromPeer(ctx context.Context, slackUserID, fileID,
 
 	// Read file data from stream.
 	if _, err := io.Copy(out, stream); err != nil {
-		os.Remove(destPath)
+		if !preExisted {
+			os.Remove(destPath)
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -715,6 +725,16 @@ func (n *P2PNode) DownloadFileByPath(ctx context.Context, slackUserID, relativeP
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// Check if the file already exists — never delete pre-existing files
+	// on failure (the source and dest could be the same directory).
+	preExisted := false
+	if _, statErr := os.Stat(destPath); statErr == nil {
+		preExisted = true
+		// Append a suffix to avoid overwriting the original.
+		ext := filepath.Ext(destPath)
+		base := strings.TrimSuffix(destPath, ext)
+		destPath = base + "_download" + ext
+	}
 	out, err := os.Create(destPath)
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", destPath, err)
@@ -722,14 +742,18 @@ func (n *P2PNode) DownloadFileByPath(ctx context.Context, slackUserID, relativeP
 	defer out.Close()
 	written, err := io.Copy(out, stream)
 	if err != nil {
-		os.Remove(destPath)
+		if !preExisted {
+			os.Remove(destPath)
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		return fmt.Errorf("receiving file: %w", err)
 	}
 	if written == 0 {
-		os.Remove(destPath)
+		if !preExisted {
+			os.Remove(destPath)
+		}
 		return fmt.Errorf("server returned empty response (file may not exist or shared folder is not configured)")
 	}
 	return nil
