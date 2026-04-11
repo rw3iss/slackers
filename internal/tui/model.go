@@ -3306,6 +3306,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case DownloadCompleteMsg:
+		// Clear the "downloading..." message from the remote browser.
+		m.remoteBrowser.message = ""
 		if m.downloadMgr != nil {
 			if msg.Err != nil {
 				m.downloadMgr.Fail(msg.ID, msg.Err.Error())
@@ -4335,6 +4337,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.warning = ""
 				m.warningSetAt = time.Time{}
 				m.prevWarning = ""
+				// Also clear the remote browser status message.
+				m.remoteBrowser.message = ""
 			}
 		} else {
 			m.prevWarning = ""
