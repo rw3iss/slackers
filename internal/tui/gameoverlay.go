@@ -67,9 +67,8 @@ type GameOverlayModel struct {
 	width    int
 	height   int
 	settings GameSettings
-	// Input throttling: drop rapid key repeats to prevent queue buildup.
-	lastInput    time.Time
-	inputQueue   int // count of keys processed this throttle window
+	// Input throttling: only accept one movement key per 20ms.
+	lastInput time.Time
 	// Settings menu state.
 	showSettings   bool
 	settingSel     int // 0=size, 1=speed, 2=save, 3=cancel
@@ -229,17 +228,18 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			return m.updateSettings(key)
 		}
 
-		// Input pool: max 2 pending movement commands. New inputs
-		// are dropped while the pool is full. The pool drains by 1
-		// on each game tick, so held keys produce a steady stream
-		// without flooding. Control keys bypass the pool.
+		// Throttle movement keys: accept at most one per 20ms.
+		// Excess key repeats from holding a key are silently
+		// dropped. No queue — when the user releases the key,
+		// input stops immediately. Control keys bypass throttle.
 		isControl := key == "ctrl+q" || key == "ctrl+s" || key == "p" ||
 			key == "r" || key == "esc" || key == " "
 		if !isControl && !m.paused {
-			if m.inputQueue >= 2 {
-				return m, nil // pool full, drop input
+			now := time.Now()
+			if now.Sub(m.lastInput) < 20*time.Millisecond {
+				return m, nil // too soon, drop
 			}
-			m.inputQueue++
+			m.lastInput = now
 		}
 
 		// Universal game controls.
@@ -309,11 +309,6 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 	case gameTickMsg:
 		if m.paused || m.showSettings {
 			return m, nil
-		}
-		// Drain one slot from the input pool so held keys
-		// produce a steady stream tied to the game speed.
-		if m.inputQueue > 0 {
-			m.inputQueue--
 		}
 		if m.snake != nil {
 			m.snake.Tick()
