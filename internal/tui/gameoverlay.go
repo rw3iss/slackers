@@ -139,10 +139,10 @@ func (m *GameOverlayModel) initGame() {
 		cols := m.settings.TetrisCols
 		rows := m.settings.TetrisRows
 		if cols <= 0 {
-			cols = 10
+			cols = 30
 		}
 		if rows <= 0 {
-			rows = 15
+			rows = 30
 		}
 		// Compute render scale factors.
 		bs := m.settings.BlockScale

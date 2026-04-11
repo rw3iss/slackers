@@ -945,6 +945,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.ready = true
 		m.settings.SetSize(msg.Width, msg.Height)
+		m.gameOverlay.SetSize(msg.Width, msg.Height)
 		m.resizeComponents()
 		return m, nil
 
