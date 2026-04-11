@@ -4290,7 +4290,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// disconnect handler below overrides this for the
 		// explicit "I'm going offline" case. Status updates are
 		// excluded — they set the status via their own handler.
-		if msg.SenderID != "" && msg.SenderID != "unknown" && msg.Text != "__disconnect__" && msg.Text != "__status_update__" {
+		if msg.SenderID != "" && msg.SenderID != "unknown" &&
+			msg.Text != "__disconnect__" && msg.Text != "__status_update__" && msg.Text != "__ping__" {
 			if m.friendStore != nil && m.friendStore.Get(msg.SenderID) != nil {
 				wasOnline := m.friendStore.Get(msg.SenderID).Online
 				m.friendStore.SetOnline(msg.SenderID, true)
