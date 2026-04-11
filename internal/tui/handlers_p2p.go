@@ -47,6 +47,19 @@ func (m *Model) newFileBrowserCfg() FileBrowserConfig {
 	return cfg
 }
 
+// effectiveStatus returns the status string to broadcast.
+// If HideOnlineStatus is enabled, always returns "offline"
+// so the user appears offline to all friends.
+func (m *Model) effectiveStatus() (string, string) {
+	if m.cfg != nil && m.cfg.HideOnlineStatus {
+		return "offline", ""
+	}
+	if m.cfg != nil && m.cfg.AwayEnabled {
+		return "away", m.cfg.AwayMsg
+	}
+	return "online", ""
+}
+
 // sharedFolderName returns the basename of the user's shared folder
 // (for inclusion in status broadcasts), or "" if none is configured.
 func (m *Model) sharedFolderName() string {

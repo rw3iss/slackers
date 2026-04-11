@@ -83,6 +83,12 @@ type Config struct {
 	// MsgTypeStatusUpdate("away") on save.
 	AwayEnabled bool   `json:"away_enabled,omitempty"`
 	AwayMsg     string `json:"away_msg,omitempty"` // optional human-readable away message
+	// HideOnlineStatus, when true, makes the user always appear
+	// offline to friends. All functionality (chat, files, etc.)
+	// continues to work — only the status broadcast is suppressed.
+	// An initial "offline" status is broadcast when enabled, then
+	// no further status updates are sent.
+	HideOnlineStatus bool `json:"hide_online_status,omitempty"`
 
 	// SharedFolder is the local directory shared with friends via
 	// the "Browse Shared Files" feature. Friends can remotely list

@@ -271,6 +271,13 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				value:       "Manage...",
 				description: "Manage users allowed for E2E encrypted messaging",
 			},
+			{
+				label:       "Hide Online Status",
+				key:         "hide_online_status",
+				value:       boolToOnOff(cfg.HideOnlineStatus),
+				description: "Always appear offline to friends (chat still works, only status is hidden)",
+				options:     []string{"on", "off"},
+			},
 
 			// ───── Customization ─────
 			header("Customization"),
@@ -800,6 +807,15 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 			m.cfg.ChannelSortAsc = &b
 		}
 		m.message = "Direction: " + value
+
+	case "hide_online_status":
+		v := strings.ToLower(strings.TrimSpace(value))
+		m.cfg.HideOnlineStatus = (v == "on")
+		if m.cfg.HideOnlineStatus {
+			m.message = "Online status hidden — you will appear offline"
+		} else {
+			m.message = "Online status visible"
+		}
 
 	case "shared_folder":
 		m.cfg.SharedFolder = value
