@@ -527,13 +527,14 @@ func (m *GameOverlayModel) applySettingInput(items []settingItem) {
 	m.settingInput = ""
 }
 
-// centerFrame horizontally centers the game frame within the overlay.
+// centerFrame horizontally and vertically centers the game frame.
 func (m GameOverlayModel) centerFrame(frame string) string {
 	lines := strings.Split(frame, "\n")
 	if len(lines) == 0 {
 		return frame
 	}
-	// Find the widest rendered line.
+
+	// Horizontal centering.
 	maxW := 0
 	for _, line := range lines {
 		w := lipgloss.Width(line)
@@ -541,18 +542,29 @@ func (m GameOverlayModel) centerFrame(frame string) string {
 			maxW = w
 		}
 	}
-	// Available content width inside the overlay box.
-	contentW := m.width - 10 // borders + padding
-	if contentW <= maxW {
-		return frame
+	contentW := m.width - 10
+	hPad := ""
+	if contentW > maxW {
+		hPad = strings.Repeat(" ", (contentW-maxW)/2)
 	}
-	pad := strings.Repeat(" ", (contentW-maxW)/2)
+
+	// Vertical centering: available height minus header (score line
+	// + blank) and footer (2 lines), then center the frame.
+	contentH := m.height - 12 // overlay chrome + header + footer
+	vPad := 0
+	if contentH > len(lines) {
+		vPad = (contentH - len(lines)) / 2
+	}
+
 	var centered strings.Builder
+	for i := 0; i < vPad; i++ {
+		centered.WriteString("\n")
+	}
 	for i, line := range lines {
 		if i > 0 {
 			centered.WriteString("\n")
 		}
-		centered.WriteString(pad)
+		centered.WriteString(hPad)
 		centered.WriteString(line)
 	}
 	return centered.String()
