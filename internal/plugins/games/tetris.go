@@ -332,9 +332,10 @@ func (g *TetrisGame) RenderFrame() string {
 			}
 		}
 	}
-	// Bottom border.
+	// Bottom border — draw a full row of '─' spanning the board width.
+	bottomY := vs + boardRenderH
 	for rx := 0; rx <= boardRenderW+1; rx++ {
-		g.canvas.Set(rx, boardRenderH+vs, '─', wallColor, "")
+		g.canvas.Set(rx, bottomY, '─', wallColor, "")
 	}
 
 	// Draw current piece (scaled).
