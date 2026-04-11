@@ -6,6 +6,9 @@ import (
 	"github.com/rw3iss/slackers/internal/plugins"
 )
 
+// GameQuitRequest is returned when the user types /games quit.
+type GameQuitRequest struct{}
+
 // GameStartRequest is returned as a Result.Cmd by the /games
 // command when the user picks a specific game. The Model checks
 // for this type and opens the game overlay.
@@ -61,6 +64,11 @@ func (p *GamesPlugin) Commands() []*commands.Command {
 					return commands.Result{
 						Status: commands.StatusOK,
 						Cmd:    GameStartRequest{Name: gameName},
+					}
+				case "quit", "exit", "stop":
+					return commands.Result{
+						Status: commands.StatusOK,
+						Cmd:    GameQuitRequest{},
 					}
 				case "", "menu":
 					return commands.Result{

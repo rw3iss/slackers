@@ -923,6 +923,12 @@ func (m *Model) applyCommandResult(res commands.Result) tea.Cmd {
 				return GameOverlayOpenMsg{GameName: req.Name}
 			}
 		}
+		// Plugin game quit request — fully quit the game.
+		if _, ok := res.Cmd.(gamesPlugin.GameQuitRequest); ok {
+			return func() tea.Msg {
+				return GameOverlayQuitMsg{}
+			}
+		}
 	}
 	return nil
 }

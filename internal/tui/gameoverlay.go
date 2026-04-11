@@ -24,8 +24,11 @@ type GameOverlayOpenMsg struct {
 	GameName string
 }
 
-// GameOverlayCloseMsg closes the game overlay.
+// GameOverlayCloseMsg hides the game to background.
 type GameOverlayCloseMsg struct{}
+
+// GameOverlayQuitMsg fully quits the game (no background).
+type GameOverlayQuitMsg struct{}
 
 // gameTickMsg drives the game loop.
 type gameTickMsg struct{}
@@ -94,8 +97,8 @@ func (m *GameOverlayModel) initGame() {
 			if sm <= 0 {
 				sm = 1.0
 			}
-			w = int(float64(30) * sm)
-			h = int(float64(15) * sm)
+			w = int(float64(90) * sm)
+			h = int(float64(45) * sm)
 		}
 		// Clamp to available space.
 		if w > maxW {
@@ -175,6 +178,9 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 		// Universal game controls.
 		switch key {
 		case "ctrl+q":
+			// Hide game to background (pause + keep state).
+			// The model handles backgrounding via GameOverlayCloseMsg
+			// which now means "hide", not "destroy".
 			return m, func() tea.Msg { return GameOverlayCloseMsg{} }
 		case "ctrl+s":
 			m.showSettings = true
@@ -182,7 +188,11 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			m.settingEditing = false
 			m.paused = true
 			return m, nil
-		case "p", " ":
+		case "esc":
+			// Escape does nothing in game — only closes settings.
+			// The game cannot be exited with Escape.
+			return m, nil
+		case "p":
 			if !m.isGameOver() {
 				m.paused = !m.paused
 				if !m.paused {
@@ -274,8 +284,8 @@ func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd)
 		return m, nil
 	}
 
-	// Menu items: 0=fullscreen, 1=size, 2=speed, 3=save, 4=cancel
-	maxSel := 4
+	// Menu items: 0=fullscreen, 1=size, 2=speed, 3=save, 4=cancel, 5=quit
+	maxSel := 5
 	switch key {
 	case "up", "k":
 		if m.settingSel > 0 {
@@ -306,6 +316,8 @@ func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd)
 			m.showSettings = false
 			m.paused = false
 			return m, m.TickCmd()
+		case 5: // quit game
+			return m, func() tea.Msg { return GameOverlayQuitMsg{} }
 		}
 	case "esc":
 		m.showSettings = false
@@ -392,9 +404,9 @@ func (m GameOverlayModel) View() string {
 	if m.showSettings {
 		footer = "↑↓: select" + HintSep + "Enter: edit/apply" + HintSep + "Esc: cancel"
 	} else if m.gameName == "tetris" {
-		footer = "←→: move" + HintSep + "↑: rotate" + HintSep + "↓: soft drop" + HintSep + "Enter: hard drop" + HintSep + "P: pause" + HintSep + "Ctrl+S: settings" + HintSep + "Ctrl+Q: quit"
+		footer = "←→: move" + HintSep + "↑: rotate" + HintSep + "↓: soft drop" + HintSep + "Enter: hard drop" + HintSep + "P: pause" + HintSep + "Ctrl+S: settings" + HintSep + "Ctrl+Q: hide"
 	} else {
-		footer = "↑↓←→/WASD: move" + HintSep + "P: pause" + HintSep + "R: restart" + HintSep + "Ctrl+S: settings" + HintSep + "Ctrl+Q: quit"
+		footer = "↑↓←→/WASD: move" + HintSep + "P: pause" + HintSep + "R: restart" + HintSep + "Ctrl+S: settings" + HintSep + "Ctrl+Q: hide"
 	}
 
 	maxBoxW := 70
@@ -452,6 +464,7 @@ func (m GameOverlayModel) renderSettings() string {
 		{"Speed", fmt.Sprintf("%.1fx", m.settings.SpeedFactor), "Speed factor: 0.1 (slow) to 5.0 (fast)"},
 		{"[ Save & Restart ]", "", "Apply settings and restart the game"},
 		{"[ Cancel ]", "", "Return to game without changes"},
+		{"[ Quit Game ]", "", "Exit the game completely"},
 	}
 
 	for i, item := range items {

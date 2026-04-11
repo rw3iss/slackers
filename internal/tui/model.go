@@ -1132,20 +1132,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Game overlay takes FULL keyboard priority — intercept
-		// before any global shortcuts so Ctrl+S etc. route to the
-		// game, not to settings. Escape hides the game to background.
+		// Game overlay takes FULL keyboard priority — ALL keys
+		// route to the game, including Escape. Only Ctrl+Q quits.
+		// No global shortcuts fire while a game is active.
 		if m.overlay == overlayGame {
-			key := msg.String()
-			if key == "esc" {
-				// Hide game to background (pause + keep state).
-				m.gameOverlay.paused = true
-				bg := m.gameOverlay
-				m.backgroundGame = &bg
-				m.overlay = overlayNone
-				m.warning = "Game paused — type /games or click the taskbar to resume"
-				return m, nil
-			}
 			var cmd tea.Cmd
 			m.gameOverlay, cmd = m.gameOverlay.Update(msg)
 			return m, cmd
@@ -3198,9 +3188,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.gameOverlay.TickCmd()
 
 	case GameOverlayCloseMsg:
+		// Hide game to background (pause + keep state).
+		m.gameOverlay.paused = true
+		bg := m.gameOverlay
+		m.backgroundGame = &bg
 		m.overlay = overlayNone
-		m.backgroundGame = nil // fully quit, don't keep in background
-		m.warning = ""
+		m.warning = "Game paused — /games or click taskbar to resume"
+		return m, nil
+
+	case GameOverlayQuitMsg:
+		// Fully quit game — destroy background state.
+		m.overlay = overlayNone
+		m.backgroundGame = nil
+		m.warning = "Game quit"
 		return m, nil
 
 	case gameTickMsg:
