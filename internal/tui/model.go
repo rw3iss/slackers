@@ -1127,8 +1127,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.warning = ""
 			// Broadcast status to friends so their sidebar updates.
 			if m.p2pNode != nil {
-				s, sm := m.effectiveStatus()
-				go m.p2pNode.BroadcastStatus(s, sm, m.sharedFolderName())
+				s, sm, suppress := m.effectiveStatus()
+				if !suppress {
+					go m.p2pNode.BroadcastStatus(s, sm, m.sharedFolderName())
+				}
 			}
 			if m.currentCh != nil {
 				return m, silentLoadHistoryCmd(m.slackSvc, m.currentCh.ID)
@@ -2050,6 +2052,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToggleCollapseMsg:
 		m.cfg.CollapsedGroups = m.channels.CollapsedGroups()
 		config.SaveDebounced(m.cfg)
+		return m, nil
+
+	case hideOnlineStatusChangedMsg:
+		if m.p2pNode != nil {
+			if msg.Hidden {
+				// Broadcast "offline" once, then stop all broadcasts.
+				go m.p2pNode.BroadcastStatus("offline", "", m.sharedFolderName())
+				m.warning = "Status hidden — appeared offline to friends"
+			} else {
+				// Re-enable: broadcast current real status.
+				s := "online"
+				sm := ""
+				if m.cfg != nil && m.cfg.AwayEnabled {
+					s = "away"
+					sm = m.cfg.AwayMsg
+				}
+				go m.p2pNode.BroadcastStatus(s, sm, m.sharedFolderName())
+				m.warning = "Status visible — appeared " + s + " to friends"
+			}
+		}
 		return m, nil
 
 	case SettingsSavedMsg:
@@ -3423,13 +3445,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Broadcast the status change to friends.
 		if m.p2pNode != nil {
 			if msg.Cleared || (!msg.Enabled && prevEnabled) {
-				s, sm := m.effectiveStatus()
-				go m.p2pNode.BroadcastStatus(s, sm, m.sharedFolderName())
+				s, sm, suppress := m.effectiveStatus()
+				if !suppress {
+					go m.p2pNode.BroadcastStatus(s, sm, m.sharedFolderName())
+				}
 				m.isAway = false
 				m.warning = "Away status cleared"
 			} else if msg.Enabled {
-				s, sm := m.effectiveStatus()
-				go m.p2pNode.BroadcastStatus(s, sm, m.sharedFolderName())
+				s, sm, suppress := m.effectiveStatus()
+				if !suppress {
+					go m.p2pNode.BroadcastStatus(s, sm, m.sharedFolderName())
+				}
 				m.isAway = true
 				if msg.Message != "" {
 					m.warning = "Away: " + msg.Message
@@ -4233,12 +4259,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.warning = "Away (idle)"
 				// Broadcast auto-away to friends.
 				if m.p2pNode != nil {
-					s, sm := m.effectiveStatus()
-					if s != "offline" {
-						s = "away"
-						sm = "idle"
+					_, _, suppress := m.effectiveStatus()
+					if !suppress {
+						go m.p2pNode.BroadcastStatus("away", "idle", m.sharedFolderName())
 					}
-					go m.p2pNode.BroadcastStatus(s, sm, m.sharedFolderName())
 				}
 			}
 		}
@@ -4285,7 +4309,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// → B replies → ...). Status updates are one-way
 			// announcements; only pings get a response.
 			if msg.Text == "__ping__" && m.p2pNode != nil {
-				localStatus, localMsg := m.effectiveStatus()
+				localStatus, localMsg, suppress := m.effectiveStatus()
+				if suppress {
+					// Hidden mode — don't reply to pings.
+					if m.p2pChan != nil {
+						return m, waitForP2PMsg(m.p2pChan)
+					}
+					return m, nil
+				}
 				senderID := msg.SenderID
 				sf := m.sharedFolderName()
 				go func() {
@@ -4346,7 +4377,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// status_updates from an already-online friend are NOT
 			// replied to (prevents infinite loop).
 			if !wasOnline && (statusType == "online" || statusType == "back") && m.p2pNode != nil {
-				localStatus, localMsg := m.effectiveStatus()
+				localStatus, localMsg, suppress := m.effectiveStatus()
+				if suppress {
+					// Hidden — don't reply with our status.
+					if m.p2pChan != nil {
+						return m, waitForP2PMsg(m.p2pChan)
+					}
+					return m, nil
+				}
 				senderID := msg.SenderID
 				sf := m.sharedFolderName()
 				go func() {
@@ -5072,7 +5110,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// bidirectional exchange. This replaces the earlier
 		// BroadcastStatus call which only reached already-
 		// connected peers (nearly empty at startup).
-		localStatus, localAwayMsg := m.effectiveStatus()
+		localStatus, localAwayMsg, suppressStatus := m.effectiveStatus()
+		if suppressStatus {
+			localStatus = ""
+		}
 		return m, friendPingCmdWithCurrent(
 			m.friendStore, m.p2pNode, "", localStatus, localAwayMsg, m.sharedFolderName(),
 		)
@@ -5145,7 +5186,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Piggyback local away status on every ping so friends
 		// learn our state without a separate broadcast.
-		localStatus, localAwayMsg := m.effectiveStatus()
+		localStatus, localAwayMsg, suppressStatus := m.effectiveStatus()
+		if suppressStatus {
+			localStatus = ""
+		}
 		return m, friendPingCmdWithCurrent(m.friendStore, m.p2pNode, currentFriend, localStatus, localAwayMsg, m.sharedFolderName())
 
 	case FriendSendResultMsg:

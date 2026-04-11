@@ -639,15 +639,18 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 						// the remote — their handleStream only
 						// fires when we open an application stream
 						// and write a message.
-						statusMsg := secure.P2PMessage{
-							Type:          secure.MsgTypeStatusUpdate,
-							Timestamp:     time.Now().Unix(),
-							SenderID:      uid,
-							StatusType:    localStatus,
-							StatusMessage: localAwayMsg,
-							SharedFolder:  localSharedFolder,
+						// Skip status broadcast when hidden (localStatus == "").
+						if localStatus != "" {
+							statusMsg := secure.P2PMessage{
+								Type:          secure.MsgTypeStatusUpdate,
+								Timestamp:     time.Now().Unix(),
+								SenderID:      uid,
+								StatusType:    localStatus,
+								StatusMessage: localAwayMsg,
+								SharedFolder:  localSharedFolder,
+							}
+							_ = p2p.SendMessage(uid, statusMsg)
 						}
-						_ = p2p.SendMessage(uid, statusMsg)
 					}
 					// Build status info from the friend store's
 					// current AwayStatus/AwayMessage (populated
@@ -673,7 +676,9 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 		// their app and dials us while we were busy pinging others
 		// — without this follow-up, they wouldn't learn our status
 		// until the *next* ping cycle (up to 10s later).
-		p2p.BroadcastStatus(localStatus, localAwayMsg, localSharedFolder)
+		if localStatus != "" {
+			p2p.BroadcastStatus(localStatus, localAwayMsg, localSharedFolder)
+		}
 
 		return FriendPingMsg{Online: online, Status: status}
 	}

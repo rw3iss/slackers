@@ -18,6 +18,12 @@ import (
 // SettingsSavedMsg is sent when settings have been persisted to disk.
 type SettingsSavedMsg struct{}
 
+// hideOnlineStatusChangedMsg triggers an immediate status broadcast
+// when the user toggles "Hide Online Status" in settings.
+type hideOnlineStatusChangedMsg struct {
+	Hidden bool
+}
+
 // SettingsOpenFileBrowserMsg requests the model to open a file browser for settings.
 type SettingsOpenFileBrowserMsg struct{ CurrentPath string }
 
@@ -810,12 +816,16 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 
 	case "hide_online_status":
 		v := strings.ToLower(strings.TrimSpace(value))
+		wasHidden := m.cfg.HideOnlineStatus
 		m.cfg.HideOnlineStatus = (v == "on")
 		if m.cfg.HideOnlineStatus {
-			m.message = "Online status hidden — you will appear offline"
-		} else {
-			m.message = "Online status visible"
+			m.message = "Online status hidden — broadcasting offline"
+		} else if wasHidden {
+			m.message = "Online status visible — broadcasting online"
 		}
+		// Return a special command so the Model can broadcast the
+		// status change immediately.
+		return func() tea.Msg { return hideOnlineStatusChangedMsg{Hidden: m.cfg.HideOnlineStatus} }
 
 	case "shared_folder":
 		m.cfg.SharedFolder = value
