@@ -36,15 +36,19 @@ type gameTickMsg struct{}
 // GameSettings holds user-configurable game parameters.
 // Persisted via the plugin settings system.
 type GameSettings struct {
-	SizeMultiplier float64 // 0.5 to 4.0 (1.0 = default 30x15)
+	SizeMultiplier float64 // snake: 0.5 to 4.0 (1.0 = default)
 	SpeedFactor    float64 // 0.1 to 5.0 (1.0 = normal)
 	FullScreen     bool    // if true, board fills the window
+	TetrisCols     int     // tetris board columns (default 20)
+	TetrisRows     int     // tetris board rows (default 30)
 }
 
 func defaultGameSettings() GameSettings {
 	return GameSettings{
 		SizeMultiplier: 1.0,
 		SpeedFactor:    1.0,
+		TetrisCols:     20,
+		TetrisRows:     30,
 	}
 }
 
@@ -97,8 +101,8 @@ func (m *GameOverlayModel) initGame() {
 			if sm <= 0 {
 				sm = 1.0
 			}
-			w = int(float64(90) * sm)
-			h = int(float64(45) * sm)
+			w = int(float64(270) * sm)
+			h = int(float64(135) * sm)
 		}
 		// Clamp to available space.
 		if w > maxW {
@@ -117,7 +121,32 @@ func (m *GameOverlayModel) initGame() {
 		m.snake = games.NewSnakeGameSized(w, h)
 		m.tetris = nil
 	case "tetris":
-		m.tetris = games.NewTetrisGame()
+		cols := m.settings.TetrisCols
+		rows := m.settings.TetrisRows
+		if cols <= 0 {
+			cols = 20
+		}
+		if rows <= 0 {
+			rows = 30
+		}
+		if m.settings.FullScreen {
+			cols = maxW - 8 // subtract preview panel width
+			rows = maxH - 2
+		}
+		// Clamp to window (board + 8 for preview, + 2 for border).
+		if cols > maxW-8 {
+			cols = maxW - 8
+		}
+		if rows > maxH-2 {
+			rows = maxH - 2
+		}
+		if cols < 6 {
+			cols = 6
+		}
+		if rows < 10 {
+			rows = 10
+		}
+		m.tetris = games.NewTetrisGameSized(cols, rows)
 		m.snake = nil
 	}
 }
@@ -263,12 +292,62 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 	return m, nil
 }
 
+// settingItem describes one row in the settings menu.
+type settingItem struct {
+	key    string // internal key for dispatch
+	label  string
+	value  string
+	desc   string
+	toggle bool // true = Enter toggles, not edits
+}
+
+func (m GameOverlayModel) buildSettingItems() []settingItem {
+	fsLabel := "off"
+	if m.settings.FullScreen {
+		fsLabel = "on"
+	}
+	items := []settingItem{
+		{key: "fullscreen", label: "Full Screen", value: fsLabel, desc: "Fill the entire window (Enter to toggle)", toggle: true},
+	}
+	if m.gameName == "snake" {
+		sizeVal := fmt.Sprintf("%.1fx", m.settings.SizeMultiplier)
+		sizeDesc := "Multiplier: 0.5 to 4.0"
+		if m.settings.FullScreen {
+			sizeVal = "(full screen)"
+			sizeDesc = "Disabled in full screen mode"
+		}
+		items = append(items, settingItem{key: "size", label: "Board Size", value: sizeVal, desc: sizeDesc})
+	}
+	if m.gameName == "tetris" {
+		colVal := fmt.Sprintf("%d", m.settings.TetrisCols)
+		rowVal := fmt.Sprintf("%d", m.settings.TetrisRows)
+		if m.settings.FullScreen {
+			colVal = "(auto)"
+			rowVal = "(auto)"
+		}
+		items = append(items,
+			settingItem{key: "cols", label: "Columns", value: colVal, desc: "Board width in cells (6-60)"},
+			settingItem{key: "rows", label: "Rows", value: rowVal, desc: "Board height in cells (10-80)"},
+		)
+	}
+	items = append(items,
+		settingItem{key: "speed", label: "Speed", value: fmt.Sprintf("%.1fx", m.settings.SpeedFactor), desc: "Speed factor: 0.1 (slow) to 5.0 (fast)"},
+		settingItem{key: "save", label: "[ Save & Restart ]", desc: "Apply settings and restart the game"},
+		settingItem{key: "cancel", label: "[ Cancel ]", desc: "Return to game without changes"},
+		settingItem{key: "quit", label: "[ Quit Game ]", desc: "Exit the game completely"},
+	)
+	return items
+}
+
 func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd) {
+	items := m.buildSettingItems()
+	maxSel := len(items) - 1
+
 	if m.settingEditing {
 		switch key {
 		case "enter":
 			m.settingEditing = false
-			m.applySettingInput()
+			m.applySettingInput(items)
 		case "esc":
 			m.settingEditing = false
 			m.settingInput = ""
@@ -284,8 +363,6 @@ func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd)
 		return m, nil
 	}
 
-	// Menu items: 0=fullscreen, 1=size, 2=speed, 3=save, 4=cancel, 5=quit
-	maxSel := 5
 	switch key {
 	case "up", "k":
 		if m.settingSel > 0 {
@@ -296,28 +373,41 @@ func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd)
 			m.settingSel++
 		}
 	case "enter":
-		switch m.settingSel {
-		case 0: // fullscreen toggle
-			m.settings.FullScreen = !m.settings.FullScreen
-		case 1: // size
-			if !m.settings.FullScreen {
+		if m.settingSel >= 0 && m.settingSel < len(items) {
+			item := items[m.settingSel]
+			switch item.key {
+			case "fullscreen":
+				m.settings.FullScreen = !m.settings.FullScreen
+			case "size":
+				if !m.settings.FullScreen {
+					m.settingEditing = true
+					m.settingInput = fmt.Sprintf("%.1f", m.settings.SizeMultiplier)
+				}
+			case "cols":
+				if !m.settings.FullScreen {
+					m.settingEditing = true
+					m.settingInput = fmt.Sprintf("%d", m.settings.TetrisCols)
+				}
+			case "rows":
+				if !m.settings.FullScreen {
+					m.settingEditing = true
+					m.settingInput = fmt.Sprintf("%d", m.settings.TetrisRows)
+				}
+			case "speed":
 				m.settingEditing = true
-				m.settingInput = fmt.Sprintf("%.1f", m.settings.SizeMultiplier)
+				m.settingInput = fmt.Sprintf("%.1f", m.settings.SpeedFactor)
+			case "save":
+				m.showSettings = false
+				m.initGame()
+				m.paused = false
+				return m, m.TickCmd()
+			case "cancel":
+				m.showSettings = false
+				m.paused = false
+				return m, m.TickCmd()
+			case "quit":
+				return m, func() tea.Msg { return GameOverlayQuitMsg{} }
 			}
-		case 2: // speed
-			m.settingEditing = true
-			m.settingInput = fmt.Sprintf("%.1f", m.settings.SpeedFactor)
-		case 3: // save
-			m.showSettings = false
-			m.initGame()
-			m.paused = false
-			return m, m.TickCmd()
-		case 4: // cancel
-			m.showSettings = false
-			m.paused = false
-			return m, m.TickCmd()
-		case 5: // quit game
-			return m, func() tea.Msg { return GameOverlayQuitMsg{} }
 		}
 	case "esc":
 		m.showSettings = false
@@ -327,13 +417,17 @@ func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd)
 	return m, nil
 }
 
-func (m *GameOverlayModel) applySettingInput() {
-	val, err := strconv.ParseFloat(m.settingInput, 64)
-	if err != nil {
+func (m *GameOverlayModel) applySettingInput(items []settingItem) {
+	if m.settingSel < 0 || m.settingSel >= len(items) {
 		return
 	}
-	switch m.settingSel {
-	case 1: // size (index shifted by fullscreen toggle at 0)
+	item := items[m.settingSel]
+	switch item.key {
+	case "size":
+		val, err := strconv.ParseFloat(m.settingInput, 64)
+		if err != nil {
+			return
+		}
 		if val < 0.5 {
 			val = 0.5
 		}
@@ -341,7 +435,35 @@ func (m *GameOverlayModel) applySettingInput() {
 			val = 4.0
 		}
 		m.settings.SizeMultiplier = val
-	case 2: // speed
+	case "cols":
+		val, err := strconv.Atoi(m.settingInput)
+		if err != nil {
+			return
+		}
+		if val < 6 {
+			val = 6
+		}
+		if val > 60 {
+			val = 60
+		}
+		m.settings.TetrisCols = val
+	case "rows":
+		val, err := strconv.Atoi(m.settingInput)
+		if err != nil {
+			return
+		}
+		if val < 10 {
+			val = 10
+		}
+		if val > 80 {
+			val = 80
+		}
+		m.settings.TetrisRows = val
+	case "speed":
+		val, err := strconv.ParseFloat(m.settingInput, 64)
+		if err != nil {
+			return
+		}
 		if val < 0.1 {
 			val = 0.1
 		}
@@ -444,29 +566,7 @@ func (m GameOverlayModel) renderSettings() string {
 	b.WriteString(titleStyle.Render("  Game Settings"))
 	b.WriteString("\n\n")
 
-	fsLabel := "off"
-	if m.settings.FullScreen {
-		fsLabel = "on"
-	}
-	sizeVal := fmt.Sprintf("%.1fx", m.settings.SizeMultiplier)
-	sizeDesc := "Multiplier: 0.5 to 4.0 (1.0 = default 30x15)"
-	if m.settings.FullScreen {
-		sizeVal = "(full screen)"
-		sizeDesc = "Disabled in full screen mode"
-	}
-	items := []struct {
-		label string
-		value string
-		desc  string
-	}{
-		{"Full Screen", fsLabel, "Fill the entire window (Enter to toggle)"},
-		{"Board Size", sizeVal, sizeDesc},
-		{"Speed", fmt.Sprintf("%.1fx", m.settings.SpeedFactor), "Speed factor: 0.1 (slow) to 5.0 (fast)"},
-		{"[ Save & Restart ]", "", "Apply settings and restart the game"},
-		{"[ Cancel ]", "", "Return to game without changes"},
-		{"[ Quit Game ]", "", "Exit the game completely"},
-	}
-
+	items := m.buildSettingItems()
 	for i, item := range items {
 		cursor := "  "
 		style := itemStyle

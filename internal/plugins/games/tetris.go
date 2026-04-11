@@ -66,14 +66,16 @@ var tetrominoes = []Tetromino{
 }
 
 const (
-	tetrisWidth  = 10
-	tetrisHeight = 20
+	defaultTetrisWidth  = 20
+	defaultTetrisHeight = 30
 )
 
 // TetrisGame holds the state of a tetris game.
 type TetrisGame struct {
-	board    [tetrisHeight][tetrisWidth]lipgloss.Color // empty string = empty cell
-	current  int                                       // index into tetrominoes
+	width    int
+	height   int
+	board    [][]lipgloss.Color // [height][width], empty string = empty cell
+	current  int                // index into tetrominoes
 	rotation int
 	pieceX   int
 	pieceY   int
@@ -87,11 +89,29 @@ type TetrisGame struct {
 	canvasH  int
 }
 
-// NewTetrisGame creates a new tetris game.
+// NewTetrisGame creates a new tetris game with default dimensions.
 func NewTetrisGame() *TetrisGame {
-	cw := tetrisWidth + 8 // board + border + preview
-	ch := tetrisHeight + 2
+	return NewTetrisGameSized(defaultTetrisWidth, defaultTetrisHeight)
+}
+
+// NewTetrisGameSized creates a tetris game with custom dimensions.
+func NewTetrisGameSized(w, h int) *TetrisGame {
+	if w < 6 {
+		w = 6
+	}
+	if h < 10 {
+		h = 10
+	}
+	cw := w + 8 // board + border + preview
+	ch := h + 2
+	board := make([][]lipgloss.Color, h)
+	for i := range board {
+		board[i] = make([]lipgloss.Color, w)
+	}
 	g := &TetrisGame{
+		width:   w,
+		height:  h,
+		board:   board,
 		canvas:  ui.NewCanvas("tetris", cw, ch),
 		canvasW: cw,
 		canvasH: ch,
@@ -106,7 +126,7 @@ func (g *TetrisGame) spawnPiece() {
 	g.current = g.next
 	g.next = rand.Intn(len(tetrominoes))
 	g.rotation = 0
-	g.pieceX = tetrisWidth/2 - 2
+	g.pieceX = g.width/2 - 2
 	g.pieceY = 0
 	if g.collides(g.pieceX, g.pieceY, g.rotation) {
 		g.gameOver = true
@@ -121,7 +141,7 @@ func (g *TetrisGame) collides(px, py, rot int) bool {
 				continue
 			}
 			bx, by := px+x, py+y
-			if bx < 0 || bx >= tetrisWidth || by >= tetrisHeight {
+			if bx < 0 || bx >= g.width || by >= g.height {
 				return true
 			}
 			if by >= 0 && g.board[by][bx] != "" {
@@ -140,7 +160,7 @@ func (g *TetrisGame) lockPiece() {
 			if shape[y][x] {
 				by := g.pieceY + y
 				bx := g.pieceX + x
-				if by >= 0 && by < tetrisHeight && bx >= 0 && bx < tetrisWidth {
+				if by >= 0 && by < g.height && bx >= 0 && bx < g.width {
 					g.board[by][bx] = color
 				}
 			}
@@ -152,9 +172,9 @@ func (g *TetrisGame) lockPiece() {
 
 func (g *TetrisGame) clearLines() {
 	cleared := 0
-	for y := tetrisHeight - 1; y >= 0; y-- {
+	for y := g.height - 1; y >= 0; y-- {
 		full := true
-		for x := 0; x < tetrisWidth; x++ {
+		for x := 0; x < g.width; x++ {
 			if g.board[y][x] == "" {
 				full = false
 				break
@@ -166,7 +186,7 @@ func (g *TetrisGame) clearLines() {
 			for sy := y; sy > 0; sy-- {
 				g.board[sy] = g.board[sy-1]
 			}
-			g.board[0] = [tetrisWidth]lipgloss.Color{}
+			g.board[0] = make([]lipgloss.Color, g.width)
 			y++ // recheck this row
 		}
 	}
@@ -249,10 +269,10 @@ func (g *TetrisGame) RenderFrame() string {
 	bgColor := lipgloss.Color("#111111")
 
 	// Draw board background + border.
-	for y := 0; y < tetrisHeight; y++ {
+	for y := 0; y < g.height; y++ {
 		g.canvas.Set(0, y+1, '│', wallColor, "")
-		g.canvas.Set(tetrisWidth+1, y+1, '│', wallColor, "")
-		for x := 0; x < tetrisWidth; x++ {
+		g.canvas.Set(g.width+1, y+1, '│', wallColor, "")
+		for x := 0; x < g.width; x++ {
 			color := g.board[y][x]
 			if color != "" {
 				g.canvas.Set(x+1, y+1, '█', color, "")
@@ -262,8 +282,8 @@ func (g *TetrisGame) RenderFrame() string {
 		}
 	}
 	// Bottom border.
-	for x := 0; x <= tetrisWidth+1; x++ {
-		g.canvas.Set(x, tetrisHeight+1, '─', wallColor, "")
+	for x := 0; x <= g.width+1; x++ {
+		g.canvas.Set(x, g.height+1, '─', wallColor, "")
 	}
 
 	// Draw current piece.
@@ -274,7 +294,7 @@ func (g *TetrisGame) RenderFrame() string {
 			if shape[y][x] {
 				by := g.pieceY + y
 				bx := g.pieceX + x
-				if by >= 0 && by < tetrisHeight && bx >= 0 && bx < tetrisWidth {
+				if by >= 0 && by < g.height && bx >= 0 && bx < g.width {
 					g.canvas.Set(bx+1, by+1, '█', color, "")
 				}
 			}
@@ -282,7 +302,7 @@ func (g *TetrisGame) RenderFrame() string {
 	}
 
 	// Draw next piece preview.
-	previewX := tetrisWidth + 3
+	previewX := g.width + 3
 	g.canvas.DrawText(previewX, 1, "Next:", lipgloss.Color("#888888"), "")
 	nextShape := tetrominoes[g.next].Rotations[0]
 	nextColor := tetrominoes[g.next].Color
