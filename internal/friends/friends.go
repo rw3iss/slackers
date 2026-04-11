@@ -229,11 +229,18 @@ func (s *FriendStore) SetOnline(userID string, online bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if idx, ok := s.byUserID[userID]; ok && idx < len(s.friends) {
-		// Never override an explicit "offline" status (hidden mode).
-		// The friend explicitly told us they're offline — only
-		// SetStatus("online"/"back") can reverse that.
-		if online && s.friends[idx].AwayStatus == "offline" {
-			return
+		if online {
+			// Only allow setting online if we've received a
+			// non-offline status from this friend. On cold start
+			// AwayStatus is "" — we don't know yet, so we don't
+			// assume online. Once a status_update arrives and
+			// sets AwayStatus to "online"/"away"/"back", the
+			// SetStatus method handles Online=true directly.
+			// This prevents hidden friends from flashing online.
+			as := s.friends[idx].AwayStatus
+			if as == "offline" || as == "" {
+				return
+			}
 		}
 		s.friends[idx].Online = online
 	}

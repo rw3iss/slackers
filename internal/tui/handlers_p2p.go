@@ -286,11 +286,9 @@ func (m *Model) loadFriendHistory(friendUserID string) {
 			// Best-effort dial — if already connected this is
 			// nearly instant (libp2p short-circuits).
 			_ = m.p2pNode.ConnectToPeer(friendUserID, f.Multiaddr)
-			on := m.p2pNode.IsConnected(friendUserID)
-			m.friendStore.SetOnline(friendUserID, on)
-			if on {
-				m.friendStore.UpdateLastOnline(friendUserID)
-			}
+			// Don't call SetOnline here — let the status_update
+			// reply determine the friend's actual status. This
+			// prevents marking hidden friends as online.
 		}()
 	}
 	if m.friendHistory != nil {
@@ -401,7 +399,8 @@ func (m *Model) connectFriend(friendUID string) {
 	m.touchFriendActivity(friendUID)
 	if m.p2pNode.IsConnected(friendUID) {
 		debug.Log("[connect-friend] already connected uid=%s", friendUID)
-		m.friendStore.SetOnline(friendUID, true)
+		// Don't SetOnline here — let status messages determine it.
+		// This prevents marking hidden friends as online.
 		m.friendStore.UpdateLastOnline(friendUID)
 		return
 	}
@@ -420,8 +419,8 @@ func (m *Model) connectFriend(friendUID string) {
 			debug.Log("[connect-friend] dial failed uid=%s err=%v", uid, err)
 		}
 		if node.IsConnected(uid) {
-			debug.Log("[connect-friend] online uid=%s", uid)
-			store.SetOnline(uid, true)
+			debug.Log("[connect-friend] connected uid=%s", uid)
+			// Don't SetOnline — let status messages determine it.
 			store.UpdateLastOnline(uid)
 			// These already ship as independent goroutines,
 			// but calling them here ensures they only fire
