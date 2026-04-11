@@ -629,23 +629,17 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 					if on != before {
 						debug.Log("[friend-ping] uid=%s state %v → %v", uid, before, on)
 					}
-					// Check if the friend has explicitly set their status
-					// to "offline" (hidden mode) — if so, respect it even
-					// though the transport connection is up.
-					if f := store.Get(uid); f != nil && f.AwayStatus == "offline" {
-						on = false
-					}
-					store.SetOnline(uid, on)
-					if on {
+					if !on {
+						// Only mark offline from connectivity —
+						// online status is set by the status_update
+						// reply, not by IsConnected. This prevents
+						// a brief online flash for hidden friends
+						// before their "offline" reply arrives.
+						store.SetOnline(uid, false)
+					} else {
 						store.UpdateLastOnline(uid)
-						// Send a status_update to the friend so
-						// THEIR handler fires and marks us online
-						// on their side. Without this, connecting
-						// at the transport layer is invisible to
-						// the remote — their handleStream only
-						// fires when we open an application stream
-						// and write a message.
-						// Skip status broadcast when hidden (localStatus == "").
+						// Send our status so the friend's handler
+						// fires and sets our status on their side.
 						if localStatus != "" {
 							statusMsg := secure.P2PMessage{
 								Type:          secure.MsgTypeStatusUpdate,
@@ -663,13 +657,20 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 					// by incoming status_update messages or prior
 					// pong responses).
 					f := store.Get(uid)
-					info := FriendStatusInfo{Online: on}
+					// Respect the friend's explicit offline status
+					// (hidden mode) — report them as offline even
+					// though the transport connection is up.
+					reportOnline := on
+					if f != nil && f.AwayStatus == "offline" {
+						reportOnline = false
+					}
+					info := FriendStatusInfo{Online: reportOnline}
 					if f != nil {
 						info.AwayStatus = f.AwayStatus
 						info.AwayMessage = f.AwayMessage
 					}
 					mu.Lock()
-					online[uid] = on
+					online[uid] = reportOnline
 					status[uid] = info
 					mu.Unlock()
 				}(t.userID, t.multiaddr)

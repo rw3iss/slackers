@@ -504,3 +504,196 @@ A full-screen modal opened via `/commands` or the global `Alt-C` shortcut. Embed
 `/help` reads from the embedded `internal/commands/help/*.md` files via the `commands.Topic(name)` accessor. Topics: `main`, `commands`, `friends`, `themes`, `setup`, `p2p`, `secure`, `shortcuts`, `debug`. Adding a new topic is just dropping a markdown file in the package directory and rebuilding — no code change needed.
 
 In that second instance set a different P2P Port (e.g. 9901), share its contact card to the primary instance, and you can chat between the two.
+
+## Plugin system
+
+Slackers includes a compiled-in plugin system that lets self-contained features register slash commands, keyboard shortcuts, config fields, and P2P message handlers without touching the core TUI code. Plugins are Go packages compiled into the binary -- there is no dynamic loading -- so they ship with the build and benefit from the same type safety as the rest of the codebase.
+
+### Architecture overview
+
+The plugin system is split across three packages:
+
+```
+internal/plugins/        Plugin interface, Manager, manifest/index persistence
+internal/api/            API facade (api.API) and sub-interfaces exposed to plugins
+internal/api/ui/         UI SDK components (Canvas, VBox, HBox, Label, List)
+```
+
+The design principle is **dependency inversion**: plugins depend on stable interfaces (`api.API`, `plugins.Plugin`), never on `tui.Model` or any Bubbletea type. The `api.Host` struct bridges the gap -- it holds pointers to live app services (config, Slack, friends, P2P, commands, shortcuts) and implements every sub-interface by delegating to those services. A `cmdQueue` channel carries plugin-initiated side effects (`StatusBarCmd`, `WarningCmd`) back into the Bubbletea update loop without requiring the plugin to import Bubbletea.
+
+### Plugin interface
+
+Every plugin implements `plugins.Plugin`:
+
+```go
+type Plugin interface {
+    Manifest() Manifest                         // name, version, author, description
+    Init(appAPI api.API) error                  // called on app startup if enabled
+    Start() error                               // lazy activation (heavy init goes here)
+    Stop() error                                // deactivation
+    Destroy() error                             // full uninstall cleanup
+    Commands() []*commands.Command              // slash commands to register
+    Shortcuts() map[string][]string             // custom keyboard shortcuts
+    MessageFilter(senderID, data string) bool   // handle incoming P2P plugin message
+    ConfigFields() []ConfigField                // user-editable settings
+    SetConfig(key, value string)                // apply a config change
+}
+```
+
+**Lifecycle stages:**
+
+1. **Register** — `Manager.Register(p)` adds the plugin to the internal map at startup, before any initialization. State: `StateDisabled`.
+2. **Init** — `Manager.InitAll(appAPI)` checks the on-disk plugin index (`~/.config/slackers/plugins/plugins.json`). Newly registered plugins are auto-enabled. For each enabled plugin, `Init(appAPI)` is called, giving the plugin access to all app subsystems. State: `StateEnabled`.
+3. **Start** — `Manager.Start(name)` activates the plugin's main process (lazy load). State: `StateRunning`. Used for plugins that need a persistent background process.
+4. **Stop** — `Manager.Stop(name)` deactivates the running process. State returns to `StateEnabled`.
+5. **Destroy** — `Manager.Uninstall(name)` calls `Stop` + `Destroy`, removes the plugin's config directory, and deletes it from the index.
+
+### Plugin Manager
+
+`plugins.Manager` is the central registry and lifecycle controller. Key operations:
+
+- **Register(p Plugin)** — adds a plugin to the map. Called in `NewModel` for each compiled-in plugin.
+- **InitAll(appAPI)** — loads the plugin index from disk, initializes all enabled plugins, and persists any index changes (new plugins auto-added).
+- **Enable(name) / Disable(name)** — toggles a plugin on or off, persisting the change to `plugins.json`.
+- **Uninstall(name)** — full cleanup: stop, destroy, remove config directory, remove from index.
+- **RouteMessage(pluginName, senderID, data)** — delivers a P2P plugin message to the named plugin's `MessageFilter`. Returns true if handled.
+- **MergeShortcuts(base)** — collects `shortcuts.json` from each enabled plugin's `.config/` directory and merges them into the base shortcut map. Plugin shortcuts are applied BEFORE user overrides, so user settings always win.
+- **EnabledPlugins()** — returns all plugins with state >= `StateEnabled`, used by the TUI to collect and register their commands.
+
+The manager also provides `PluginSettings(name)` / `SavePluginSettings(name, settings)` for reading and writing per-plugin `settings.json` files, and `PluginThemeDirs()` for collecting theme directories from enabled plugins.
+
+### Plugin index and config storage
+
+Each plugin gets its own directory under `~/.config/slackers/plugins/<name>/`:
+
+```
+~/.config/slackers/plugins/
+  plugins.json              # global index: which plugins are enabled
+  games/
+    .config/
+      settings.json         # plugin-specific settings
+      shortcuts.json        # plugin-specific shortcut overrides
+    themes/                 # optional: plugin-contributed themes
+  weather/
+    .config/
+      settings.json
+```
+
+The `PluginIndex` (`plugins.json`) tracks each plugin's enabled state and installation date. It is read at startup and updated when plugins are enabled, disabled, or uninstalled.
+
+### Internal API (`api.API`)
+
+The `api.API` interface is the root facade provided to plugins via `Init()`. It exposes focused sub-interfaces:
+
+| Sub-interface | Purpose |
+|---------------|---------|
+| `App()` | App lifecycle: version, config read/write, status bar, warnings, connection state |
+| `Messages()` | Send, reply, edit, delete, react, fetch history |
+| `Channels()` | List, get, hide, unhide, rename, mark/clear unread, select |
+| `Friends()` | List friends, check online status, send messages, send plugin messages |
+| `Files()` | Upload, download, paths |
+| `View()` | Show/close overlays, set focus, screen size |
+| `Shortcuts()` | Register/query keyboard shortcuts |
+| `Commands()` | Register/run slash commands |
+| `Theme()` | Read-only access to current theme colors |
+| `Events()` | Pub/sub for app lifecycle events (subscribe, emit) |
+
+The `api.Host` struct implements all of these by delegating to the live services. It uses small wrapper types (`hostApp`, `hostMessages`, etc.) to resolve method name collisions across sub-interfaces. The `Host` is created once in `NewModel` and shared with all plugins.
+
+**Command queue pattern.** Plugins cannot import Bubbletea, so side effects are communicated via a buffered `cmdQueue` channel on the Host. When a plugin calls `api.App().SetStatusBar("...")`, the Host enqueues a `StatusBarCmd`. The Model's update loop drains this queue via `apiHost.DrainCommands()` and processes each item as a `tea.Cmd`.
+
+**Theme state push.** The Host caches theme colors (pushed by the Model after each theme change via `UpdateThemeState`) so plugins can query `api.Theme().Color("primary")` without a circular import on the `tui` package.
+
+### UI SDK (`internal/api/ui`)
+
+The UI SDK provides a small set of components for plugins that need to render custom views:
+
+- **`Component`** — base interface: `ID()`, `Render(w, h)`, `HandleKey(key)`, `SetSize(w, h)`.
+- **`Canvas`** — character-addressable grid with per-cell foreground/background colors. Used by the games plugin for pixel-level rendering (snake board, tetris board). Supports `Set(x, y, char, fg, bg)`, `Get(x, y)`, `Clear()`, and renders to a string via `Render()`.
+- **`VBox` / `HBox`** — vertical and horizontal layout containers. Add/remove children, automatic size distribution.
+- **`Label`** — single-line styled text.
+- **`Paragraph`** — multi-line text with word wrapping.
+- **`List`** — scrollable, selectable list with item callbacks and configurable styles.
+- **`SizePolicy`** — min/max width/height and grow flag for layout negotiation.
+
+The SDK intentionally wraps `lipgloss` for styling rather than exposing raw ANSI, so plugin rendering stays consistent with the app's theme system.
+
+### P2P plugin message routing
+
+Plugins can exchange custom data between friends via the P2P layer. The wire protocol uses `MsgTypePlugin` (`"plugin"`) with two extra fields on `P2PMessage`:
+
+- `PluginName` — identifies the target plugin
+- `PluginData` — JSON payload (arbitrary structure, plugin-defined)
+
+**Sending:** A plugin calls `api.Friends().SendPluginMessage(userID, pluginName, data)`, which calls `P2PNode.SendPluginMessage()`, constructing a `P2PMessage{Type: MsgTypePlugin, PluginName: ..., PluginData: ...}` and sending it over the existing libp2p stream.
+
+**Receiving:** The P2P callback in `NewModel` detects `MsgTypePlugin` and dispatches a `P2PReceivedMsg` with the special `"__plugin__"` text marker. The fields are carried on `PubKey` (plugin name) and `Multiaddr` (plugin data), reusing existing message fields to avoid adding new ones. In the `P2PReceivedMsg` handler, the Model checks for the `"__plugin__"` marker and calls `pluginManager.RouteMessage(pluginName, senderID, data)`, which delivers it to the named plugin's `MessageFilter`. If the plugin returns `true`, the message is consumed; otherwise it's silently dropped.
+
+This allows plugins to build multiplayer features (e.g. turn-based games) on top of the existing encrypted P2P transport without any changes to the P2P protocol itself.
+
+### Game overlay system
+
+The games plugin demonstrates a full-screen interactive overlay with exclusive keyboard control. When a game starts via `/games snake` or `/games tetris`, the Model opens `overlayGame` and all key events route to `GameOverlayModel.Update()` instead of the normal TUI handlers.
+
+**Game loop:** A periodic `gameTickMsg` (driven by `tea.Tick`) advances the game state. The tick interval is derived from a configurable speed factor (0.1x to 5.0x). Input is throttled via a pool of 2 pending movement commands -- held keys produce a steady stream tied to the game speed without flooding the event queue.
+
+**In-game settings:** `Ctrl-S` opens a settings menu within the game overlay (board size, speed factor, block scale, halve-vertical compensation). Changes take effect on "Save & Restart". High scores are tracked per game type and persist via `GameSettings` on the Model.
+
+**Background games and taskbar:** When the user presses `Ctrl-Q` during a game, the overlay is hidden rather than destroyed. The game state is saved to `m.backgroundGame`, the game is paused, and the user returns to normal chat. A taskbar indicator appears in the status bar area (top-right of the message pane) showing the paused game name. Clicking the indicator or running `/games` restores the game to the foreground, unpaused, with its full state intact. Running `/games quit` or pressing the Quit option in settings fully destroys the background game.
+
+**Rendering:** Games use the `api/ui.Canvas` component for pixel-level rendering. The snake game renders each cell as one or two characters (depending on the halve-vertical setting), with colored blocks for the snake head, body, food, and walls. The tetris game supports a configurable block scale (1x or 2x) and renders a side panel with score, level, lines, and next piece preview. Both games auto-clamp their logical board dimensions to fit the available terminal space.
+
+### Config merge order
+
+Configuration values from multiple sources are merged in a specific priority order. For keyboard shortcuts:
+
+1. **Embedded defaults** (`internal/shortcuts/defaults.json`, compiled via `go:embed`)
+2. **Plugin shortcuts** (each enabled plugin's `.config/shortcuts.json`, merged via `Manager.MergeShortcuts`)
+3. **User overrides** (`~/.config/slackers/shortcuts.json`)
+
+Each layer overwrites keys from the previous, so user settings always have the final word. The same pattern applies to plugin-contributed themes (scanned alongside the user's `themes/` directory) and emote definitions (embedded defaults + user custom).
+
+For plugin-specific settings, each plugin owns its own `settings.json` within its config directory. The plugin reads and writes these via `ConfigFields()` / `SetConfig()`, and the Plugin Config overlay (`PluginConfigModel`) provides the user-facing editor.
+
+### Example plugins
+
+**Games** (`internal/plugins/games/`) — Registers the `/games` command (aliases: `/game`, `/play`) with subcommands for `snake` and `tetris`. The command returns a `GameStartRequest{Name}` via the `Result.Cmd` field, which the Model intercepts to open the game overlay. No config fields, no shortcuts, no P2P message handling. The snake and tetris implementations are self-contained game engines using `api/ui.Canvas` for rendering.
+
+**Weather** (`internal/plugins/weather/`) — Registers `/weather [city]` (alias: `/wttr`). Fetches forecasts from `wttr.in` using the compact format for a summary line, then the ASCII-art `?T&n&q` format for a detailed 3-day forecast. Results are displayed in the Output view. Provides one config field (`city` -- default location) and one custom shortcut (`show_weather` bound to `Ctrl+W`). The city is remembered across invocations within a session.
+
+### Plugin management UI
+
+The **Plugin Manager** overlay (`Alt-P` or `/plugins`) shows a table of all registered plugins with name, version, author, and current state (enabled/disabled/running). From here users can:
+
+- **Enter** — open the plugin's config screen (fields from `ConfigFields()`)
+- **e** — toggle enable/disable
+- **d** — uninstall with confirmation prompt
+
+The **Plugin Config** overlay shows the plugin's metadata and a list of editable settings fields. Each field has a label, current value, and description. Enter starts editing, Enter again saves via `SetConfig()`.
+
+## Hide Online Status
+
+The "Hide Online Status" feature allows users to appear permanently offline to friends while retaining full functionality -- chat, file transfer, and all P2P features continue to work normally. Only the status broadcast is suppressed.
+
+### Configuration
+
+The setting is exposed in Settings as a toggle (`on`/`off`) under the Friends section:
+
+- **Config key:** `hide_online_status` in `config.json`
+- **Default:** `off`
+- **Description:** "Always appear offline to friends (chat still works, only status is hidden)"
+
+### Broadcast behaviour
+
+When the setting is toggled, the `hideOnlineStatusChangedMsg` is dispatched to the Model, which triggers an immediate broadcast:
+
+- **Enabling (hidden):** A one-shot `BroadcastStatus("offline", "")` is sent to all connected friends, then all further status broadcasts are suppressed.
+- **Disabling (visible):** A `BroadcastStatus("online", "")` is sent to resume normal visibility.
+
+The suppression is implemented in `effectiveStatus()` on the Model. Every status broadcast path (ping responses, status updates, away/back transitions) calls this function first. When `cfg.HideOnlineStatus` is `true`, it returns `suppress: true` and the caller skips the broadcast entirely.
+
+### Interaction with other features
+
+- **Away status:** If the user has both `HideOnlineStatus` and a manual away status set, the hide takes precedence -- no broadcasts are sent at all.
+- **Ping cycle:** The friend ping cycle still checks connectivity for the local user's benefit (updating the sidebar's online/offline indicators for friends), but the status response to the remote peer is suppressed.
+- **Friend store:** The `AwayStatus` field on remote friend records can be `"offline"` when the remote friend has hidden their status. The ping cycle respects this -- even if the transport connection succeeds, a friend whose `AwayStatus` is `"offline"` is treated as offline for sidebar display purposes.
