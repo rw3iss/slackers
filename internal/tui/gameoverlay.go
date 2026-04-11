@@ -61,6 +61,9 @@ type GameOverlayModel struct {
 	width    int
 	height   int
 	settings GameSettings
+	// Input throttling: drop rapid key repeats to prevent queue buildup.
+	lastInput    time.Time
+	inputQueue   int // count of keys processed this throttle window
 	// Settings menu state.
 	showSettings   bool
 	settingSel     int // 0=size, 1=speed, 2=save, 3=cancel
@@ -204,9 +207,28 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 	case tea.KeyMsg:
 		key := v.String()
 
-		// Settings menu intercepts all input when open.
+		// Settings menu intercepts all input when open (no throttle).
 		if m.showSettings {
 			return m.updateSettings(key)
+		}
+
+		// Throttle game movement keys: max 1 input per 30ms,
+		// max 5 queued inputs per window. Control keys (ctrl+*,
+		// p, r, esc) bypass throttling.
+		isControl := key == "ctrl+q" || key == "ctrl+s" || key == "p" ||
+			key == "r" || key == "esc" || key == " "
+		if !isControl && !m.paused {
+			now := time.Now()
+			elapsed := now.Sub(m.lastInput)
+			if elapsed < 30*time.Millisecond {
+				m.inputQueue++
+				if m.inputQueue > 5 {
+					return m, nil // drop excess input
+				}
+			} else {
+				m.inputQueue = 0
+			}
+			m.lastInput = now
 		}
 
 		// Universal game controls.
