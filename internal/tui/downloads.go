@@ -7,6 +7,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -68,15 +69,25 @@ const (
 	dlSectionCompleted
 )
 
+// dlConfirmAction identifies what the pending confirmation is for.
+type dlConfirmAction int
+
+const (
+	dlConfirmCancel dlConfirmAction = iota
+	dlConfirmRetry
+	dlConfirmDelete
+)
+
 // DownloadsModel is the overlay state.
 type DownloadsModel struct {
-	manager   *downloads.Manager
-	section   dlSection
-	selected  int
-	width     int
-	height    int
-	message   string
-	confirmID string // ID of download pending cancel/retry confirmation
+	manager       *downloads.Manager
+	section       dlSection
+	selected      int
+	width         int
+	height        int
+	message       string
+	confirmID     string          // ID of download pending confirmation
+	confirmAction dlConfirmAction // what the confirmation is for
 }
 
 // NewDownloadsModel creates the downloads overlay.
@@ -112,14 +123,15 @@ func (m DownloadsModel) Update(msg tea.Msg) (DownloadsModel, tea.Cmd) {
 			switch v.String() {
 			case "y", "Y", "enter":
 				id := m.confirmID
+				action := m.confirmAction
 				m.confirmID = ""
-				if m.section == dlSectionActive {
+				switch action {
+				case dlConfirmCancel:
 					if m.manager != nil {
 						m.manager.Cancel(id)
 					}
 					m.message = "Download cancelled"
-				} else if m.section == dlSectionFailed {
-					// Retry: find the failed download and re-request it.
+				case dlConfirmRetry:
 					if m.manager != nil {
 						dl := m.manager.Get(id)
 						if dl != nil {
@@ -136,6 +148,15 @@ func (m DownloadsModel) Update(msg tea.Msg) (DownloadsModel, tea.Cmd) {
 									Size:     dl.Size,
 								}
 							}
+						}
+					}
+				case dlConfirmDelete:
+					if m.manager != nil {
+						dl := m.manager.Get(id)
+						if dl != nil {
+							os.Remove(dl.DestPath)
+							m.manager.Remove(id)
+							m.message = "Deleted: " + dl.FileName
 						}
 					}
 				}
@@ -159,22 +180,38 @@ func (m DownloadsModel) Update(msg tea.Msg) (DownloadsModel, tea.Cmd) {
 				m.selected++
 			}
 		case "tab":
-			// Cycle sections.
 			m.section = (m.section + 1) % 3
 			m.selected = 0
-		case "enter", "delete", "d":
+		case "enter":
+			// Enter: cancel (active), retry (failed), open (completed).
 			if len(items) > 0 && m.selected < len(items) {
 				dl := items[m.selected]
 				switch m.section {
 				case dlSectionActive:
 					m.confirmID = dl.ID
+					m.confirmAction = dlConfirmCancel
 					m.message = fmt.Sprintf("Cancel %s? y=yes, any key=no", dl.FileName)
 				case dlSectionFailed:
 					m.confirmID = dl.ID
+					m.confirmAction = dlConfirmRetry
 					m.message = fmt.Sprintf("Retry %s? y=yes, any key=no", dl.FileName)
 				case dlSectionCompleted:
-					// Try to open the file location.
 					m.message = "File: " + dl.DestPath
+				}
+			}
+		case "d", "delete":
+			// d/del: cancel (active), delete file (completed).
+			if len(items) > 0 && m.selected < len(items) {
+				dl := items[m.selected]
+				switch m.section {
+				case dlSectionActive:
+					m.confirmID = dl.ID
+					m.confirmAction = dlConfirmCancel
+					m.message = fmt.Sprintf("Cancel %s? y=yes, any key=no", dl.FileName)
+				case dlSectionCompleted:
+					m.confirmID = dl.ID
+					m.confirmAction = dlConfirmDelete
+					m.message = fmt.Sprintf("Delete %s from disk? y=yes, any key=no", dl.FileName)
 				}
 			}
 		}
@@ -294,8 +331,17 @@ func (m DownloadsModel) View() string {
 }
 
 func (m DownloadsModel) scaffold(body string) string {
+	var actions string
+	switch m.section {
+	case dlSectionActive:
+		actions = "Enter: cancel" + HintSep + "d: cancel"
+	case dlSectionFailed:
+		actions = "Enter: retry"
+	case dlSectionCompleted:
+		actions = "Enter: open" + HintSep + "d/Del: delete"
+	}
 	footer := "↑↓: navigate" + HintSep + "Tab: section" + HintSep +
-		"Enter/d: cancel/retry/open" + HintSep + FooterHintClose
+		actions + HintSep + FooterHintClose
 	s := OverlayScaffold{
 		Title:       "Downloads",
 		Footer:      footer,
