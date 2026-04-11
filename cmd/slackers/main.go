@@ -123,10 +123,13 @@ var rootCmd = &cobra.Command{
 				}
 			}
 			if cfg.P2PAddress == "" {
-				if ip, ipErr := detectPublicIPCLI(); ipErr == nil && ip != "" {
-					cfg.P2PAddress = ip
-					dirty = true
-				}
+				// Don't block startup — detect IP in background.
+				go func() {
+					if ip, ipErr := detectPublicIPCLI(); ipErr == nil && ip != "" {
+						cfg.P2PAddress = ip
+						_ = config.Save(cfg)
+					}
+				}()
 			}
 			if dirty {
 				_ = config.Save(cfg)
@@ -637,7 +640,8 @@ var updateCmd = &cobra.Command{
 
 // checkLatestRelease queries GitHub for the latest release tag and asset URL.
 func checkLatestRelease() (string, string, error) {
-	resp, err := http.Get("https://api.github.com/repos/rw3iss/slackers/releases/latest")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("https://api.github.com/repos/rw3iss/slackers/releases/latest")
 	if err != nil {
 		return "", "", err
 	}
@@ -687,7 +691,8 @@ func platformAssetName() string {
 
 // downloadBinary downloads a URL to a local file path.
 func downloadBinary(url, destPath string) error {
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		return err
 	}
