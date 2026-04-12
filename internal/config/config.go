@@ -354,6 +354,16 @@ func (c *Config) Validate() error {
 	if c.SetupSkipped {
 		return nil
 	}
+	// Multi-workspace: tokens live in workspace folders, not here.
+	// If workspaces exist OR LastActiveWorkspace is set, the config is valid.
+	if c.LastActiveWorkspace != "" {
+		return nil
+	}
+	// Check if a workspaces directory exists with at least one entry.
+	wsDir := filepath.Join(c.ConfigDir(), "workspaces")
+	if entries, err := os.ReadDir(wsDir); err == nil && len(entries) > 0 {
+		return nil
+	}
 	if c.BotToken == "" {
 		return errors.New("bot_token is required")
 	}

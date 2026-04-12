@@ -116,6 +116,11 @@ func (m *Model) handleWorkspaceSignIn(msg WorkspaceSignInMsg) (Model, tea.Cmd) {
 		m.cfg.LastActiveWorkspace = msg.TeamID
 	}
 
+	// Sync legacy fields if this is the active workspace.
+	if m.activeWsID == msg.TeamID {
+		m.syncActiveWorkspace()
+	}
+
 	// Persist workspace config (marks SignedOut=false on disk).
 	if err := workspace.Save(m.cfg.ConfigDir(), ws); err != nil {
 		debug.Log("workspace save error after sign-in: %v", err)
@@ -208,8 +213,20 @@ func (m *Model) handleWorkspaceSwitch(msg WorkspaceSwitchMsg) (Model, tea.Cmd) {
 	m.cfg.LastActiveWorkspace = msg.TeamID
 	config.SaveDebounced(m.cfg)
 
-	// Rebuild sidebar for the new workspace.
+	// Sync legacy fields and rebuild sidebar.
+	m.syncActiveWorkspace()
 	m.rebuildSidebarForWorkspace(ws)
+
+	// Restore last channel.
+	if ws.Config.LastChannel != "" {
+		for i := range ws.Channels {
+			if ws.Channels[i].ID == ws.Config.LastChannel {
+				m.currentCh = &ws.Channels[i]
+				m.setChannelHeader()
+				break
+			}
+		}
+	}
 
 	debug.Log("switched to workspace %s (%s)", msg.TeamID, ws.DisplayName())
 	return *m, nil
@@ -219,6 +236,29 @@ func (m *Model) handleWorkspaceSwitch(msg WorkspaceSwitchMsg) (Model, tea.Cmd) {
 // Helper methods
 // ---------------------------------------------------------------------------
 
+// syncActiveWorkspace copies the active workspace's services and state
+// into the Model's legacy fields (slackSvc, socketSvc, users, etc.) so
+// all existing code that references m.slackSvc continues to work.
+func (m *Model) syncActiveWorkspace() {
+	ws := m.activeWs()
+	if ws != nil && ws.SignedIn {
+		m.slackSvc = ws.SlackSvc
+		m.socketSvc = ws.SocketSvc
+		m.users = ws.Users
+		m.myUserID = ws.MyUserID
+		m.teamName = ws.TeamName
+		m.eventChan = ws.EventChan
+		m.lastSeen = ws.LastSeen
+	} else {
+		m.slackSvc = nil
+		m.socketSvc = nil
+		m.users = nil
+		m.myUserID = ""
+		m.teamName = ""
+		m.eventChan = nil
+	}
+}
+
 // switchToNextSignedIn finds another signed-in workspace and makes it active.
 // If none are signed in, clears activeWsID.
 func (m *Model) switchToNextSignedIn() {
@@ -227,6 +267,7 @@ func (m *Model) switchToNextSignedIn() {
 			m.activeWsID = id
 			m.cfg.LastActiveWorkspace = id
 			config.SaveDebounced(m.cfg)
+			m.syncActiveWorkspace()
 			m.rebuildSidebarForWorkspace(ws)
 			debug.Log("auto-switched to workspace %s", id)
 			return
@@ -236,6 +277,7 @@ func (m *Model) switchToNextSignedIn() {
 	m.activeWsID = ""
 	m.cfg.LastActiveWorkspace = ""
 	config.SaveDebounced(m.cfg)
+	m.syncActiveWorkspace()
 	debug.Log("no signed-in workspaces remain")
 }
 

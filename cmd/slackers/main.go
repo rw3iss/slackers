@@ -112,7 +112,7 @@ var rootCmd = &cobra.Command{
 		// otherwise the P2P node won't start and Test Connection
 		// reports "P2P not available". Also seed P2PAddress + name
 		// best-effort.
-		if cfg.SetupSkipped && cfg.BotToken == "" {
+		if cfg.SetupSkipped && cfg.BotToken == "" && cfg.LastActiveWorkspace == "" {
 			dirty := false
 			if !cfg.SecureMode {
 				cfg.SecureMode = true

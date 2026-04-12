@@ -436,8 +436,9 @@ type Model struct {
 	cfg *config.Config
 
 	// Multi-workspace state.
-	workspaces map[string]*workspace.Workspace
-	activeWsID string
+	workspaces     map[string]*workspace.Workspace
+	activeWsID     string
+	shiftEnterPart bool // first half of Konsole's \eOM Shift+Enter sequence seen
 
 	// Dependencies (interfaces for SOLID)
 	slackSvc  slackpkg.SlackService
@@ -1000,6 +1001,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// letters as typed.
 		origMsg := msg
 		msg = normalizeShortcutKey(msg)
+
+		// Intercept the Konsole Shift+Enter escape sequence (\eOM)
+		// globally so it inserts a newline into the input regardless
+		// of which pane has focus. Without this, the two-part
+		// sequence (alt+O then M) leaks into the global shortcut
+		// dispatch and can trigger unintended actions.
+		str := msg.String()
+		if str == "alt+O" || str == "alt+o" {
+			m.shiftEnterPart = true
+			return m, nil
+		}
+		if m.shiftEnterPart {
+			m.shiftEnterPart = false
+			if str == "M" || str == "m" {
+				// Shift+Enter → insert newline into input and
+				// ensure focus lands on the input bar.
+				m.focus = types.FocusInput
+				m.updateFocus()
+				m.input.InsertNewline()
+				return m, nil
+			}
+			// Not the expected second byte — process normally.
+		}
+
 		// Cheap key trace for diagnosing "this shortcut hides my
 		// channel" type issues. Only active when debug logging is on.
 		debug.Log("[key] %q (type=%d alt=%v)", msg.String(), msg.Type, msg.Alt)
@@ -1382,6 +1407,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keymap.SelectMessage):
+			// When focus is on the input, ctrl+j is Shift+Enter
+			// (newline) — don't enter select mode.
+			if m.focus == types.FocusInput {
+				m.input.InsertNewline()
+				return m, nil
+			}
 			if m.currentCh != nil {
 				m.focus = types.FocusMessages
 				m.updateFocus()
@@ -2382,12 +2413,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.messages.SetLocalIdentity(m.myUserID, m.cfg.SlackerID)
 			}
 		}
+		// Re-load channels now that users are cached so DM names resolve.
+		if ws := m.workspaces[msg.TeamID]; ws != nil && ws.SlackSvc != nil {
+			return m, loadChannelsForWorkspaceCmd(ws)
+		}
 		return m, nil
 	case WorkspaceChannelsLoadedMsg:
-		if ws := m.workspaces[msg.TeamID]; ws != nil {
-			ws.Channels = msg.Channels
-			if msg.TeamID == m.activeWsID {
-				m.rebuildSidebarForWorkspace(ws)
+		ws := m.workspaces[msg.TeamID]
+		if ws == nil {
+			return m, nil
+		}
+		ws.Channels = msg.Channels
+		// Seed lastSeen for new channels.
+		for _, ch := range msg.Channels {
+			if _, ok := ws.LastSeen[ch.ID]; !ok {
+				ws.LastSeen[ch.ID] = "0"
+			}
+		}
+		if msg.TeamID == m.activeWsID {
+			m.rebuildSidebarForWorkspace(ws)
+			m.buildChannelIndex()
+			// Apply sort settings.
+			sortAsc := true
+			if m.cfg.ChannelSortAsc != nil {
+				sortAsc = *m.cfg.ChannelSortAsc
+			}
+			sortBy := m.cfg.ChannelSortBy
+			if sortBy == "" {
+				sortBy = SortByType
+			}
+			m.channels.SetSort(sortBy, sortAsc)
+			m.channels.SetCollapsedGroups(m.cfg.CollapsedGroups)
+			// Sync lastSeen for polling.
+			m.lastSeen = ws.LastSeen
+			m.rebuildPollChannels()
+			// Restore last channel.
+			if m.currentCh == nil && ws.Config.LastChannel != "" {
+				for i := range ws.Channels {
+					if ws.Channels[i].ID == ws.Config.LastChannel {
+						ch := ws.Channels[i]
+						m.currentCh = &ch
+						m.channels.SelectByID(ch.ID)
+						m.setChannelHeader()
+						if ch.IsFriend {
+							m.loadFriendHistory(ch.UserID)
+						} else if m.slackSvc != nil {
+							return m, loadHistoryCmd(m.slackSvc, ch.ID)
+						}
+						break
+					}
+				}
 			}
 		}
 		return m, nil
@@ -3012,9 +3087,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case TimedMessageClearMsg:
-		// Forward to the theme editor if it's open.
-		if m.overlay == overlayThemeEditor {
+		// Forward to whichever overlay uses TimedMessage.
+		switch m.overlay {
+		case overlayThemeEditor:
 			m.themeEditor, _ = m.themeEditor.Update(msg)
+		case overlayWorkspaceEdit:
+			m.workspaceEdit, _ = m.workspaceEdit.Update(msg)
 		}
 		return m, nil
 
@@ -3464,7 +3542,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.TeamID != "" {
 			ws = m.workspaces[msg.TeamID]
 		}
-		m.workspaceEdit = NewWorkspaceEditModel(ws, m.cfg.ConfigDir())
+		m.workspaceEdit = NewWorkspaceEditModel(ws, m.cfg.ConfigDir(), m.cfg.NotificationTTL())
 		m.workspaceEdit.SetSize(m.width, m.height)
 		m.overlay = overlayWorkspaceEdit
 		return m, nil

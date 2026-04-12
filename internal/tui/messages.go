@@ -2996,7 +2996,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 	// content is visible when GotoBottom positions the viewport.
 	// Without enough trailing space, the bottom border clips
 	// the last 1-2 lines of the final message.
-	trailingTarget := 3
+	trailingTarget := 0
 	// Count current trailing blanks.
 	trailing := 0
 	for i := len(lines) - 1; i >= 0 && lines[i] == ""; i-- {

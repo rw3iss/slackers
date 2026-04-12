@@ -279,7 +279,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			// captures the right-clicked channel ID/UserID
 			// independently for action dispatch.
 			if !m.fullMode && y < m.inputTop && x < m.sidebarWidth+1 {
-				viewportY := y - 1
+				wsOff := 0
+				if m.channels.workspaceName != "" {
+					wsOff = 1
+				}
+				viewportY := y - 1 - wsOff
 				if viewportY < 0 {
 					return m, nil
 				}
@@ -358,8 +362,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.updateFocus()
 
 				// SelectByRow expects a viewport-relative row. The sidebar
-				// has a top border (1 row) before its content, so subtract.
-				viewportY := y - 1
+				// has a top border (1 row) before its content, and optionally
+				// a workspace name header (1 row) above the channel list.
+				wsHeaderOffset := 0
+				if m.channels.workspaceName != "" {
+					wsHeaderOffset = 1
+				}
+				viewportY := y - 1 - wsHeaderOffset
 				if viewportY < 0 {
 					return m, nil
 				}

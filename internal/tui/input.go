@@ -98,6 +98,12 @@ func (m *InputModel) SetValue(s string) {
 	m.autoResize()
 }
 
+// InsertNewline inserts a newline at the cursor and resizes.
+func (m *InputModel) InsertNewline() {
+	m.textarea.InsertString("\n")
+	m.autoResize()
+}
+
 // InsertAtCursor inserts text at the current cursor position.
 func (m *InputModel) InsertAtCursor(s string) {
 	m.textarea.InsertString(s)
@@ -282,18 +288,11 @@ func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 
 		case tea.KeyEnter:
 			if keyMsg.Alt {
-				if m.mode == InputModeEdit {
-					// Edit: Alt+Enter = send.
-					text := m.textarea.Value()
-					if strings.TrimSpace(text) != "" {
-						return m, func() tea.Msg { return InputSendMsg{Text: text} }
-					}
-					return m, nil
+				// Alt+Enter = send in both modes.
+				text := m.textarea.Value()
+				if strings.TrimSpace(text) != "" {
+					return m, func() tea.Msg { return InputSendMsg{Text: text} }
 				}
-				// Normal: Alt+Enter = new line. Insert manually so the same
-				// path is used as Shift+Enter.
-				m.textarea.InsertString("\n")
-				m.autoResize()
 				return m, nil
 			}
 			if m.mode == InputModeNormal {

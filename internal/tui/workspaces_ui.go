@@ -278,12 +278,13 @@ type WorkspaceEditModel struct {
 	input         textinput.Model
 	guard         DirtyGuard
 	status        TimedMessage
+	statusTTL     time.Duration
 	width, height int
 }
 
 // NewWorkspaceEditModel creates an editor. If ws is nil, the editor
 // is in "add new workspace" mode with empty fields.
-func NewWorkspaceEditModel(ws *workspace.Workspace, configDir string) WorkspaceEditModel {
+func NewWorkspaceEditModel(ws *workspace.Workspace, configDir string, statusTTL time.Duration) WorkspaceEditModel {
 	isNew := ws == nil
 	if isNew {
 		ws = &workspace.Workspace{
@@ -319,12 +320,16 @@ func NewWorkspaceEditModel(ws *workspace.Workspace, configDir string) WorkspaceE
 		)
 	}
 
+	if statusTTL <= 0 {
+		statusTTL = 3 * time.Second
+	}
 	return WorkspaceEditModel{
 		configDir: configDir,
 		workspace: ws,
 		isNew:     isNew,
 		fields:    fields,
 		input:     ti,
+		statusTTL: statusTTL,
 	}
 }
 
@@ -515,7 +520,7 @@ func (m *WorkspaceEditModel) save() tea.Cmd {
 	m.guard.MarkClean()
 	m.isNew = false
 	teamID := m.workspace.Config.TeamID
-	cmd := m.status.Set("Saved", 3*time.Second)
+	cmd := m.status.Set("Saved", m.statusTTL)
 	return tea.Batch(cmd, func() tea.Msg {
 		return WorkspaceEditSavedMsg{TeamID: teamID}
 	})
@@ -535,8 +540,8 @@ func (m *WorkspaceEditModel) handleAction(key string) tea.Cmd {
 			m.status.SetImmediate("Encode failed: " + err.Error())
 			return nil
 		}
-		m.status.SetImmediate("Setup hash copied!")
-		return copyToClipboardCmd(hash)
+		clearCmd := m.status.Set("Setup hash copied!", m.statusTTL)
+		return tea.Batch(clearCmd, copyToClipboardCmd(hash))
 	case "copy_json":
 		cfg := setup.Config{
 			ClientID:     m.workspace.Config.ClientID,
@@ -545,8 +550,8 @@ func (m *WorkspaceEditModel) handleAction(key string) tea.Cmd {
 			TeamID:       m.workspace.Config.TeamID,
 		}
 		data, _ := json.Marshal(cfg)
-		m.status.SetImmediate("Setup JSON copied!")
-		return copyToClipboardCmd(string(data))
+		clearCmd := m.status.Set("Setup JSON copied!", m.statusTTL)
+		return tea.Batch(clearCmd, copyToClipboardCmd(string(data)))
 	}
 	return nil
 }
