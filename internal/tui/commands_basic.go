@@ -650,15 +650,8 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 
 			switch inviteType {
 			case "workspace", "ws", "setup":
-				// Include workspace setup hash.
-				if m.cfg == nil {
-					return commands.Result{Status: commands.StatusError, StatusBar: "No config loaded"}
-				}
-				share := setup.Config{
-					ClientID:     m.cfg.ClientID,
-					ClientSecret: m.cfg.ClientSecret,
-					AppToken:     m.cfg.AppToken,
-				}
+				// Include workspace setup hash from the active workspace.
+				share := m.activeWsSetupConfig()
 				if share.IsEmpty() {
 					return commands.Result{Status: commands.StatusError, StatusBar: "No workspace credentials — run /setup first"}
 				}
@@ -667,7 +660,10 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 					return commands.Result{Status: commands.StatusError, StatusBar: "Encode failed: " + err.Error()}
 				}
 				teamName := "our"
-				if m.teamName != "" {
+				ws := m.activeWs()
+				if ws != nil && ws.DisplayName() != "" {
+					teamName = ws.DisplayName()
+				} else if m.teamName != "" {
 					teamName = m.teamName
 				}
 				msgText = fmt.Sprintf("You're invited to join slackers! Download it here: %s\nThen run this command to join the %s workspace:\n`slackers setup %s`", ghLink, teamName, hash)
@@ -1164,17 +1160,7 @@ func (m *Model) buildShareProfileOutput() commands.Result {
 // credentials. Each form is a selectable section so the user can
 // arrow onto it, press 'c' to copy, or Enter to copy to clipboard.
 func (m *Model) buildShareSetupOutput() commands.Result {
-	if m.cfg == nil {
-		return commands.Result{
-			Status:    commands.StatusError,
-			StatusBar: "No config loaded",
-		}
-	}
-	share := setup.Config{
-		ClientID:     m.cfg.ClientID,
-		ClientSecret: m.cfg.ClientSecret,
-		AppToken:     m.cfg.AppToken,
-	}
+	share := m.activeWsSetupConfig()
 	if share.IsEmpty() {
 		return commands.Result{
 			Status:    commands.StatusError,
@@ -1244,15 +1230,8 @@ func (m *Model) buildShareBody(target shareTarget, args []string) (string, error
 		// Export client_id / client_secret / app_token (no
 		// user token) as a compact hash and wrap it in a
 		// prefixed command line so the recipient sees what to
-		// do with it.
-		if m.cfg == nil {
-			return "", fmt.Errorf("no config loaded")
-		}
-		share := setup.Config{
-			ClientID:     m.cfg.ClientID,
-			ClientSecret: m.cfg.ClientSecret,
-			AppToken:     m.cfg.AppToken,
-		}
+		// do with it. Prefer the active workspace's credentials.
+		share := m.activeWsSetupConfig()
 		if share.IsEmpty() {
 			return "", fmt.Errorf("no workspace credentials configured yet — run /setup first")
 		}
@@ -1318,17 +1297,7 @@ func (m *Model) buildShareBody(target shareTarget, args []string) (string, error
 // / client secret / app token are exported, matching the CLI
 // `slackers setup share` behaviour.
 func (m *Model) buildSetupShareResult(format string) commands.Result {
-	if m.cfg == nil {
-		return commands.Result{
-			Status:    commands.StatusError,
-			StatusBar: "No config loaded",
-		}
-	}
-	share := setup.Config{
-		ClientID:     m.cfg.ClientID,
-		ClientSecret: m.cfg.ClientSecret,
-		AppToken:     m.cfg.AppToken,
-	}
+	share := m.activeWsSetupConfig()
 	if share.IsEmpty() {
 		return commands.Result{
 			Status:    commands.StatusError,
@@ -1498,4 +1467,30 @@ func (m *Model) confirmClearFriendHistory(userID string) tea.Cmd {
 	}
 	m.warning = "Chat history cleared"
 	return nil
+}
+
+// activeWsSetupConfig returns a setup.Config populated from the active
+// workspace's credentials (client ID, client secret, app token). Falls
+// back to the global config if no active workspace is available. The
+// user token is intentionally omitted — share payloads never include it.
+func (m *Model) activeWsSetupConfig() setup.Config {
+	if ws := m.activeWs(); ws != nil {
+		sc := setup.Config{
+			ClientID:     ws.Config.ClientID,
+			ClientSecret: ws.Config.ClientSecret,
+			AppToken:     ws.Config.AppToken,
+		}
+		if !sc.IsEmpty() {
+			return sc
+		}
+	}
+	// Fall back to global config tokens.
+	if m.cfg != nil {
+		return setup.Config{
+			ClientID:     m.cfg.ClientID,
+			ClientSecret: m.cfg.ClientSecret,
+			AppToken:     m.cfg.AppToken,
+		}
+	}
+	return setup.Config{}
 }

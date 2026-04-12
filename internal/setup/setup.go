@@ -62,12 +62,16 @@ type Config struct {
 	// /setup import flow does accept it so a user migrating their
 	// own machine can round-trip every field.
 	UserToken string `json:"user_token,omitempty"`
+	// TeamID is the Slack team ID for the workspace these credentials
+	// belong to. Set automatically by the CLI via AuthTest when tokens
+	// are present. Used to create/update the workspace folder.
+	TeamID string `json:"team_id,omitempty"`
 }
 
 // IsEmpty reports whether every field in the config is blank. Used
 // by the import path to decide whether there's anything to apply.
 func (c Config) IsEmpty() bool {
-	return c.ClientID == "" && c.ClientSecret == "" && c.AppToken == "" && c.UserToken == ""
+	return c.ClientID == "" && c.ClientSecret == "" && c.AppToken == "" && c.UserToken == "" && c.TeamID == ""
 }
 
 // Mask returns a copy of the config with sensitive fields
@@ -80,6 +84,7 @@ func (c Config) Mask() Config {
 		ClientSecret: maskSecret(c.ClientSecret),
 		AppToken:     maskSecret(c.AppToken),
 		UserToken:    maskSecret(c.UserToken),
+		TeamID:       c.TeamID, // not secret
 	}
 }
 
@@ -201,6 +206,8 @@ func ParseFlags(args []string) (Config, error) {
 			cfg.AppToken = value
 		case "user-token", "user_token":
 			cfg.UserToken = value
+		case "team-id", "team_id":
+			cfg.TeamID = value
 		}
 	}
 	if cfg.IsEmpty() {

@@ -345,6 +345,8 @@ func runSetupImportCLI(cfg *config.Config, payload setup.Config) error {
 	if payload.IsEmpty() {
 		return fmt.Errorf("setup: payload has no fields")
 	}
+
+	// Apply tokens to global config (backward compat).
 	changed := []string{}
 	if payload.ClientID != "" && cfg.ClientID != payload.ClientID {
 		cfg.ClientID = payload.ClientID
@@ -370,6 +372,46 @@ func runSetupImportCLI(cfg *config.Config, payload setup.Config) error {
 		return fmt.Errorf("setup: saved in memory but failed to persist: %w", err)
 	}
 	fmt.Printf("setup: updated %s\n", strings.Join(changed, ", "))
+
+	// Create or update the workspace folder. If a bot or user token is
+	// available, run AuthTest to discover the team ID and name. If that
+	// fails (offline, bad token) we skip workspace folder creation —
+	// the migration path at startup will catch it later.
+	botTok := cfg.BotToken
+	userTok := cfg.UserToken
+	if payload.UserToken != "" {
+		userTok = payload.UserToken
+	}
+	if botTok != "" || userTok != "" {
+		tmpSvc := slack.NewSlackClient(botTok, userTok)
+		teamName, teamID, authErr := tmpSvc.AuthTest()
+		if authErr == nil && teamID != "" {
+			verb := "Added"
+			if workspace.Exists(cfg.ConfigDir(), teamID) {
+				verb = "Updated"
+			}
+			wsCfg := workspace.WorkspaceConfig{
+				TeamID:       teamID,
+				Name:         teamName,
+				BotToken:     botTok,
+				AppToken:     cfg.AppToken,
+				UserToken:    userTok,
+				ClientID:     cfg.ClientID,
+				ClientSecret: cfg.ClientSecret,
+				AutoSignIn:   true,
+			}
+			if _, err := workspace.Create(cfg.ConfigDir(), wsCfg); err != nil {
+				fmt.Printf("warning: workspace folder creation failed: %v\n", err)
+			} else {
+				cfg.LastActiveWorkspace = teamID
+				_ = config.Save(cfg)
+				fmt.Printf("%s workspace: %s (%s)\n", verb, teamName, teamID)
+			}
+		} else {
+			fmt.Println("note: could not determine team ID (offline?) — workspace folder will be created on next launch")
+		}
+	}
+
 	fmt.Println("restart slackers for Slack services to pick up the new tokens")
 	return nil
 }
@@ -389,11 +431,27 @@ func runSetupShare(cfg *config.Config, args []string) error {
 	if format != "hash" && format != "json" {
 		return fmt.Errorf("setup share: format must be 'hash' or 'json', got %q", format)
 	}
-	share := setup.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		AppToken:     cfg.AppToken,
-		// UserToken intentionally omitted.
+
+	// Prefer the active workspace's credentials if available.
+	var share setup.Config
+	if cfg.LastActiveWorkspace != "" {
+		if ws, err := workspace.Load(cfg.ConfigDir(), cfg.LastActiveWorkspace); err == nil {
+			share = setup.Config{
+				ClientID:     ws.Config.ClientID,
+				ClientSecret: ws.Config.ClientSecret,
+				AppToken:     ws.Config.AppToken,
+				// UserToken intentionally omitted.
+			}
+		}
+	}
+	// Fall back to global config tokens.
+	if share.IsEmpty() {
+		share = setup.Config{
+			ClientID:     cfg.ClientID,
+			ClientSecret: cfg.ClientSecret,
+			AppToken:     cfg.AppToken,
+			// UserToken intentionally omitted.
+		}
 	}
 	if share.IsEmpty() {
 		return fmt.Errorf("setup share: no workspace credentials configured yet — run 'slackers setup' first")
