@@ -341,12 +341,14 @@ func (m *MessageViewModel) AppendMessage(msg types.Message) {
 		return
 	}
 	m.messages = append(m.messages, msg)
-	// One new message — cache only loses correctness for that one
-	// entry, so nothing needs to be dropped here.
 	m.rebuildContent()
 	if m.autoScroll {
 		m.viewport.GotoBottom()
 	}
+	// Force autoScroll on so the next render also scrolls to
+	// bottom — the content may reflow (friend card expansion,
+	// word wrap) between now and the actual terminal render.
+	m.autoScroll = true
 }
 
 // SetContextMessages enters context mode showing messages around a search result.
