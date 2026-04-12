@@ -503,6 +503,8 @@ type Model struct {
 	pluginConfig     PluginConfigModel
 	downloadsOverlay DownloadsModel
 	downloadMgr      *downloads.Manager
+	workspacesList   WorkspacesModel
+	workspaceEdit    WorkspaceEditModel
 	// backgroundGame is non-nil when a game is running but hidden
 	// (user pressed Esc to return to chat). The game is paused
 	// and can be restored via /games or the taskbar indicator.
@@ -1276,6 +1278,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case key.Matches(msg, m.keymap.Workspaces):
+			if m.overlay == overlayWorkspaces {
+				m.overlay = overlayNone
+			} else {
+				m.workspacesList = NewWorkspacesModel(m.workspaces, m.activeWsID)
+				m.workspacesList.SetSize(m.width, m.height)
+				m.overlay = overlayWorkspaces
+			}
+			return m, nil
+
 		case key.Matches(msg, m.keymap.Settings):
 			if m.overlay == overlaySettings {
 				m.overlay = overlayNone
@@ -1647,6 +1659,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayPluginConfig {
 			var cmd tea.Cmd
 			m.pluginConfig, cmd = m.pluginConfig.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayWorkspaces {
+			var cmd tea.Cmd
+			m.workspacesList, cmd = m.workspacesList.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayWorkspaceEdit {
+			var cmd tea.Cmd
+			m.workspaceEdit, cmd = m.workspaceEdit.Update(msg)
 			return m, cmd
 		}
 		// Normal key handling (no overlay)
@@ -3431,6 +3453,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DownloadsCloseMsg:
 		m.overlay = overlayNone
+		return m, nil
+
+	case WorkspacesCloseMsg:
+		m.overlay = overlayNone
+		return m, nil
+
+	case WorkspaceEditOpenMsg:
+		var ws *workspace.Workspace
+		if msg.TeamID != "" {
+			ws = m.workspaces[msg.TeamID]
+		}
+		m.workspaceEdit = NewWorkspaceEditModel(ws)
+		m.workspaceEdit.SetSize(m.width, m.height)
+		m.overlay = overlayWorkspaceEdit
+		return m, nil
+
+	case WorkspaceEditCloseMsg:
+		m.overlay = overlayWorkspaces
+		// Refresh the workspaces list.
+		m.workspacesList = NewWorkspacesModel(m.workspaces, m.activeWsID)
+		m.workspacesList.SetSize(m.width, m.height)
+		return m, nil
+
+	case WorkspaceRemovedMsg:
+		if err := workspace.Delete(m.cfg.ConfigDir(), msg.TeamID); err != nil {
+			debug.Log("[workspace] delete error: %v", err)
+		}
+		// Sign out first if signed in.
+		if ws := m.workspaces[msg.TeamID]; ws != nil && ws.SignedIn {
+			if ws.Cancel != nil {
+				ws.Cancel()
+			}
+		}
+		delete(m.workspaces, msg.TeamID)
+		if m.activeWsID == msg.TeamID {
+			m.switchToNextSignedIn()
+		}
+		// Refresh overlay.
+		m.workspacesList = NewWorkspacesModel(m.workspaces, m.activeWsID)
+		m.workspacesList.SetSize(m.width, m.height)
 		return m, nil
 
 	case downloadRefreshMsg:
@@ -5635,6 +5697,10 @@ func (m Model) viewInner() string {
 		return m.pluginConfig.View()
 	case overlayDownloads:
 		return m.downloadsOverlay.View()
+	case overlayWorkspaces:
+		return m.workspacesList.View()
+	case overlayWorkspaceEdit:
+		return m.workspaceEdit.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the

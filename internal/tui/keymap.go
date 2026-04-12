@@ -52,6 +52,7 @@ type KeyMap struct {
 	AwayStatus       key.Binding
 	Downloads           key.Binding
 	OpenDownloadsFolder key.Binding
+	Workspaces          key.Binding
 }
 
 // binding creates a key.Binding from a ShortcutMap action name.
@@ -114,6 +115,7 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		AwayStatus:       binding(sm, "away_status", "alt+a", "set away status"),
 		Downloads:           binding(sm, "downloads", "alt+d", "downloads manager"),
 		OpenDownloadsFolder: binding(sm, "open_downloads_folder", "alt+o", "browse downloads folder"),
+		Workspaces:          binding(sm, "workspaces", "alt+w", "manage workspaces"),
 	}
 }
 
