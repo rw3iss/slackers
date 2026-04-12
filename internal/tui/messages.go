@@ -668,8 +668,12 @@ func (m *MessageViewModel) SetItemSpacing(n int) {
 func (m *MessageViewModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	// Viewport height = pane height - 1 header line - 1 bottom padding.
-	vpH := h - 2
+	// Viewport height = pane height - 1 header - 2 border/padding.
+	// The pane renders with RoundedBorder (2 rows) + header (1 row)
+	// inside a lipgloss.Height(h) content area. The viewport must
+	// be shorter than h to avoid content extending past the bottom
+	// border.
+	vpH := h - 3
 	if vpH < 1 {
 		vpH = 1
 	}
@@ -3048,10 +3052,8 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		}
 	}
 
-	// Trim trailing blank lines down to 2 so the last message
-	// sits cleanly at the bottom with breathing room to prevent
-	// the bottom line from being clipped by the pane border.
-	for len(lines) > 2 && lines[len(lines)-1] == "" && lines[len(lines)-2] == "" && lines[len(lines)-3] == "" {
+	// Trim trailing blank lines down to 1.
+	for len(lines) > 1 && lines[len(lines)-1] == "" && lines[len(lines)-2] == "" {
 		lines = lines[:len(lines)-1]
 	}
 
