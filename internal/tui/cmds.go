@@ -28,6 +28,7 @@ import (
 	"github.com/rw3iss/slackers/internal/secure"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
 	"github.com/rw3iss/slackers/internal/types"
+	"github.com/rw3iss/slackers/internal/workspace"
 )
 
 // ---- Slack subsystem ---------------------------------------------------
@@ -682,4 +683,96 @@ func friendPingCmdWithCurrent(store *friends.FriendStore, p2p *secure.P2PNode, _
 
 		return FriendPingMsg{Online: online, Status: status}
 	}
+}
+
+// ---- Per-workspace commands --------------------------------------------
+
+// WorkspaceUsersLoadedMsg carries users fetched for a specific workspace.
+type WorkspaceUsersLoadedMsg struct {
+	TeamID string
+	Users  map[string]types.User
+}
+
+// WorkspaceChannelsLoadedMsg carries channels fetched for a specific workspace.
+type WorkspaceChannelsLoadedMsg struct {
+	TeamID   string
+	Channels []types.Channel
+}
+
+// WorkspaceSlackEventMsg wraps a socket event with its originating workspace.
+type WorkspaceSlackEventMsg struct {
+	TeamID string
+	Event  slackpkg.SocketEvent
+}
+
+// WorkspacePollTickMsg is the foreground poll tick for a specific workspace.
+type WorkspacePollTickMsg struct{ TeamID string }
+
+// WorkspaceBgPollTickMsg is the background poll tick for a specific workspace.
+type WorkspaceBgPollTickMsg struct{ TeamID string }
+
+// loadUsersForWorkspaceCmd loads users via ws.SlackSvc, tagged with the workspace's team ID.
+func loadUsersForWorkspaceCmd(ws *workspace.Workspace) tea.Cmd {
+	return func() tea.Msg {
+		_, _, _ = ws.SlackSvc.AuthTest()
+		users, err := ws.SlackSvc.ListUsers()
+		if err != nil {
+			debug.Log("loadUsersForWorkspaceCmd %s: %v", ws.ID(), err)
+			return ErrMsg{Err: err}
+		}
+		return WorkspaceUsersLoadedMsg{TeamID: ws.ID(), Users: users}
+	}
+}
+
+// loadChannelsForWorkspaceCmd loads channels via ws.SlackSvc, tagged with the workspace's team ID.
+func loadChannelsForWorkspaceCmd(ws *workspace.Workspace) tea.Cmd {
+	return func() tea.Msg {
+		channels, err := ws.SlackSvc.ListChannels()
+		if err != nil {
+			debug.Log("loadChannelsForWorkspaceCmd %s: %v", ws.ID(), err)
+			return ErrMsg{Err: err}
+		}
+		return WorkspaceChannelsLoadedMsg{TeamID: ws.ID(), Channels: channels}
+	}
+}
+
+// connectWorkspaceSocketCmd calls ws.SocketSvc.Connect using the workspace's
+// lifecycle context and event channel.
+func connectWorkspaceSocketCmd(ws *workspace.Workspace) tea.Cmd {
+	return func() tea.Msg {
+		err := ws.SocketSvc.Connect(ws.Ctx, ws.EventChan)
+		if err != nil {
+			return ConnStatusMsg{Status: types.StatusError, Err: err}
+		}
+		return ConnStatusMsg{Status: types.StatusConnected}
+	}
+}
+
+// waitForWorkspaceEvent blocks on ws.EventChan and returns a WorkspaceSlackEventMsg
+// tagged with the workspace's team ID.
+func waitForWorkspaceEvent(ws *workspace.Workspace) tea.Cmd {
+	return func() tea.Msg {
+		event := <-ws.EventChan
+		return WorkspaceSlackEventMsg{TeamID: ws.ID(), Event: event}
+	}
+}
+
+// workspacePollTickCmd returns a foreground poll tick for the given workspace.
+func workspacePollTickCmd(teamID string, intervalSec int) tea.Cmd {
+	if intervalSec < 1 {
+		intervalSec = 10
+	}
+	return tea.Tick(time.Duration(intervalSec)*time.Second, func(t time.Time) tea.Msg {
+		return WorkspacePollTickMsg{TeamID: teamID}
+	})
+}
+
+// workspaceBgPollTickCmd returns a background poll tick for the given workspace.
+func workspaceBgPollTickCmd(teamID string, intervalSec int) tea.Cmd {
+	if intervalSec < 5 {
+		intervalSec = 30
+	}
+	return tea.Tick(time.Duration(intervalSec)*time.Second, func(t time.Time) tea.Msg {
+		return WorkspaceBgPollTickMsg{TeamID: teamID}
+	})
 }
