@@ -35,7 +35,7 @@ import (
 func loadUsersCmd(svc slackpkg.SlackService) tea.Cmd {
 	return func() tea.Msg {
 		// AuthTest first to cache the local user ID.
-		_, _ = svc.AuthTest()
+		_, _, _ = svc.AuthTest()
 		users, err := svc.ListUsers()
 		if err != nil {
 			return ErrMsg{Err: err}

@@ -20,7 +20,7 @@ import (
 
 // SlackService defines the interface for Slack Web API operations.
 type SlackService interface {
-	AuthTest() (string, error)
+	AuthTest() (teamName string, teamID string, err error)
 	MyUserID() string
 	ListChannels() ([]types.Channel, error)
 	ListUsers() (map[string]types.User, error)
@@ -232,17 +232,17 @@ func (c *slackClient) tryWithFallback(operation string, fn func(api *slack.Clien
 	return err
 }
 
-// AuthTest validates the token and returns the team name.
-func (c *slackClient) AuthTest() (string, error) {
+// AuthTest validates the token and returns the team name and team ID.
+func (c *slackClient) AuthTest() (string, string, error) {
 	resp, err := c.primary.AuthTest()
 	if err != nil && c.fallback != nil {
 		resp, err = c.fallback.AuthTest()
 	}
 	if err != nil {
-		return "", fmt.Errorf("slack auth test: %w", err)
+		return "", "", fmt.Errorf("slack auth test: %w", err)
 	}
 	c.userID = resp.UserID
-	return resp.Team, nil
+	return resp.Team, resp.TeamID, nil
 }
 
 // MyUserID returns the authenticated user's Slack ID (cached after AuthTest).
