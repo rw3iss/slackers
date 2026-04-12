@@ -60,6 +60,7 @@ const (
 	KeyBorderDefault = "borderDefault"
 	KeyBorderActive  = "borderActive"
 	KeyEmote         = "emote"
+	KeyCodeSnippet   = "codeSnippet"
 )
 
 // AllKeys is the canonical ordered list of theme color keys.
@@ -68,7 +69,7 @@ var AllKeys = []string{
 	KeyMessageText, KeyInfoText, KeyDayLabel, KeyTimestamp,
 	KeyBackground, KeyPageHeader, KeyGroupHeader, KeyStatusMessage,
 	KeyFileButton, KeyReplyLabel, KeySelection, KeyMenuItem,
-	KeyBorderDefault, KeyBorderActive, KeyEmote,
+	KeyBorderDefault, KeyBorderActive, KeyEmote, KeyCodeSnippet,
 }
 
 // KeyDescription returns a short description of a theme color key.
@@ -116,6 +117,8 @@ func KeyDescription(key string) string {
 		return "Focused pane border"
 	case KeyEmote:
 		return "Emote action text color"
+	case KeyCodeSnippet:
+		return "Code snippet text (inline `code` and ```fenced blocks```)"
 	}
 	return ""
 }

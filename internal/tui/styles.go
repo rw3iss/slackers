@@ -64,6 +64,8 @@ var (
 	ColorBorderActiveBg  lipgloss.Color
 	ColorEmote           lipgloss.Color
 	ColorEmoteBg         lipgloss.Color
+	ColorCodeSnippet     lipgloss.Color
+	ColorCodeSnippetBg   lipgloss.Color
 
 	// Shared widget colors — centralised to eliminate inline
 	// magic 256-color indices scattered across overlays. Refreshed
@@ -249,6 +251,7 @@ func ApplyTheme(t theme.Theme) {
 	ColorBorderDefault, ColorBorderDefaultBg = applyKey(t, theme.KeyBorderDefault)
 	ColorBorderActive, ColorBorderActiveBg = applyKey(t, theme.KeyBorderActive)
 	ColorEmote, ColorEmoteBg = applyKey(t, theme.KeyEmote)
+	ColorCodeSnippet, ColorCodeSnippetBg = applyKey(t, theme.KeyCodeSnippet)
 
 	// Shared widget colors. These are not yet theme keys —
 	// they're fixed 256-color indices chosen to read well on
@@ -396,19 +399,24 @@ func rebuildDerivedStyles() {
 	// reads as "this is a code-ish thing" without adding any
 	// background fill (that would clash with the message pane's
 	// own background when the cursor isn't on the snippet).
-	CodeSnippetStyle = lipgloss.NewStyle().
-		Foreground(ColorAccent).
-		Italic(true)
+	csFg := ColorCodeSnippet
+	if csFg == "" {
+		csFg = ColorAccent
+	}
+	csBg := ColorCodeSnippetBg
+	csStyle := lipgloss.NewStyle().Foreground(csFg)
+	if csBg != "" {
+		csStyle = csStyle.Background(csBg)
+	}
+	CodeSnippetStyle = csStyle
+
 	// CodeSnippetSelectedStyle is the highlighted form when the
 	// user has arrow-navigated the select-mode cursor onto a
-	// snippet. Inverts fg/bg like FriendCardPillSelectedStyle
-	// does, so the active snippet pops against neighbouring
-	// text.
+	// snippet. Inverts fg/bg.
 	CodeSnippetSelectedStyle = lipgloss.NewStyle().
 		Foreground(ColorInvertedFg).
-		Background(ColorAccent).
-		Bold(true).
-		Italic(true)
+		Background(csFg).
+		Bold(true)
 
 	// Emoji picker styles.
 	EmojiActiveBgStyle = lipgloss.NewStyle().Background(ColorSubtleBg)

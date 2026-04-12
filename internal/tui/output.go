@@ -502,11 +502,8 @@ func (o *OutputViewModel) rebuildRender() {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 	selStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
-	snippetStyle := lipgloss.NewStyle().Foreground(ColorAccent).Italic(true)
-	snippetSelStyle := lipgloss.NewStyle().
-		Foreground(ColorInvertedFg).
-		Background(ColorAccent).
-		Bold(true)
+	snippetStyle := CodeSnippetStyle
+	snippetSelStyle := CodeSnippetSelectedStyle
 
 	var b strings.Builder
 	// rowCount tracks how many lines we've written so far so
