@@ -635,7 +635,7 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		Description: "Send an invite to join slackers (optionally with workspace or friend info)",
 		Usage:       "/invite [workspace|friend]",
 		Args: []commands.ArgSpec{
-			{Name: "type", Kind: commands.ArgString, Optional: true, Help: "workspace or friend"},
+			{Name: "type", Kind: commands.ArgInviteType, Optional: true, Help: "workspace or friend"},
 		},
 		Run: func(ctx *commands.Context) commands.Result {
 			m := ctx.Host.(*Model)

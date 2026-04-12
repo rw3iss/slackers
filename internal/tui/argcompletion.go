@@ -140,6 +140,12 @@ func (m *Model) argCompletionsForKind(kind commands.ArgKind) []argCandidate {
 			out[i] = argCandidate{Name: p.Name, Description: p.Version + " — " + p.State.String()}
 		}
 		return out
+
+	case commands.ArgInviteType:
+		return []argCandidate{
+			{Name: "workspace", Description: "Include workspace setup hash"},
+			{Name: "friend", Description: "Include your contact card"},
+		}
 	}
 	return nil
 }

@@ -66,6 +66,7 @@ const (
 	ArgFile                      // local filesystem path
 	ArgGameName                  // available game names
 	ArgPluginName                // installed plugin names
+	ArgInviteType                // invite subcommand: workspace, friend
 )
 
 // ArgSpec describes one positional argument of a command.
