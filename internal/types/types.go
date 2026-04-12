@@ -7,6 +7,7 @@ import "time"
 type Channel struct {
 	ID          string
 	Name        string
+	WorkspaceID string // Slack team ID; empty for friend channels
 	IsDM        bool
 	IsPrivate   bool
 	IsGroup     bool

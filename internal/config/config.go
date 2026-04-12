@@ -110,7 +110,37 @@ type Config struct {
 	// Pending. Minimum enforced at 2s; 0 or missing falls back to
 	// the 5s default.
 	FriendPingSeconds int    `json:"friend_ping_seconds,omitempty"`
-	ConfigPath        string `json:"-"`
+
+	// Multi-workspace support.
+	LastActiveWorkspace string `json:"last_active_workspace,omitempty"`
+
+	ConfigPath string `json:"-"`
+}
+
+// ConfigDir returns the directory containing config.json.
+func (c *Config) ConfigDir() string {
+	if c.ConfigPath != "" {
+		return filepath.Dir(c.ConfigPath)
+	}
+	return DefaultConfigDir()
+}
+
+// NeedsMigration returns true if this config still has workspace-specific
+// tokens that should be moved to a workspace folder.
+func (c *Config) NeedsMigration() bool {
+	return c.BotToken != "" || c.AppToken != ""
+}
+
+// ClearWorkspaceFields zeroes the workspace-specific fields after migration.
+func (c *Config) ClearWorkspaceFields() {
+	c.BotToken = ""
+	c.AppToken = ""
+	c.UserToken = ""
+	c.ClientID = ""
+	c.ClientSecret = ""
+	c.ChannelAliases = nil
+	c.HiddenChannels = nil
+	c.LastChannelID = ""
 }
 
 // DefaultConfigDir returns the default configuration directory (~/.config/slackers/).

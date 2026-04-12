@@ -37,9 +37,10 @@ const (
 // Notification is a single entry in the store. The same struct serves
 // every Type — the type-specific fields are populated as needed.
 type Notification struct {
-	ID        string    `json:"id"`
-	Type      Type      `json:"type"`
-	ChannelID string    `json:"channel_id"`
+	ID          string    `json:"id"`
+	Type        Type      `json:"type"`
+	WorkspaceID string    `json:"workspace_id,omitempty"` // empty for P2P
+	ChannelID   string    `json:"channel_id"`
 	MessageID string    `json:"message_id,omitempty"`
 	UserID    string    `json:"user_id,omitempty"`
 	UserName  string    `json:"user_name,omitempty"`
