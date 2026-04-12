@@ -33,6 +33,7 @@ import (
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
 	"github.com/rw3iss/slackers/internal/theme"
 	"github.com/rw3iss/slackers/internal/types"
+	"github.com/rw3iss/slackers/internal/workspace"
 )
 
 // Overlay represents which overlay is currently shown.
@@ -71,6 +72,8 @@ const (
 	overlayGame
 	overlayPluginConfig
 	overlayDownloads
+	overlayWorkspaces
+	overlayWorkspaceEdit
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -431,6 +434,10 @@ type Model struct {
 
 	// Config
 	cfg *config.Config
+
+	// Multi-workspace state.
+	workspaces map[string]*workspace.Workspace
+	activeWsID string
 
 	// Dependencies (interfaces for SOLID)
 	slackSvc  slackpkg.SlackService
@@ -2909,9 +2916,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ThemeEditorOpenMsg:
-		m.themeEditor = NewThemeEditor(msg.Theme)
+		m.themeEditor = NewThemeEditor(msg.Theme, m.cfg.NotificationTTL())
 		m.themeEditor.SetSize(m.width, m.height)
 		m.overlay = overlayThemeEditor
+		return m, nil
+
+	case TimedMessageClearMsg:
+		// Forward to the theme editor if it's open.
+		if m.overlay == overlayThemeEditor {
+			m.themeEditor, _ = m.themeEditor.Update(msg)
+		}
 		return m, nil
 
 	case ThemeEditorCloseMsg:
@@ -5650,6 +5664,14 @@ func (m Model) renderBaseView() string {
 		base = overlayOnRow(base, 0, x, btn)
 	}
 	return base
+}
+
+// activeWs returns the currently displayed workspace, or nil.
+func (m *Model) activeWs() *workspace.Workspace {
+	if m.activeWsID == "" {
+		return nil
+	}
+	return m.workspaces[m.activeWsID]
 }
 
 func (m *Model) buildChannelIndex() {
