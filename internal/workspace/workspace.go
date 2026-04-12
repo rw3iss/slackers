@@ -5,6 +5,7 @@ import (
 	"context"
 	"sync"
 
+	slackpkg "github.com/rw3iss/slackers/internal/slack"
 	"github.com/rw3iss/slackers/internal/types"
 )
 
@@ -43,6 +44,11 @@ type Workspace struct {
 	ChannelMeta map[string]ChannelMeta // channelID → metadata
 	LastSeen    map[string]string      // channelID → last-seen timestamp
 	UnreadCount int
+
+	// Services — nil when the workspace is signed out.
+	SlackSvc  slackpkg.SlackService
+	SocketSvc slackpkg.SocketService
+	EventChan chan slackpkg.SocketEvent
 
 	// Lifecycle context — cancelled on sign-out to stop socket + polling.
 	Ctx    context.Context
