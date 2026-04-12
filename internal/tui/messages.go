@@ -3052,9 +3052,24 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		}
 	}
 
-	// Trim trailing blank lines down to 1.
-	for len(lines) > 1 && lines[len(lines)-1] == "" && lines[len(lines)-2] == "" {
+	// Keep a few trailing blank lines so the last message's full
+	// content is visible when GotoBottom positions the viewport.
+	// Without enough trailing space, the bottom border clips
+	// the last 1-2 lines of the final message.
+	trailingTarget := 3
+	// Count current trailing blanks.
+	trailing := 0
+	for i := len(lines) - 1; i >= 0 && lines[i] == ""; i-- {
+		trailing++
+	}
+	// Add or trim to reach the target.
+	for trailing < trailingTarget {
+		lines = append(lines, "")
+		trailing++
+	}
+	for trailing > trailingTarget && len(lines) > 1 {
 		lines = lines[:len(lines)-1]
+		trailing--
 	}
 
 	return strings.Join(lines, "\n")
