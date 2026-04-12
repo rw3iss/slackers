@@ -271,6 +271,21 @@ func (m *Model) rebuildSidebarForWorkspace(ws *workspace.Workspace) {
 
 	// Apply latest timestamps for sort-by-recent.
 	m.channels.SetLatestTimestamps(ws.LastSeen)
+
+	// Update the sidebar workspace name header.
+	m.channels.SetWorkspaceName(ws.DisplayName())
+	m.channels.SetMultipleWorkspaces(m.signedInWorkspaceCount() > 1)
+}
+
+// signedInWorkspaceCount returns how many workspaces are currently signed in.
+func (m *Model) signedInWorkspaceCount() int {
+	count := 0
+	for _, ws := range m.workspaces {
+		if ws.SignedIn {
+			count++
+		}
+	}
+	return count
 }
 
 // ---------------------------------------------------------------------------

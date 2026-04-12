@@ -60,6 +60,13 @@ type ChannelListModel struct {
 	// in a single message) so the sidebar is only rebuilt once
 	// at the end instead of once per setter.
 	bulkUpdate int
+
+	// workspaceName is the display name of the active workspace,
+	// shown as a centred header at the top of the sidebar.
+	workspaceName string
+	// multipleWorkspaces is true when more than one workspace is
+	// signed in; causes a ⇅ indicator to appear next to the name.
+	multipleWorkspaces bool
 }
 
 // FriendDisplayStatus tracks a friend's online/away state for
@@ -75,6 +82,18 @@ type FriendDisplayStatus struct {
 // model after FriendPingMsg and FriendStatusUpdateMsg.
 func (m *ChannelListModel) SetFriendStatus(statuses map[string]FriendDisplayStatus) {
 	m.friendStatus = statuses
+}
+
+// SetWorkspaceName sets the active workspace display name shown in the
+// sidebar header. Pass an empty string to hide the header.
+func (m *ChannelListModel) SetWorkspaceName(name string) {
+	m.workspaceName = name
+}
+
+// SetMultipleWorkspaces controls whether the ⇅ indicator is shown next
+// to the workspace name (true when more than one workspace is signed in).
+func (m *ChannelListModel) SetMultipleWorkspaces(v bool) {
+	m.multipleWorkspaces = v
 }
 
 // BeginBulkUpdate suspends automatic buildRows() calls until a
@@ -758,7 +777,11 @@ func (m ChannelListModel) View() string {
 			// the highlight colour is enough — so the label stays in
 			// the same column as when unselected.
 			if rowIdx == m.selected {
-				lines = append(lines, displayLine{text: ChannelSelectedStyle.Render(label)})
+				selStyle := lipgloss.NewStyle().Foreground(ColorSelectedChannel).Bold(true)
+				if ColorSelectedChannelBg != "" {
+					selStyle = selStyle.Background(ColorSelectedChannelBg)
+				}
+				lines = append(lines, displayLine{text: selStyle.Render(label)})
 			} else {
 				lines = append(lines, displayLine{text: SectionHeaderStyle.Render(label)})
 			}
@@ -802,8 +825,33 @@ func (m ChannelListModel) View() string {
 	}
 	awayFooterLines := len(awayFooterRendered)
 
-	// Apply scrolling. Reserve space for the away footer lines.
-	viewHeight := m.height - 2 - awayFooterLines
+	// Render optional workspace header at the very top of the sidebar.
+	var wsHeader string
+	if m.workspaceName != "" {
+		indicator := ""
+		if m.multipleWorkspaces {
+			indicator = " ⇅"
+		}
+		// availableWidth is the inner content width (outer width minus
+		// the 2 border columns).
+		availableWidth := m.width - 2
+		if availableWidth < 1 {
+			availableWidth = 1
+		}
+		wsHeader = lipgloss.NewStyle().
+			Foreground(ColorPageHeader).
+			Bold(true).
+			Width(availableWidth).
+			Align(lipgloss.Center).
+			Render(m.workspaceName + indicator)
+	}
+	wsHeaderLines := 0
+	if wsHeader != "" {
+		wsHeaderLines = 1
+	}
+
+	// Apply scrolling. Reserve space for the workspace header and away footer.
+	viewHeight := m.height - 2 - wsHeaderLines - awayFooterLines
 	if viewHeight < 1 {
 		viewHeight = 1
 	}
@@ -817,6 +865,10 @@ func (m ChannelListModel) View() string {
 	}
 
 	var b strings.Builder
+	if wsHeader != "" {
+		b.WriteString(wsHeader)
+		b.WriteString("\n")
+	}
 	for i := start; i < end; i++ {
 		b.WriteString(lines[i].text)
 		if i < end-1 {
@@ -967,7 +1019,10 @@ func (m ChannelListModel) renderItem(ch types.Channel, rowIdx int, maxLen int, i
 	var style lipgloss.Style
 	switch {
 	case rowIdx == m.selected:
-		style = ChannelSelectedStyle
+		style = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Bold(true)
+		if ColorSelectedChannelBg != "" {
+			style = style.Background(ColorSelectedChannelBg)
+		}
 	case ch.IsFriend:
 		// Three-state friend rendering using the dedicated
 		// friendStatus map (separate from unread):
@@ -977,11 +1032,20 @@ func (m ChannelListModel) renderItem(ch types.Channel, rowIdx int, maxLen int, i
 		fs := m.friendStatus[ch.ID]
 		switch {
 		case fs.Online && fs.AwayStatus == "away":
-			style = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+			style = lipgloss.NewStyle().Foreground(ColorUserAway).Italic(true)
+			if ColorUserAwayBg != "" {
+				style = style.Background(ColorUserAwayBg)
+			}
 		case fs.Online:
-			style = lipgloss.NewStyle().Foreground(ColorStatusOn)
+			style = lipgloss.NewStyle().Foreground(ColorFriendOnline)
+			if ColorFriendOnlineBg != "" {
+				style = style.Background(ColorFriendOnlineBg)
+			}
 		default:
-			style = lipgloss.NewStyle().Foreground(ColorMuted)
+			style = lipgloss.NewStyle().Foreground(ColorFriendOffline)
+			if ColorFriendOfflineBg != "" {
+				style = style.Background(ColorFriendOfflineBg)
+			}
 		}
 		// Unread badge for friends is separate from online.
 		if m.unread[ch.ID] {
@@ -993,7 +1057,10 @@ func (m ChannelListModel) renderItem(ch types.Channel, rowIdx int, maxLen int, i
 	case isHidden:
 		style = lipgloss.NewStyle().Foreground(ColorMuted)
 	default:
-		style = ChannelItemStyle
+		style = lipgloss.NewStyle().Foreground(ColorChannelName)
+		if ColorChannelNameBg != "" {
+			style = style.Background(ColorChannelNameBg)
+		}
 	}
 
 	return style.Render(prefix + name)
