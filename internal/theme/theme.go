@@ -59,8 +59,14 @@ const (
 	KeyMenuItem      = "menuItem"
 	KeyBorderDefault = "borderDefault"
 	KeyBorderActive  = "borderActive"
-	KeyEmote         = "emote"
-	KeyCodeSnippet   = "codeSnippet"
+	KeyEmote              = "emote"
+	KeyCodeSnippet        = "codeSnippet"
+	KeySelectionBg        = "selectionBg"
+	KeyChannelName        = "channelName"
+	KeyFriendOffline   = "friendOffline"
+	KeyFriendOnline    = "friendOnline"
+	KeyUserAway        = "userAway"
+	KeySelectedChannel = "selectedChannel"
 )
 
 // AllKeys is the canonical ordered list of theme color keys.
@@ -69,7 +75,35 @@ var AllKeys = []string{
 	KeyMessageText, KeyInfoText, KeyDayLabel, KeyTimestamp,
 	KeyBackground, KeyPageHeader, KeyGroupHeader, KeyStatusMessage,
 	KeyFileButton, KeyReplyLabel, KeySelection, KeyMenuItem,
-	KeyBorderDefault, KeyBorderActive, KeyEmote, KeyCodeSnippet,
+	KeyBorderDefault, KeyBorderActive, KeyEmote, KeyCodeSnippet, KeySelectionBg,
+	KeyChannelName, KeyFriendOffline, KeyFriendOnline, KeyUserAway,
+	KeySelectedChannel,
+}
+
+// KeyGroup describes a logical group of theme color keys for the editor UI.
+type KeyGroup struct {
+	Label string
+	Keys  []string
+}
+
+// AllKeyGroups returns AllKeys organized into logical groups for display
+// in the theme editor. The flat order within each group matches AllKeys.
+var AllKeyGroups = []KeyGroup{
+	{Label: "Core Palette", Keys: []string{
+		KeyPrimary, KeySecondary, KeyAccent, KeyError, KeyMuted, KeyHighlight,
+	}},
+	{Label: "Messages", Keys: []string{
+		KeyMessageText, KeyInfoText, KeyDayLabel, KeyTimestamp, KeyStatusMessage,
+		KeyReplyLabel, KeyEmote, KeyCodeSnippet,
+	}},
+	{Label: "Sidebar", Keys: []string{
+		KeyChannelName, KeySelectedChannel, KeyGroupHeader, KeyFriendOnline,
+		KeyFriendOffline, KeyUserAway,
+	}},
+	{Label: "Chrome", Keys: []string{
+		KeyBackground, KeyPageHeader, KeyFileButton, KeySelection, KeySelectionBg,
+		KeyMenuItem, KeyBorderDefault, KeyBorderActive,
+	}},
 }
 
 // KeyDescription returns a short description of a theme color key.
@@ -109,6 +143,8 @@ func KeyDescription(key string) string {
 		return "'X replies' labels"
 	case KeySelection:
 		return "Selected item highlight"
+	case KeySelectionBg:
+		return "Background for selected items (messages, files, reactions)"
 	case KeyMenuItem:
 		return "Unselected menu / list item text"
 	case KeyBorderDefault:
@@ -119,6 +155,16 @@ func KeyDescription(key string) string {
 		return "Emote action text color"
 	case KeyCodeSnippet:
 		return "Code snippet text (inline `code` and ```fenced blocks```)"
+	case KeyChannelName:
+		return "Slack channel names in sidebar"
+	case KeyFriendOffline:
+		return "Offline friend names in sidebar"
+	case KeyFriendOnline:
+		return "Online friend names in sidebar"
+	case KeyUserAway:
+		return "Away/inactive user name color"
+	case KeySelectedChannel:
+		return "Active/selected channel name in sidebar"
 	}
 	return ""
 }

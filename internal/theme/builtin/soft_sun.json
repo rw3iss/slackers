@@ -22,6 +22,11 @@
     "menuItem": "#2b2316",
     "borderDefault": "#d4c79e",
     "borderActive": "#c0540d",
-    "emote": "#7e22ce"
+    "emote": "#7e22ce",
+    "channelName": "236",
+    "friendOffline": "245",
+    "friendOnline": "28",
+    "userAway": "130",
+    "selectedChannel": "0"
   }
 }

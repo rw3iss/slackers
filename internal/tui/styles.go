@@ -64,8 +64,20 @@ var (
 	ColorBorderActiveBg  lipgloss.Color
 	ColorEmote           lipgloss.Color
 	ColorEmoteBg         lipgloss.Color
-	ColorCodeSnippet     lipgloss.Color
-	ColorCodeSnippetBg   lipgloss.Color
+	ColorCodeSnippet       lipgloss.Color
+	ColorCodeSnippetBg     lipgloss.Color
+	ColorItemSelBg         lipgloss.Color // user-configurable selection background
+	ColorItemSelBgBg       lipgloss.Color
+	ColorChannelName       lipgloss.Color
+	ColorChannelNameBg     lipgloss.Color
+	ColorFriendOffline     lipgloss.Color
+	ColorFriendOfflineBg   lipgloss.Color
+	ColorFriendOnline      lipgloss.Color
+	ColorFriendOnlineBg    lipgloss.Color
+	ColorUserAway          lipgloss.Color
+	ColorUserAwayBg        lipgloss.Color
+	ColorSelectedChannel   lipgloss.Color
+	ColorSelectedChannelBg lipgloss.Color
 
 	// Shared widget colors — centralised to eliminate inline
 	// magic 256-color indices scattered across overlays. Refreshed
@@ -241,6 +253,13 @@ func ApplyTheme(t theme.Theme) {
 	ColorDayLabel, ColorDayLabelBg = applyKey(t, theme.KeyDayLabel)
 	ColorTimestamp, ColorTimestampBg = applyKey(t, theme.KeyTimestamp)
 	ColorBackground, ColorBackgroundBg = applyKey(t, theme.KeyBackground)
+	// The "background" key is special: a bare value like "236" should be
+	// treated as a background color, not foreground. If the user set a
+	// value in the fg slot but left bg empty, promote it to bg.
+	if ColorBackgroundBg == "" && ColorBackground != "" {
+		ColorBackgroundBg = ColorBackground
+		ColorBackground = ""
+	}
 	ColorPageHeader, ColorPageHeaderBg = applyKey(t, theme.KeyPageHeader)
 	ColorGroupHeader, ColorGroupHeaderBg = applyKey(t, theme.KeyGroupHeader)
 	ColorStatusMessage, ColorStatusMessageBg = applyKey(t, theme.KeyStatusMessage)
@@ -252,6 +271,12 @@ func ApplyTheme(t theme.Theme) {
 	ColorBorderActive, ColorBorderActiveBg = applyKey(t, theme.KeyBorderActive)
 	ColorEmote, ColorEmoteBg = applyKey(t, theme.KeyEmote)
 	ColorCodeSnippet, ColorCodeSnippetBg = applyKey(t, theme.KeyCodeSnippet)
+	ColorItemSelBg, ColorItemSelBgBg = applyKey(t, theme.KeySelectionBg)
+	ColorChannelName, ColorChannelNameBg = applyKey(t, theme.KeyChannelName)
+	ColorFriendOffline, ColorFriendOfflineBg = applyKey(t, theme.KeyFriendOffline)
+	ColorFriendOnline, ColorFriendOnlineBg = applyKey(t, theme.KeyFriendOnline)
+	ColorUserAway, ColorUserAwayBg = applyKey(t, theme.KeyUserAway)
+	ColorSelectedChannel, ColorSelectedChannelBg = applyKey(t, theme.KeySelectedChannel)
 
 	// Shared widget colors. These are not yet theme keys —
 	// they're fixed 256-color indices chosen to read well on
@@ -277,6 +302,39 @@ func ApplyTheme(t theme.Theme) {
 		ColorSubtleBgAlt = lipgloss.Color("253")  // a bit more contrast
 		ColorSubtleBgHover = lipgloss.Color("250") // hover/selected emphasis
 	}
+	// If the user configured a selectionBg, use it (the fg slot IS the bg
+	// color, same convention as the "background" key). Promote fg→bg like
+	// the background key does.
+	if ColorItemSelBgBg == "" && ColorItemSelBg != "" {
+		ColorItemSelBgBg = ColorItemSelBg
+		ColorItemSelBg = ""
+	}
+	// Override the computed subtle backgrounds when the user set selectionBg.
+	if ColorItemSelBgBg != "" {
+		ColorSubtleBgAlt = ColorItemSelBgBg
+		// Derive subtle and hover from the user's choice: ±1 shade.
+		if idx, err := strconv.Atoi(string(ColorItemSelBgBg)); err == nil {
+			lo := idx - 1
+			if lo < 0 {
+				lo = 0
+			}
+			hi := idx + 1
+			if hi > 255 {
+				hi = 255
+			}
+			if IsDarkTheme {
+				ColorSubtleBg = lipgloss.Color(strconv.Itoa(lo))
+				ColorSubtleBgHover = lipgloss.Color(strconv.Itoa(hi))
+			} else {
+				ColorSubtleBg = lipgloss.Color(strconv.Itoa(hi))
+				ColorSubtleBgHover = lipgloss.Color(strconv.Itoa(lo))
+			}
+		} else {
+			ColorSubtleBg = ColorItemSelBgBg
+			ColorSubtleBgHover = ColorItemSelBgBg
+		}
+	}
+
 	// Foreground for inverted elements (pill selected, code selected).
 	// Must contrast against ColorAccent background.
 	if IsDarkTheme {
@@ -354,7 +412,7 @@ func rebuildDerivedStyles() {
 	MessageFileSelectedStyle = lipgloss.NewStyle().
 		Foreground(ColorFileButton).
 		Bold(true).
-		Background(ColorSubtleBg)
+		Background(ColorSubtleBgAlt)
 	MessageFileUploadingStyle = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 	MessageThreadRuleStyle = lipgloss.NewStyle().Foreground(ColorPrimary)
 	MessageReplyLabelStyle = lipgloss.NewStyle().Foreground(ColorReplyLabel).Italic(true)
@@ -412,10 +470,10 @@ func rebuildDerivedStyles() {
 
 	// CodeSnippetSelectedStyle is the highlighted form when the
 	// user has arrow-navigated the select-mode cursor onto a
-	// snippet. Inverts fg/bg.
+	// snippet. Uses the snippet fg + subtle selection background.
 	CodeSnippetSelectedStyle = lipgloss.NewStyle().
-		Foreground(ColorInvertedFg).
-		Background(csFg).
+		Foreground(csFg).
+		Background(ColorSubtleBgAlt).
 		Bold(true)
 
 	// Emoji picker styles.

@@ -21,6 +21,11 @@
     "selection": "24",
     "borderDefault": "246",
     "borderActive": "24",
-    "emote": "55"
+    "emote": "55",
+    "channelName": "236",
+    "friendOffline": "245",
+    "friendOnline": "28",
+    "userAway": "130",
+    "selectedChannel": "0"
   }
 }

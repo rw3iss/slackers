@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -417,17 +418,31 @@ func (m ThemePickerModel) View() string {
 // Theme Editor
 // =====================================================================
 
+// themeEditorLine is a single rendered line in the theme editor's key list.
+type themeEditorLine struct {
+	text      string
+	itemIndex int // -1 for group headers / spacing
+}
+
 // ThemeEditorModel lets the user edit one theme's properties.
 type ThemeEditorModel struct {
 	original      theme.Theme // baseline for cancel-revert
 	current       theme.Theme // working copy (with edits)
 	width, height int
-	selected      int // 0 = name field, 1..len(AllKeys) = color keys
+	selected      int // 0 = name field, 1..N = color keys (within visible list)
 	editingName   bool
 	nameInput     textinput.Model
-	confirmCancel bool
-	dirty         bool
-	message       string
+	guard         DirtyGuard
+	status        TimedMessage
+	statusTTL     time.Duration // notification timeout from config
+
+	// Search / filter.
+	filtering    bool
+	filter       textinput.Model
+	filteredKeys []string // nil = show all (grouped); non-nil = filtered flat list
+
+	// Scroll state.
+	scrollOffset int
 
 	// Active picker preview state. While the color picker is open, the
 	// editor records the key being edited and its original value so that
@@ -437,7 +452,8 @@ type ThemeEditorModel struct {
 }
 
 // NewThemeEditor constructs an editor for a copy of the given theme.
-func NewThemeEditor(t theme.Theme) ThemeEditorModel {
+// statusTTL controls how long transient messages (e.g. "Saved") display.
+func NewThemeEditor(t theme.Theme, statusTTL time.Duration) ThemeEditorModel {
 	working := theme.Theme{
 		Name:    t.Name,
 		Mode:    t.Mode,
@@ -448,10 +464,22 @@ func NewThemeEditor(t theme.Theme) ThemeEditorModel {
 	ti := textinput.New()
 	ti.CharLimit = 48
 	ti.SetValue(working.Name)
+
+	fi := textinput.New()
+	fi.Placeholder = "Filter colors..."
+	fi.Prompt = "🔍 "
+	fi.CharLimit = 32
+
+	if statusTTL <= 0 {
+		statusTTL = 3 * time.Second
+	}
+
 	return ThemeEditorModel{
 		original:  t,
 		current:   working,
 		nameInput: ti,
+		filter:    fi,
+		statusTTL: statusTTL,
 	}
 }
 
@@ -468,7 +496,7 @@ func (m *ThemeEditorModel) SetColor(key, value string) {
 		m.current.Colors = map[string]string{}
 	}
 	m.current.Colors[key] = value
-	m.dirty = true
+	m.guard.MarkDirty()
 	ApplyTheme(m.current)
 }
 
@@ -500,7 +528,7 @@ func (m *ThemeEditorModel) EndPreview(commit bool) {
 		return
 	}
 	if commit {
-		m.dirty = true
+		m.guard.MarkDirty()
 	} else {
 		if m.current.Colors == nil {
 			m.current.Colors = map[string]string{}
@@ -517,19 +545,66 @@ func (m *ThemeEditorModel) PreviewOriginal() string {
 	return m.previewOriginal
 }
 
+// editorItemCount returns the total navigable items (name + visible keys + export).
+func (m ThemeEditorModel) editorItemCount() int {
+	return 1 + len(m.visibleKeys()) + 1 // name + keys + export
+}
+
+// visibleKeys returns the keys currently visible (filtered or all).
+func (m ThemeEditorModel) visibleKeys() []string {
+	if m.filteredKeys != nil {
+		return m.filteredKeys
+	}
+	// Return grouped order.
+	var keys []string
+	for _, g := range theme.AllKeyGroups {
+		keys = append(keys, g.Keys...)
+	}
+	return keys
+}
+
+// rebuildFilteredKeys updates the filtered key list based on filter text.
+func (m *ThemeEditorModel) rebuildFilteredKeys() {
+	q := strings.TrimSpace(strings.ToLower(m.filter.Value()))
+	if q == "" {
+		m.filteredKeys = nil
+		return
+	}
+	m.filteredKeys = nil
+	for _, g := range theme.AllKeyGroups {
+		for _, key := range g.Keys {
+			desc := strings.ToLower(theme.KeyDescription(key))
+			if strings.Contains(strings.ToLower(key), q) || strings.Contains(desc, q) {
+				m.filteredKeys = append(m.filteredKeys, key)
+			}
+		}
+	}
+	// Reset selection to first key match (skip name row).
+	if len(m.filteredKeys) > 0 {
+		m.selected = 1
+	}
+	m.scrollOffset = 0
+}
+
 // Update handles editor input.
 func (m ThemeEditorModel) Update(msg tea.Msg) (ThemeEditorModel, tea.Cmd) {
+	// Handle timed message clear.
+	if clearMsg, ok := msg.(TimedMessageClearMsg); ok {
+		m.status.HandleClear(clearMsg.ID)
+		return m, nil
+	}
+
 	if m.editingName {
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
 			switch keyMsg.String() {
 			case "enter":
 				newName := strings.TrimSpace(m.nameInput.Value())
 				if newName == "" {
-					m.message = "Name cannot be empty"
+					m.status.SetImmediate("Name cannot be empty")
 				} else {
 					m.current.Name = newName
-					m.dirty = true
-					m.message = ""
+					m.guard.MarkDirty()
+					m.status.Clear()
 				}
 				m.editingName = false
 			case "esc":
@@ -544,39 +619,101 @@ func (m ThemeEditorModel) Update(msg tea.Msg) (ThemeEditorModel, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.confirmCancel {
+	// Dirty guard prompt mode — only y/n/esc pass through.
+	if m.guard.IsPrompting() {
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
-			switch strings.ToLower(keyMsg.String()) {
-			case "y", "enter":
+			result := m.guard.HandlePrompt(keyMsg.String())
+			switch result {
+			case PromptConfirm:
 				ApplyTheme(m.original)
 				return m, func() tea.Msg { return ThemeEditorCloseMsg{} }
+			case PromptCancel:
+				m.status.Clear()
+				return m, nil
 			default:
-				m.confirmCancel = false
-				m.message = ""
+				return m, nil
 			}
 		}
 		return m, nil
 	}
 
+	// Filter input mode.
+	if m.filtering {
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			switch keyMsg.String() {
+			case "esc":
+				if m.filter.Value() != "" {
+					m.filter.SetValue("")
+					m.rebuildFilteredKeys()
+				} else {
+					m.filtering = false
+					m.filter.Blur()
+				}
+				return m, nil
+			case "down", "enter":
+				m.filtering = false
+				m.filter.Blur()
+				return m, nil
+			case "up":
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.filter, cmd = m.filter.Update(msg)
+			m.rebuildFilteredKeys()
+			return m, cmd
+		}
+		return m, nil
+	}
+
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		maxIdx := m.editorItemCount() - 1
 		switch keyMsg.String() {
 		case "esc":
-			if m.dirty {
-				m.confirmCancel = true
-				m.message = "Discard changes? (y/N)"
+			if m.guard.Intercept("esc") {
+				m.status.SetImmediate(m.guard.PromptText())
 				return m, nil
 			}
 			ApplyTheme(m.original)
 			return m, func() tea.Msg { return ThemeEditorCloseMsg{} }
+		case "/":
+			m.filtering = true
+			m.filter.Focus()
+			return m, nil
 		case "up", "k":
 			if m.selected > 0 {
 				m.selected--
+			} else {
+				m.selected = maxIdx // wrap to end
 			}
 		case "down", "j":
-			// 0 = name, 1..len = color keys, len+1 = Export action row.
-			if m.selected < len(theme.AllKeys)+1 {
+			if m.selected < maxIdx {
 				m.selected++
+			} else {
+				m.selected = 0 // wrap to beginning
 			}
+		case "pgup":
+			for i := 0; i < 5; i++ {
+				if m.selected > 0 {
+					m.selected--
+				} else {
+					m.selected = maxIdx
+					break
+				}
+			}
+		case "pgdown":
+			for i := 0; i < 5; i++ {
+				if m.selected < maxIdx {
+					m.selected++
+				} else {
+					m.selected = 0
+					break
+				}
+			}
+		case "home":
+			m.selected = 0
+			m.scrollOffset = 0
+		case "end":
+			m.selected = maxIdx
 		case "enter", " ":
 			if m.selected == 0 {
 				m.editingName = true
@@ -585,45 +722,43 @@ func (m ThemeEditorModel) Update(msg tea.Msg) (ThemeEditorModel, tea.Cmd) {
 				m.nameInput.CursorEnd()
 				return m, nil
 			}
+			keys := m.visibleKeys()
 			keyIdx := m.selected - 1
-			if keyIdx >= 0 && keyIdx < len(theme.AllKeys) {
-				key := theme.AllKeys[keyIdx]
+			if keyIdx >= 0 && keyIdx < len(keys) {
+				key := keys[keyIdx]
 				return m, func() tea.Msg {
 					return ThemeColorPickerOpenMsg{Key: key, Initial: m.current.Get(key)}
 				}
 			}
 			// Export action row.
-			if m.selected == len(theme.AllKeys)+1 {
+			if m.selected == len(keys)+1 {
 				path, err := exportThemeToDownloads(m.current)
 				if err != nil {
-					m.message = "Export failed: " + err.Error()
+					m.status.SetImmediate("Export failed: " + err.Error())
 				} else {
-					m.message = "Exported to " + path
+					cmd := m.status.Set("Exported to "+path, m.statusTTL)
+					return m, cmd
 				}
 				return m, nil
 			}
 		case "s":
 			// Save: persist the working theme.
 			if strings.TrimSpace(m.current.Name) == "" {
-				m.message = "Name cannot be empty"
+				m.status.SetImmediate("Name cannot be empty")
 				return m, nil
 			}
-			// Built-ins cannot overwrite themselves — saving creates a user copy
-			// under the same name, which the loader will prefer next session.
 			saved, err := saveTheme(m.current, m.original)
 			if err != nil {
-				m.message = "Save failed: " + err.Error()
+				m.status.SetImmediate("Save failed: " + err.Error())
 				return m, nil
 			}
-			// Preserve the working color map on the saved struct, then re-apply
-			// it so the rest of the app instantly reflects the persisted theme.
 			saved.Colors = m.current.Colors
 			m.current = saved
 			m.original = saved
-			m.dirty = false
-			m.message = "Saved"
+			m.guard.MarkClean()
 			ApplyTheme(m.current)
-			return m, func() tea.Msg { return ThemeEditorSavedMsg{} }
+			cmd := m.status.Set("Saved", m.statusTTL)
+			return m, tea.Batch(cmd, func() tea.Msg { return ThemeEditorSavedMsg{} })
 		}
 	}
 	return m, nil
@@ -693,12 +828,23 @@ func (m ThemeEditorModel) View() string {
 	muteStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 	selStyle := lipgloss.NewStyle().Foreground(ColorSelection).Bold(true)
 	textStyle := lipgloss.NewStyle().Foreground(ColorMenuItem)
+	headerStyle := lipgloss.NewStyle().Foreground(ColorGroupHeader).Bold(true)
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Theme Editor"))
 	b.WriteString("\n\n")
 
-	// Name field at the top.
+	// Filter bar.
+	{
+		filterPrefix := "  "
+		if m.filtering {
+			filterPrefix = "> "
+		}
+		b.WriteString(filterPrefix + m.filter.View())
+		b.WriteString("\n\n")
+	}
+
+	// Name field.
 	{
 		marker := "  "
 		if m.selected == 0 {
@@ -724,66 +870,47 @@ func (m ThemeEditorModel) View() string {
 		b.WriteString("\n\n")
 	}
 
-	const valueCellW = 14
-	for i, key := range theme.AllKeys {
-		marker := "  "
-		isSel := m.selected == i+1
-		if isSel {
-			marker = "> "
-		}
-		val := m.current.Get(key)
-		valLabel := val
-		if val == "" {
-			valLabel = "(default)"
-		}
-		// Render the value in a fixed-width centered cell using the actual
-		// fg + bg colors of the value, so the editor shows a real preview.
-		// If the value has no explicit background, fall back to the theme's
-		// general background so the cell looks the way it will in context.
-		fg, bg, bold, italic := theme.ParseColorFull(val)
-		cellStyle := lipgloss.NewStyle().
-			Width(valueCellW).
-			Align(lipgloss.Center)
-		if fg != "" {
-			cellStyle = cellStyle.Foreground(lipgloss.Color(fg))
-		}
-		bgColor := bg
-		if bgColor == "" {
-			bgColor = m.current.GetBg(theme.KeyBackground)
-		}
-		if bgColor != "" {
-			cellStyle = cellStyle.Background(lipgloss.Color(bgColor))
-		}
-		if bold {
-			cellStyle = cellStyle.Bold(true)
-		}
-		if italic {
-			cellStyle = cellStyle.Italic(true)
-		}
-		if fg == "" && bg == "" {
-			cellStyle = cellStyle.Foreground(ColorMuted)
-		}
-		// Pad the key label to a fixed width for alignment.
-		label := padRight(key, 16)
-		labelStr := marker + label
-		if isSel {
-			labelStr = selStyle.Render(labelStr)
-		} else {
-			labelStr = textStyle.Render(labelStr)
-		}
-		line := labelStr + " " + cellStyle.Render(valLabel)
-		// Description in muted text after the value.
-		desc := theme.KeyDescription(key)
-		if desc != "" {
-			line += "  " + muteStyle.Render(desc)
-		}
-		b.WriteString(line)
-		b.WriteString("\n")
+	// Compute available height for scrolling.
+	// Box: border(2) + padding(2) = 4 extra rows. Header (title+filter+name) ~ 6 lines.
+	// Footer ~ 4 lines. That leaves the rest for the key list.
+	boxH := m.height - 5
+	if boxH < 12 {
+		boxH = 12
+	}
+	// Header lines already written: title(1) + blank(1) + filter(1) + blank(1) + name(1) + blank(1) = 6
+	// Footer: blank(1) + message?(2) + hints(1) = 2-4
+	listH := boxH - 4 - 6 - 3
+	if listH < 5 {
+		listH = 5
 	}
 
-	// Export action row at the bottom.
+	// Build the list of lines for the key area.
+	var lines []themeEditorLine
+
+	keys := m.visibleKeys()
+	const valueCellW = 14
+
+	if m.filteredKeys != nil {
+		// Flat filtered list (no groups).
+		for i, key := range keys {
+			lines = append(lines, m.renderKeyLine(key, i+1, selStyle, textStyle, muteStyle, valueCellW))
+		}
+	} else {
+		// Grouped display.
+		idx := 0
+		for _, g := range theme.AllKeyGroups {
+			lines = append(lines, themeEditorLine{text: headerStyle.Render("  ── " + g.Label + " ──"), itemIndex: -1})
+			for _, key := range g.Keys {
+				lines = append(lines, m.renderKeyLine(key, idx+1, selStyle, textStyle, muteStyle, valueCellW))
+				idx++
+			}
+			lines = append(lines, themeEditorLine{text: "", itemIndex: -1}) // spacing
+		}
+	}
+
+	// Export action row.
+	exportIdx := len(keys) + 1
 	{
-		exportIdx := len(theme.AllKeys) + 1
 		marker := "  "
 		isSel := m.selected == exportIdx
 		if isSel {
@@ -796,20 +923,66 @@ func (m ThemeEditorModel) View() string {
 		} else {
 			labelStr = textStyle.Render(labelStr)
 		}
-		hint := muteStyle.Render("  Save this theme to ~/Downloads as a shareable JSON")
-		b.WriteString("\n" + labelStr + hint)
+		hint := muteStyle.Render("  Save theme to ~/Downloads as shareable JSON")
+		lines = append(lines, themeEditorLine{text: labelStr + hint, itemIndex: exportIdx})
+	}
+
+	// Determine which line corresponds to the selected item and scroll.
+	selLineIdx := 0
+	for i, l := range lines {
+		if l.itemIndex == m.selected {
+			selLineIdx = i
+			break
+		}
+	}
+	// Adjust scroll offset to keep selected visible.
+	if selLineIdx < m.scrollOffset {
+		m.scrollOffset = selLineIdx
+	}
+	if selLineIdx >= m.scrollOffset+listH {
+		m.scrollOffset = selLineIdx - listH + 1
+	}
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
+
+	// Render the visible window.
+	end := m.scrollOffset + listH
+	if end > len(lines) {
+		end = len(lines)
+	}
+	for i := m.scrollOffset; i < end; i++ {
+		b.WriteString(lines[i].text)
 		b.WriteString("\n")
+	}
+	// Scroll indicator.
+	if len(lines) > listH {
+		pos := ""
+		if m.scrollOffset > 0 {
+			pos += "↑"
+		}
+		if end < len(lines) {
+			pos += "↓"
+		}
+		if pos != "" {
+			b.WriteString(muteStyle.Render("  " + pos + " scroll"))
+			b.WriteString("\n")
+		}
 	}
 
 	b.WriteString("\n")
-	if m.message != "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.message))
+	if m.status.Text() != "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.status.Text()))
 		b.WriteString("\n\n")
 	}
 	if m.editingName {
 		b.WriteString(dimStyle.Render("  Type name" + HintSep + "Enter: accept" + HintSep + FooterHintCancel))
+	} else if m.guard.IsPrompting() {
+		b.WriteString(dimStyle.Render("  y: discard & leave" + HintSep + "n/Esc: stay"))
+	} else if m.filtering {
+		b.WriteString(dimStyle.Render("  Type to filter" + HintSep + "Enter/↓: navigate" + HintSep + FooterHintCancel))
 	} else {
-		b.WriteString(dimStyle.Render("  ↑/↓: navigate" + HintSep + "Enter: edit" + HintSep + "s: save" + HintSep + FooterHintBack))
+		b.WriteString(dimStyle.Render("  ↑/↓: navigate" + HintSep + "/: filter" + HintSep + "Enter: edit" + HintSep + "s: save" + HintSep + FooterHintBack))
 	}
 
 	box := lipgloss.NewStyle().
@@ -818,6 +991,56 @@ func (m ThemeEditorModel) View() string {
 		Padding(1, 3).
 		Render(b.String())
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// renderKeyLine builds a single key row for the editor list.
+func (m ThemeEditorModel) renderKeyLine(key string, itemIdx int, selStyle, textStyle, muteStyle lipgloss.Style, valueCellW int) themeEditorLine {
+	marker := "  "
+	isSel := m.selected == itemIdx
+	if isSel {
+		marker = "> "
+	}
+	val := m.current.Get(key)
+	valLabel := val
+	if val == "" {
+		valLabel = "(default)"
+	}
+	fg, bg, bold, italic := theme.ParseColorFull(val)
+	cellStyle := lipgloss.NewStyle().
+		Width(valueCellW).
+		Align(lipgloss.Center)
+	if fg != "" {
+		cellStyle = cellStyle.Foreground(lipgloss.Color(fg))
+	}
+	bgColor := bg
+	if bgColor == "" {
+		bgColor = m.current.GetBg(theme.KeyBackground)
+	}
+	if bgColor != "" {
+		cellStyle = cellStyle.Background(lipgloss.Color(bgColor))
+	}
+	if bold {
+		cellStyle = cellStyle.Bold(true)
+	}
+	if italic {
+		cellStyle = cellStyle.Italic(true)
+	}
+	if fg == "" && bg == "" {
+		cellStyle = cellStyle.Foreground(lipgloss.Color("252"))
+	}
+	label := padRight(key, 16)
+	labelStr := marker + label
+	if isSel {
+		labelStr = selStyle.Render(labelStr)
+	} else {
+		labelStr = textStyle.Render(labelStr)
+	}
+	line := labelStr + " " + cellStyle.Render(valLabel)
+	desc := theme.KeyDescription(key)
+	if desc != "" {
+		line += "  " + muteStyle.Render(desc)
+	}
+	return themeEditorLine{text: line, itemIndex: itemIdx}
 }
 
 // =====================================================================

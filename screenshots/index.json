@@ -1,0 +1,146 @@
+{
+  "project": "slackers",
+  "generated": "2026-04-12T05:47:50.122533",
+  "screenshots": [
+    {
+      "name": "main chat",
+      "filename": "01-main-chat.png",
+      "size_bytes": 414844
+    },
+    {
+      "name": "full width",
+      "filename": "02-full-width.png",
+      "size_bytes": 339551
+    },
+    {
+      "name": "message select",
+      "filename": "03-message-select.png",
+      "size_bytes": 420215
+    },
+    {
+      "name": "input edit mode",
+      "filename": "04-input-edit-mode.png",
+      "size_bytes": 418076
+    },
+    {
+      "name": "help",
+      "filename": "05-help.png",
+      "size_bytes": 300622
+    },
+    {
+      "name": "notifications",
+      "filename": "06-notifications.png",
+      "size_bytes": 62035
+    },
+    {
+      "name": "settings",
+      "filename": "07-settings.png",
+      "size_bytes": 221953
+    },
+    {
+      "name": "shortcuts editor",
+      "filename": "08-shortcuts-editor.png",
+      "size_bytes": 327197
+    },
+    {
+      "name": "theme picker",
+      "filename": "09-theme-picker.png",
+      "size_bytes": 128007
+    },
+    {
+      "name": "theme editor",
+      "filename": "10-theme-editor.png",
+      "size_bytes": 277716
+    },
+    {
+      "name": "theme color picker",
+      "filename": "11-theme-color-picker.png",
+      "size_bytes": 231732
+    },
+    {
+      "name": "channel search",
+      "filename": "12-channel-search.png",
+      "size_bytes": 215356
+    },
+    {
+      "name": "message search",
+      "filename": "13-message-search.png",
+      "size_bytes": 82823
+    },
+    {
+      "name": "command list",
+      "filename": "14-command-list.png",
+      "size_bytes": 204193
+    },
+    {
+      "name": "hidden channels",
+      "filename": "15-hidden-channels.png",
+      "size_bytes": 202951
+    },
+    {
+      "name": "friend request",
+      "filename": "16-friend-request.png",
+      "size_bytes": 71677
+    },
+    {
+      "name": "away status",
+      "filename": "17-away-status.png",
+      "size_bytes": 68796
+    },
+    {
+      "name": "file browser",
+      "filename": "18-file-browser.png",
+      "size_bytes": 228267
+    },
+    {
+      "name": "files list",
+      "filename": "19-files-list.png",
+      "size_bytes": 268666
+    },
+    {
+      "name": "downloads",
+      "filename": "20-downloads.png",
+      "size_bytes": 73462
+    },
+    {
+      "name": "message options",
+      "filename": "21-message-options.png",
+      "size_bytes": 417606
+    },
+    {
+      "name": "emoji picker",
+      "filename": "22-emoji-picker.png",
+      "size_bytes": 95724
+    },
+    {
+      "name": "sidebar options",
+      "filename": "23-sidebar-options.png",
+      "size_bytes": 414844
+    },
+    {
+      "name": "rename group",
+      "filename": "24-rename-group.png",
+      "size_bytes": 414828
+    },
+    {
+      "name": "game snake",
+      "filename": "25-game-snake.png",
+      "size_bytes": 383521
+    },
+    {
+      "name": "game tetris",
+      "filename": "26-game-tetris.png",
+      "size_bytes": 373245
+    },
+    {
+      "name": "about",
+      "filename": "27-about.png",
+      "size_bytes": 84662
+    },
+    {
+      "name": "whitelist",
+      "filename": "28-whitelist.png",
+      "size_bytes": 228746
+    }
+  ]
+}

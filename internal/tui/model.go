@@ -3464,7 +3464,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.TeamID != "" {
 			ws = m.workspaces[msg.TeamID]
 		}
-		m.workspaceEdit = NewWorkspaceEditModel(ws)
+		m.workspaceEdit = NewWorkspaceEditModel(ws, m.cfg.ConfigDir())
 		m.workspaceEdit.SetSize(m.width, m.height)
 		m.overlay = overlayWorkspaceEdit
 		return m, nil
@@ -3474,6 +3474,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Refresh the workspaces list.
 		m.workspacesList = NewWorkspacesModel(m.workspaces, m.activeWsID)
 		m.workspacesList.SetSize(m.width, m.height)
+		return m, nil
+
+	case WorkspaceEditSavedMsg:
+		// Reload the saved workspace from disk and add/update it in the map.
+		ws, err := workspace.Load(m.cfg.ConfigDir(), msg.TeamID)
+		if err == nil {
+			m.workspaces[msg.TeamID] = ws
+		}
 		return m, nil
 
 	case WorkspaceRemovedMsg:

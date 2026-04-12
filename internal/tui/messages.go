@@ -1133,65 +1133,7 @@ func (m *MessageViewModel) rewriteFriendCards(line string, lineIdx int) string {
 	return out
 }
 
-// rewriteCodeSnippets walks the given rendered body line, finds
-// every inline `...` code span, replaces each with a styled
-// italic span, and records the hit in codeSnippetHits so select
-// mode can sub-cursor onto it.
-//
-// This is called per-line from renderMessageList after
-// rewriteFriendCards, so it only sees body lines (not headers,
-// not reactions, not file rows). The per-message hit counter
-// (renderingSnippetCount, reset at the top of each parent
-// message in renderMessageList) is used to match each
-// substitution against the select-mode cursor's localIdx.
-//
-// Fenced ```...``` blocks are deliberately NOT rewritten here —
-// they're multi-line and the chat render path wraps one body line
-// at a time, so a fenced block wouldn't survive the wrap-and-
-// rewrite pipeline. Fenced block support in chat is a follow-up;
-// the Output view already handles them via its own parser.
-func (m *MessageViewModel) rewriteCodeSnippets(line string, lineIdx int) string {
-	if !strings.Contains(line, "`") {
-		return line
-	}
-	idleStyle := CodeSnippetStyle
-	selStyle := CodeSnippetSelectedStyle
-	selKind, selIdx := m.selectedItemKind()
-	snippetSelectedInMsg := m.reactMode &&
-		m.renderingMsgIdx == m.reactIdx &&
-		selKind == ItemCodeSnippet
 
-	out := line
-	idx := 0
-	for {
-		match := inlineCodePat.FindStringIndex(out[idx:])
-		if match == nil {
-			break
-		}
-		matchStart := idx + match[0]
-		matchEnd := idx + match[1]
-		raw := out[matchStart+1 : matchEnd-1] // strip backticks
-		style := idleStyle
-		if snippetSelectedInMsg && selIdx == m.renderingSnippetCount {
-			style = selStyle
-		}
-		rendered := style.Render(raw)
-		preWidth := lipgloss.Width(out[:matchStart])
-		renderedWidth := lipgloss.Width(rendered)
-		m.codeSnippetHits = append(m.codeSnippetHits, codeSnippetHit{
-			raw:      raw,
-			msgIdx:   m.renderingMsgIdx,
-			localIdx: m.renderingSnippetCount,
-			line:     lineIdx,
-			startCol: preWidth,
-			endCol:   preWidth + renderedWidth,
-		})
-		m.renderingSnippetCount++
-		out = out[:matchStart] + rendered + out[matchEnd:]
-		idx = matchStart + len(rendered)
-	}
-	return out
-}
 
 // friendCardDisplayName returns the best short label for a friend
 // card pill. Order of preference:
@@ -1628,12 +1570,10 @@ func (m *MessageViewModel) scrollToSelectedSubItem() {
 	var targetLine int = -1
 	switch kind {
 	case ItemCodeSnippet:
-		for _, h := range m.codeSnippetHits {
-			if h.msgIdx == m.reactIdx && h.localIdx == idx {
-				targetLine = h.line
-				break
-			}
-		}
+		// Code snippet hits from styleCodeSpansPostWrap don't carry
+		// accurate line numbers (they're set before lines are appended
+		// to the main rendered output). Fall through to the parent
+		// message scroll instead.
 	case ItemReaction:
 		// reactionHits store msg message id + emoji. Walk the
 		// list and pick the Nth matching reaction on the
@@ -2823,10 +2763,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			if m.itemSpacing >= 1 {
 				lines = append(lines, "")
 			}
+			textLines = m.styleCodeSpansPostWrap(textLines)
 			for _, tl := range textLines {
 				rendered := highlightBg.Render("  " + bodyTextStyle.Render(tl))
 				rendered = m.rewriteFriendCards(rendered, len(lines))
-				rendered = m.rewriteCodeSnippets(rendered, len(lines))
 				lines = append(lines, rendered)
 			}
 			if m.itemSpacing >= 2 && len(textLines) > 0 {
@@ -2837,10 +2777,10 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			if m.itemSpacing >= 1 {
 				lines = append(lines, "")
 			}
+			textLines = m.styleCodeSpansPostWrap(textLines)
 			for _, tl := range textLines {
 				rendered := "  " + bodyTextStyle.Render(tl)
 				rendered = m.rewriteFriendCards(rendered, len(lines))
-				rendered = m.rewriteCodeSnippets(rendered, len(lines))
 				lines = append(lines, rendered)
 			}
 			if m.itemSpacing >= 2 && len(textLines) > 0 {
@@ -3072,6 +3012,21 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 		trailing--
 	}
 
+	// Pad to at least the viewport height so the empty area below
+	// the last message also gets the theme background.
+	for len(lines) < m.viewport.Height {
+		lines = append(lines, "")
+	}
+
+	// Patch every line so ANSI resets re-assert the theme background
+	// and short lines are padded to the full pane width. This prevents
+	// the terminal default background from leaking through gaps in
+	// styled content (e.g. after code snippets, on blank spacing lines).
+	contentW := m.width - 2 // border(2); padding is inside the content area
+	for i, l := range lines {
+		lines[i] = patchLineBg(l, contentW)
+	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -3080,6 +3035,22 @@ func pluralReplies(n int) string {
 		return "reply"
 	}
 	return "replies"
+}
+
+// patchLineBg replaces every ANSI full-reset (\x1b[0m) inside a rendered
+// line with reset+bg so the theme background survives through styled spans.
+// Also pads short lines with spaces to fill the pane width.
+func patchLineBg(line string, w int) string {
+	bg := bgSGR(ColorBackgroundBg)
+	if bg != "" {
+		const reset = "\x1b[0m"
+		line = strings.ReplaceAll(line, reset, reset+bg)
+	}
+	vis := lipgloss.Width(line)
+	if vis < w {
+		line += strings.Repeat(" ", w-vis)
+	}
+	return line
 }
 
 func wordWrap(text string, width int) string {
@@ -3101,24 +3072,55 @@ func wordWrap(text string, width int) string {
 		currentLen := 0
 		first := true
 		for _, word := range words {
+			wLen := len(word)
 			if first {
 				if result.Len() > 0 {
 					result.WriteString("\n")
 				}
-				result.WriteString(word)
-				currentLen = len(word)
+				// Force-break a single word wider than the line.
+				if wLen > width {
+					writeChunked(&result, word, width)
+					currentLen = wLen % width
+					if currentLen == 0 {
+						currentLen = width
+					}
+				} else {
+					result.WriteString(word)
+					currentLen = wLen
+				}
 				first = false
-			} else if currentLen+1+len(word) > width {
+			} else if currentLen+1+wLen > width {
 				result.WriteString("\n")
-				result.WriteString(word)
-				currentLen = len(word)
+				if wLen > width {
+					writeChunked(&result, word, width)
+					currentLen = wLen % width
+					if currentLen == 0 {
+						currentLen = width
+					}
+				} else {
+					result.WriteString(word)
+					currentLen = wLen
+				}
 			} else {
 				result.WriteString(" ")
 				result.WriteString(word)
-				currentLen += 1 + len(word)
+				currentLen += 1 + wLen
 			}
 		}
 	}
 
 	return result.String()
+}
+
+// writeChunked writes s into b, inserting a newline every `w` bytes
+// so no output line exceeds `w` characters.
+func writeChunked(b *strings.Builder, s string, w int) {
+	for len(s) > w {
+		b.WriteString(s[:w])
+		b.WriteString("\n")
+		s = s[w:]
+	}
+	if len(s) > 0 {
+		b.WriteString(s)
+	}
 }

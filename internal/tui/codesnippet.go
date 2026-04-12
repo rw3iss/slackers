@@ -21,8 +21,12 @@ package tui
 // activates `c` on a selected snippet.
 
 import (
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // codeFencePat matches a triple-backtick fenced block. Capture 1
@@ -33,6 +37,179 @@ var codeFencePat = regexp.MustCompile("(?s)```\\s*\\n(.*?)\\n\\s*```")
 // inlineCodePat matches a single-backtick inline code span. The
 // body may not contain newlines or other backticks.
 var inlineCodePat = regexp.MustCompile("`([^`\\n]+)`")
+
+// styleCodeSpansPostWrap applies CodeSnippetStyle to backtick-delimited
+// code spans in the already-wrapped text lines. Unlike the per-line
+// rewriteCodeSnippets, this processes all lines together so it can track
+// backtick open/close state across line boundaries — handling the case
+// where word-wrap splits a long `code span` across multiple lines.
+//
+// It also records codeSnippetHits for select-mode navigation.
+func (m *MessageViewModel) styleCodeSpansPostWrap(textLines []string) []string {
+	// Quick check: any backticks at all?
+	hasTick := false
+	for _, tl := range textLines {
+		if strings.Contains(tl, "`") {
+			hasTick = true
+			break
+		}
+	}
+	if !hasTick {
+		return textLines
+	}
+
+	style := CodeSnippetStyle
+	selStyle := CodeSnippetSelectedStyle
+	selKind, selIdx := m.selectedItemKind()
+	snippetSelectedInMsg := m.reactMode &&
+		m.renderingMsgIdx == m.reactIdx &&
+		selKind == ItemCodeSnippet
+
+	pickStyle := func() lipgloss.Style {
+		s := style
+		if snippetSelectedInMsg && selIdx == m.renderingSnippetCount {
+			s = selStyle
+		}
+		return s
+	}
+
+	// Join all lines, process as one string, then split back.
+	// This lets us handle backtick spans that cross line boundaries.
+	joined := strings.Join(textLines, "\n")
+
+	// We'll walk the string character by character, tracking backtick
+	// state. This handles ```, `, and their interactions properly.
+	result := m.applyCodeStyles(joined, pickStyle)
+
+	return strings.Split(result, "\n")
+}
+
+// codeSnippetSGR returns the ANSI SGR sequences to turn code snippet
+// styling on and off. Uses the theme's codeSnippet background if set,
+// otherwise auto-computes a subtle shift from the pane background
+// (2 shades lighter for dark themes, 2 shades darker for light).
+// Avoids \x1b[0m so the pane background is never cleared mid-line.
+func codeSnippetSGR() (on, off string) {
+	fg := string(ColorCodeSnippet)
+	if fg == "" {
+		fg = string(ColorAccent)
+	}
+	// Use the theme's codeSnippet background if explicitly set.
+	// If empty/cleared, no background is applied — the pane bg shows through.
+	bg := string(ColorCodeSnippetBg)
+	on = fgSGR(fg)
+	if bg != "" {
+		on += bgSGR(lipgloss.Color(bg))
+	}
+	// "off" restores the message text foreground and the pane background.
+	off = fgSGR(string(ColorMessageText))
+	paneBg := bgSGR(ColorBackgroundBg)
+	if paneBg != "" {
+		off += paneBg
+	} else if bg != "" {
+		off += "\x1b[49m"
+	}
+	return
+}
+
+
+// fgSGR returns the ANSI SGR to set a foreground color. Supports 256-color
+// index ("12") and truecolor hex ("#ff8800").
+func fgSGR(c string) string {
+	if c == "" {
+		return "\x1b[39m" // default fg
+	}
+	if strings.HasPrefix(c, "#") && len(c) == 7 {
+		r, _ := strconv.ParseInt(c[1:3], 16, 32)
+		g, _ := strconv.ParseInt(c[3:5], 16, 32)
+		b, _ := strconv.ParseInt(c[5:7], 16, 32)
+		return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
+	}
+	return fmt.Sprintf("\x1b[38;5;%sm", c)
+}
+
+// applyCodeStyles walks the text and applies code snippet styling to all
+// backtick-delimited spans. Uses raw ANSI fg-only codes instead of
+// lipgloss.Style.Render() to avoid emitting \x1b[0m resets that would
+// clear the pane background. Records snippet hits.
+func (m *MessageViewModel) applyCodeStyles(text string, pickStyle func() lipgloss.Style) string {
+	on, off := codeSnippetSGR()
+	_ = pickStyle // select-mode highlight still uses lipgloss for inverted style
+
+	selStyle := CodeSnippetSelectedStyle
+	selKind, selIdx := m.selectedItemKind()
+	snippetSelectedInMsg := m.reactMode &&
+		m.renderingMsgIdx == m.reactIdx &&
+		selKind == ItemCodeSnippet
+
+	var out strings.Builder
+	out.Grow(len(text) * 2)
+	i := 0
+	for i < len(text) {
+		// Check for triple backtick (fenced block).
+		if i+2 < len(text) && text[i] == '`' && text[i+1] == '`' && text[i+2] == '`' {
+			end := strings.Index(text[i+3:], "```")
+			if end == -1 {
+				out.WriteString("```")
+				i += 3
+				continue
+			}
+			inner := text[i+3 : i+3+end]
+			inner = strings.TrimSpace(inner)
+			m.codeSnippetHits = append(m.codeSnippetHits, codeSnippetHit{
+				raw:      inner,
+				msgIdx:   m.renderingMsgIdx,
+				localIdx: m.renderingSnippetCount,
+			})
+			isSel := snippetSelectedInMsg && selIdx == m.renderingSnippetCount
+			m.renderingSnippetCount++
+			for li, line := range strings.Split(inner, "\n") {
+				if li > 0 {
+					out.WriteByte('\n')
+				}
+				if isSel {
+					out.WriteString(selStyle.Render(line))
+				} else {
+					out.WriteString(on + line + off)
+				}
+			}
+			i += 3 + end + 3
+			continue
+		}
+		// Check for single backtick.
+		if text[i] == '`' {
+			end := strings.IndexByte(text[i+1:], '`')
+			if end == -1 {
+				out.WriteByte('`')
+				i++
+				continue
+			}
+			inner := text[i+1 : i+1+end]
+			m.codeSnippetHits = append(m.codeSnippetHits, codeSnippetHit{
+				raw:      inner,
+				msgIdx:   m.renderingMsgIdx,
+				localIdx: m.renderingSnippetCount,
+			})
+			isSel := snippetSelectedInMsg && selIdx == m.renderingSnippetCount
+			m.renderingSnippetCount++
+			for li, line := range strings.Split(inner, "\n") {
+				if li > 0 {
+					out.WriteByte('\n')
+				}
+				if isSel {
+					out.WriteString(selStyle.Render(line))
+				} else {
+					out.WriteString(on + line + off)
+				}
+			}
+			i += 1 + end + 1
+			continue
+		}
+		out.WriteByte(text[i])
+		i++
+	}
+	return out.String()
+}
 
 // parseCodeSnippets scans the given text for both fenced blocks
 // and inline spans and returns the raw payloads in document

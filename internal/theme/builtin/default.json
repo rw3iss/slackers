@@ -23,6 +23,12 @@
     "borderDefault": "243",
     "borderActive": "12",
     "emote": "135",
-    "codeSnippet": "214/236"
+    "codeSnippet": "214",
+    "selectionBg": "",
+    "channelName": "252",
+    "friendOffline": "240",
+    "friendOnline": "10",
+    "userAway": "214",
+    "selectedChannel": "15"
   }
 }
