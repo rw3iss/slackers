@@ -207,6 +207,48 @@ func TestChannelMetaPersistence(t *testing.T) {
 	}
 }
 
+// ── TestMigrateFromConfig ────────────────────────────────────────────────────
+
+func TestMigrateFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	src := MigrationSource{
+		BotToken:       "xoxb-old",
+		AppToken:       "xapp-old",
+		UserToken:      "xoxp-old",
+		ChannelAliases: map[string]string{"C001": "dev", "C002": "ops"},
+		HiddenChannels: []string{"C003"},
+		LastChannelID:  "C001",
+	}
+	err := MigrateFromConfig(dir, "T_OLD", "Old Corp", src)
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	ws, err := Load(dir, "T_OLD")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if ws.Config.BotToken != "xoxb-old" {
+		t.Fatalf("token: %q", ws.Config.BotToken)
+	}
+	if ws.Config.Name != "Old Corp" {
+		t.Fatalf("name: %q", ws.Config.Name)
+	}
+	if ws.ChannelMeta["C001"].Alias != "dev" {
+		t.Fatalf("alias: %q", ws.ChannelMeta["C001"].Alias)
+	}
+	if !ws.ChannelMeta["C003"].Hidden {
+		t.Fatal("C003 should be hidden")
+	}
+	if ws.Config.LastChannel != "C001" {
+		t.Fatalf("last channel: %q", ws.Config.LastChannel)
+	}
+	// Running again should be a no-op (already exists).
+	err = MigrateFromConfig(dir, "T_OLD", "Old Corp", src)
+	if err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+}
+
 // ── TestLoadAllEmpty ─────────────────────────────────────────────────────────
 
 func TestLoadAllEmpty(t *testing.T) {

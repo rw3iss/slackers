@@ -163,3 +163,56 @@ func Exists(configDir, teamID string) bool {
 	_, err := os.Stat(dir)
 	return err == nil
 }
+
+// MigrationSource carries the fields extracted from the old config.json
+// that need to move into the workspace.
+type MigrationSource struct {
+	BotToken       string
+	AppToken       string
+	UserToken      string
+	ClientID       string
+	ClientSecret   string
+	ChannelAliases map[string]string
+	HiddenChannels []string
+	LastChannelID  string
+}
+
+// MigrateFromConfig creates a workspace folder from old single-workspace config data.
+// Returns nil if already migrated (workspace dir exists). Requires non-empty teamID.
+func MigrateFromConfig(configDir string, teamID, teamName string, cfg MigrationSource) error {
+	if teamID == "" {
+		return fmt.Errorf("workspace: migration requires team ID")
+	}
+	if Exists(configDir, teamID) {
+		return nil // already migrated
+	}
+	wsCfg := WorkspaceConfig{
+		TeamID:       teamID,
+		Name:         teamName,
+		BotToken:     cfg.BotToken,
+		AppToken:     cfg.AppToken,
+		UserToken:    cfg.UserToken,
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		AutoSignIn:   true,
+		LastChannel:  cfg.LastChannelID,
+	}
+	ws := &Workspace{
+		Config:      wsCfg,
+		TeamName:    teamName,
+		ChannelMeta: make(map[string]ChannelMeta),
+		Users:       make(map[string]types.User),
+		LastSeen:    make(map[string]string),
+	}
+	for chID, alias := range cfg.ChannelAliases {
+		meta := ws.ChannelMeta[chID]
+		meta.Alias = alias
+		ws.ChannelMeta[chID] = meta
+	}
+	for _, chID := range cfg.HiddenChannels {
+		meta := ws.ChannelMeta[chID]
+		meta.Hidden = true
+		ws.ChannelMeta[chID] = meta
+	}
+	return Save(configDir, ws)
+}
