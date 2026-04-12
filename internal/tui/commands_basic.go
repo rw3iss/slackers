@@ -631,6 +631,85 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 	})
 
 	register(commands.Command{
+		Name:        "invite",
+		Description: "Send an invite to join slackers (optionally with workspace or friend info)",
+		Usage:       "/invite [workspace|friend]",
+		Args: []commands.ArgSpec{
+			{Name: "type", Kind: commands.ArgString, Optional: true, Help: "workspace or friend"},
+		},
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
+			const ghLink = "https://github.com/rw3iss/slackers"
+			inviteType := ""
+			if len(ctx.Args) > 0 {
+				inviteType = strings.ToLower(ctx.Args[0])
+			}
+
+			var msgText string
+			var sections []commands.Section
+
+			switch inviteType {
+			case "workspace", "ws", "setup":
+				// Include workspace setup hash.
+				if m.cfg == nil {
+					return commands.Result{Status: commands.StatusError, StatusBar: "No config loaded"}
+				}
+				share := setup.Config{
+					ClientID:     m.cfg.ClientID,
+					ClientSecret: m.cfg.ClientSecret,
+					AppToken:     m.cfg.AppToken,
+				}
+				if share.IsEmpty() {
+					return commands.Result{Status: commands.StatusError, StatusBar: "No workspace credentials — run /setup first"}
+				}
+				hash, err := setup.Encode(share)
+				if err != nil {
+					return commands.Result{Status: commands.StatusError, StatusBar: "Encode failed: " + err.Error()}
+				}
+				teamName := "our"
+				if m.teamName != "" {
+					teamName = m.teamName
+				}
+				msgText = fmt.Sprintf("You're invited to join slackers! Download it here: %s\nThen run this command to join the %s workspace:\n`slackers setup %s`", ghLink, teamName, hash)
+
+			case "friend", "me":
+				// Include friend contact card.
+				if m.cfg == nil {
+					return commands.Result{Status: commands.StatusError, StatusBar: "No config loaded"}
+				}
+				// Build friend card from local identity.
+				myCard := "[FRIEND:me]"
+				msgText = fmt.Sprintf("You're invited to join slackers! Download it here: %s\nThen add me as a friend:\n%s", ghLink, myCard)
+
+			default:
+				// Basic invite.
+				msgText = fmt.Sprintf("You're invited to join slackers! Download it here: %s", ghLink)
+			}
+
+			// If a channel is open, send as a message.
+			if m.currentCh != nil {
+				return commands.Result{
+					Status:    commands.StatusOK,
+					StatusBar: "Invite sent",
+					Cmd: func() tea.Msg {
+						return InputSendMsg{Text: msgText}
+					},
+				}
+			}
+
+			// No channel — show in output view.
+			sections = []commands.Section{
+				{Text: msgText, Selectable: true},
+			}
+			return commands.Result{
+				Status:   commands.StatusOK,
+				Title:    "Invite",
+				Sections: sections,
+			}
+		},
+	})
+
+	register(commands.Command{
 		Name:        "downloads",
 		Aliases:     []string{"dl"},
 		Description: "Open the downloads manager",
