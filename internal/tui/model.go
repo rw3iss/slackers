@@ -510,7 +510,26 @@ type Model struct {
 }
 
 // NewModel creates a new root TUI model.
-func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, cfg *config.Config, version string, friendStore *friends.FriendStore, friendHistory *friends.ChatHistoryStore) Model {
+func NewModel(wsList []*workspace.Workspace, cfg *config.Config, version string, friendStore *friends.FriendStore, friendHistory *friends.ChatHistoryStore) Model {
+	// Build workspace map from list.
+	wsMap := make(map[string]*workspace.Workspace, len(wsList))
+	for _, ws := range wsList {
+		wsMap[ws.ID()] = ws
+	}
+	activeWsID := cfg.LastActiveWorkspace
+	// If LastActiveWorkspace is not in the map, pick the first one.
+	if activeWsID != "" {
+		if _, ok := wsMap[activeWsID]; !ok {
+			activeWsID = ""
+		}
+	}
+	if activeWsID == "" && len(wsList) > 0 {
+		activeWsID = wsList[0].ID()
+	}
+
+	// Legacy compatibility: nil services (workspace-based flow manages them).
+	var slackSvc slackpkg.SlackService
+	var socketSvc slackpkg.SocketService
 	// Apply the user's selected theme (if any) before any styles are read.
 	if cfg.Theme != "" {
 		if t, ok := theme.FindByName(cfg.Theme); ok {
@@ -848,6 +867,8 @@ func NewModel(slackSvc slackpkg.SlackService, socketSvc slackpkg.SocketService, 
 		slackSvc:   slackSvc,
 		socketSvc:  socketSvc,
 		eventChan:  make(chan slackpkg.SocketEvent, 100),
+		workspaces: wsMap,
+		activeWsID: activeWsID,
 		cmdSuggest: NewCmdSuggest(),
 	}
 	// Create the download manager.
@@ -910,19 +931,11 @@ func (m Model) Init() tea.Cmd {
 		checkUpdateCmd(m.version),
 		loadFriendsCmd(m.friendStore, m.p2pNode),
 	}
-	// Workspace commands — only if Slack services are configured.
-	if m.slackSvc != nil {
-		cmds = append(cmds,
-			loadUsersCmd(m.slackSvc),
-			pollTickCmd(m.cfg.PollInterval),
-			bgPollTickCmd(m.cfg.PollIntervalBg),
-		)
-	}
-	if m.socketSvc != nil {
-		cmds = append(cmds,
-			connectSocketCmd(m.socketSvc, m.eventChan),
-			waitForSocketEvent(m.eventChan),
-		)
+	// Dispatch sign-in for each workspace that should auto-connect.
+	for _, ws := range m.workspaces {
+		if ws.Config.AutoSignIn && !ws.Config.SignedOut {
+			cmds = append(cmds, signInWorkspaceCmd(ws))
+		}
 	}
 	cmds = append(cmds, activityCheckCmd(m.cfg.AwayTimeout))
 	cmds = append(cmds, notifyWatchdogCmd())
@@ -2320,6 +2333,61 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		drainWarnings(&m)
 		// Now that users are cached, load channels so DM names resolve properly.
 		return m, loadChannelsCmd(m.slackSvc)
+
+	case WorkspaceSignInMsg:
+		return m.handleWorkspaceSignIn(msg)
+	case WorkspaceSignOutMsg:
+		return m.handleWorkspaceSignOut(msg)
+	case WorkspaceSwitchMsg:
+		return m.handleWorkspaceSwitch(msg)
+	case WorkspaceUsersLoadedMsg:
+		if ws := m.workspaces[msg.TeamID]; ws != nil {
+			ws.Users = msg.Users
+			if msg.TeamID == m.activeWsID {
+				m.users = msg.Users
+				userMap := make(map[string]string, len(msg.Users))
+				for id, u := range msg.Users {
+					name := u.DisplayName
+					if name == "" {
+						name = u.RealName
+					}
+					userMap[id] = name
+				}
+				m.messages.SetUsers(userMap)
+				if ws.MyUserID != "" {
+					m.myUserID = ws.MyUserID
+				}
+				m.messages.SetLocalIdentity(m.myUserID, m.cfg.SlackerID)
+			}
+		}
+		return m, nil
+	case WorkspaceChannelsLoadedMsg:
+		if ws := m.workspaces[msg.TeamID]; ws != nil {
+			ws.Channels = msg.Channels
+			if msg.TeamID == m.activeWsID {
+				m.rebuildSidebarForWorkspace(ws)
+			}
+		}
+		return m, nil
+	case WorkspaceSlackEventMsg:
+		ws := m.workspaces[msg.TeamID]
+		if ws == nil || !ws.SignedIn {
+			return m, nil
+		}
+		// Re-listen for the next event.
+		return m, waitForWorkspaceEvent(ws)
+	case WorkspacePollTickMsg:
+		ws := m.workspaces[msg.TeamID]
+		if ws == nil || !ws.SignedIn {
+			return m, nil
+		}
+		return m, workspacePollTickCmd(msg.TeamID, m.cfg.PollInterval)
+	case WorkspaceBgPollTickMsg:
+		ws := m.workspaces[msg.TeamID]
+		if ws == nil || !ws.SignedIn {
+			return m, nil
+		}
+		return m, workspaceBgPollTickCmd(msg.TeamID, m.cfg.PollIntervalBg)
 
 	case MessageSentMsg:
 		drainWarnings(&m)

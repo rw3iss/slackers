@@ -24,6 +24,8 @@ import (
 	"github.com/rw3iss/slackers/internal/slack"
 	themepkg "github.com/rw3iss/slackers/internal/theme"
 	"github.com/rw3iss/slackers/internal/tui"
+	"github.com/rw3iss/slackers/internal/types"
+	"github.com/rw3iss/slackers/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -195,22 +197,72 @@ var rootCmd = &cobra.Command{
 			friendHistory.Prune(cfg.FriendHistoryDays)
 		}
 
-		// Friends-only mode: when no Slack tokens are configured we
-		// pass nil for both services so the model skips channel
-		// polling, socket connect, etc. The moment tokens get
-		// added (via 'slackers setup' or by editing the config),
-		// the next launch detects them here and Slack features
-		// turn back on automatically.
-		var slackSvc slack.SlackService
-		var socketSvc slack.SocketService
-		if cfg.BotToken != "" {
-			slackSvc = slack.NewSlackClient(cfg.BotToken, cfg.UserToken)
-		}
-		if cfg.BotToken != "" && cfg.AppToken != "" {
-			socketSvc = slack.NewSocketClient(cfg.BotToken, cfg.AppToken)
+		// Load workspaces from disk.
+		wsList, wsErr := workspace.LoadAll(cfg.ConfigDir())
+		if wsErr != nil {
+			debug.Log("workspace load error: %v", wsErr)
+			wsList = []*workspace.Workspace{}
 		}
 
-		model := tui.NewModel(slackSvc, socketSvc, cfg, version, friendStore, friendHistory)
+		// Migrate from old single-workspace config if needed.
+		if cfg.NeedsMigration() && len(wsList) == 0 {
+			// Try AuthTest to get teamID for migration.
+			migrated := false
+			tmpSvc := slack.NewSlackClient(cfg.BotToken, cfg.UserToken)
+			teamName, teamID, authErr := tmpSvc.AuthTest()
+			if authErr == nil && teamID != "" {
+				migSrc := workspace.MigrationSource{
+					BotToken:       cfg.BotToken,
+					AppToken:       cfg.AppToken,
+					UserToken:      cfg.UserToken,
+					ClientID:       cfg.ClientID,
+					ClientSecret:   cfg.ClientSecret,
+					ChannelAliases: cfg.ChannelAliases,
+					HiddenChannels: cfg.HiddenChannels,
+					LastChannelID:  cfg.LastChannelID,
+				}
+				if migErr := workspace.MigrateFromConfig(cfg.ConfigDir(), teamID, teamName, migSrc); migErr != nil {
+					debug.Log("workspace migration error: %v", migErr)
+				} else {
+					cfg.LastActiveWorkspace = teamID
+					cfg.ClearWorkspaceFields()
+					_ = config.Save(cfg)
+					// Reload workspaces after migration.
+					wsList, _ = workspace.LoadAll(cfg.ConfigDir())
+					migrated = true
+					debug.Log("migrated single-workspace config to workspace %s (%s)", teamID, teamName)
+				}
+			} else {
+				debug.Log("workspace migration skipped (offline or auth failed): %v", authErr)
+			}
+
+			// If migration failed (offline), create an in-memory workspace
+			// from the old config tokens so the app still works.
+			if !migrated && cfg.BotToken != "" {
+				inMemWs := &workspace.Workspace{
+					Config: workspace.WorkspaceConfig{
+						TeamID:       "legacy",
+						Name:         "Workspace",
+						BotToken:     cfg.BotToken,
+						AppToken:     cfg.AppToken,
+						UserToken:    cfg.UserToken,
+						ClientID:     cfg.ClientID,
+						ClientSecret: cfg.ClientSecret,
+						AutoSignIn:   true,
+						LastChannel:  cfg.LastChannelID,
+					},
+					Users:       make(map[string]types.User),
+					ChannelMeta: make(map[string]workspace.ChannelMeta),
+					LastSeen:    make(map[string]string),
+				}
+				wsList = []*workspace.Workspace{inMemWs}
+				if cfg.LastActiveWorkspace == "" {
+					cfg.LastActiveWorkspace = "legacy"
+				}
+			}
+		}
+
+		model := tui.NewModel(wsList, cfg, version, friendStore, friendHistory)
 		opts := []tea.ProgramOption{tea.WithAltScreen()}
 		if cfg.MouseEnabled {
 			opts = append(opts, tea.WithMouseCellMotion())
