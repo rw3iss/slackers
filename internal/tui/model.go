@@ -3669,6 +3669,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case AudioMeterTickMsg:
+		if m.overlay == overlayAudioCall && m.audioCallModel.monitorMode && m.audioCallModel.showEffects {
+			m.audioCallModel, _ = m.audioCallModel.Update(msg)
+			return m, audioMeterTickCmd()
+		}
+		return m, nil
+
 	case WorkspaceEditOpenMsg:
 		var ws *workspace.Workspace
 		if msg.TeamID != "" {
