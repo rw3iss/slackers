@@ -44,5 +44,7 @@
   "away_status": ["alt+a"],
   "downloads": ["alt+d"],
   "open_downloads_folder": ["alt+o"],
-  "workspaces": ["alt+w"]
+  "workspaces": ["alt+w"],
+  "audio_call": ["alt+p"],
+  "audio_mute": ["alt+m"]
 }

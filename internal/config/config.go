@@ -114,6 +114,13 @@ type Config struct {
 	// Multi-workspace support.
 	LastActiveWorkspace string `json:"last_active_workspace,omitempty"`
 
+	// Audio call settings.
+	AudioBitrate      int    `json:"audio_bitrate,omitempty"`
+	AudioJitterMs     int    `json:"audio_jitter_ms,omitempty"`
+	AudioProfile      string `json:"audio_profile,omitempty"`
+	AudioInputDevice  string `json:"audio_input_device,omitempty"`
+	AudioOutputDevice string `json:"audio_output_device,omitempty"`
+
 	ConfigPath string `json:"-"`
 }
 
