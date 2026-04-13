@@ -12,6 +12,13 @@ import (
 	"github.com/gen2brain/malgo"
 )
 
+// CallStats tracks packet-level statistics for a call session.
+type CallStats struct {
+	PacketsSent     uint64
+	PacketsReceived uint64
+	PacketsLost     uint64
+}
+
 // Engine manages audio capture, encoding, decoding, and playback for a call.
 type Engine struct {
 	ctx    context.Context
@@ -31,6 +38,12 @@ type Engine struct {
 	// Metering values readable by the UI.
 	OutMeter Meter
 	InMeter  Meter
+
+	// Stats tracks packet-level call statistics.
+	Stats CallStats
+
+	// vad performs voice activity detection on outgoing audio.
+	vad *VAD
 
 	mu             sync.Mutex
 	running        bool
@@ -60,14 +73,16 @@ func NewEngine(bitrate, jitterDepthMs int) (*Engine, error) {
 		jitterFrames = 3
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Engine{
+	e := &Engine{
 		ctx:      ctx,
 		cancel:   cancel,
 		codec:    codec,
 		jitter:   NewJitterBuffer(jitterFrames),
 		outgoing: NewEffectChain(),
 		incoming: NewEffectChain(),
-	}, nil
+	}
+	e.vad = NewVAD(-40, 300) // -40dBFS threshold, 300ms hold
+	return e, nil
 }
 
 // SetStreams sets the outgoing writer and incoming reader for audio data.
@@ -233,12 +248,18 @@ func (e *Engine) processAndSendFrame(pcm []int16) {
 		return
 	}
 
+	// VAD: skip sending silent frames (but don't mute — just suppress).
+	if e.vad != nil && !e.vad.IsVoice(floats) {
+		return
+	}
+
 	header := make([]byte, 4) // 2 bytes seq + 2 bytes len
 	binary.BigEndian.PutUint16(header[0:2], e.seqOut)
 	binary.BigEndian.PutUint16(header[2:4], uint16(n))
 	e.seqOut++
 	out.Write(header)
 	out.Write(buf[:n])
+	atomic.AddUint64(&e.Stats.PacketsSent, 1)
 }
 
 // readIncomingFrames reads Opus frames from the P2P stream and pushes
@@ -270,6 +291,7 @@ func (e *Engine) readIncomingFrames() {
 			return
 		}
 		e.jitter.Push(seq, data)
+		atomic.AddUint64(&e.Stats.PacketsReceived, 1)
 	}
 }
 
@@ -286,6 +308,7 @@ func (e *Engine) onPlaybackData(outputSamples, inputSamples []byte, frameCount u
 		if frame != nil {
 			n, _ = e.codec.Decode(frame, pcm[filled:filled+FrameSize])
 		} else {
+			atomic.AddUint64(&e.Stats.PacketsLost, 1)
 			n, _ = e.codec.DecodePLC(pcm[filled:filled+FrameSize])
 		}
 		if n <= 0 {
