@@ -19,6 +19,7 @@ const (
 	SidebarActionViewContact
 	SidebarActionRemoveFriend
 	SidebarActionBrowseFiles
+	SidebarActionStartAudioCall
 )
 
 // SidebarOptionsSelectMsg signals which option the user chose from

@@ -53,6 +53,8 @@ type KeyMap struct {
 	Downloads           key.Binding
 	OpenDownloadsFolder key.Binding
 	Workspaces          key.Binding
+	AudioCall           key.Binding
+	AudioMute           key.Binding
 }
 
 // binding creates a key.Binding from a ShortcutMap action name.
@@ -116,6 +118,8 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		Downloads:           binding(sm, "downloads", "alt+d", "downloads manager"),
 		OpenDownloadsFolder: binding(sm, "open_downloads_folder", "alt+o", "browse downloads folder"),
 		Workspaces:          binding(sm, "workspaces", "alt+w", "manage workspaces"),
+		AudioCall:           binding(sm, "audio_call", "alt+p", "open active call"),
+		AudioMute:           binding(sm, "audio_mute", "alt+shift+m", "toggle mute"),
 	}
 }
 

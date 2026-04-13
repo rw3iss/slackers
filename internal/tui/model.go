@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	crand "crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -74,6 +76,8 @@ const (
 	overlayDownloads
 	overlayWorkspaces
 	overlayWorkspaceEdit
+	overlayAudioCall
+	overlayIncomingCall
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -87,6 +91,27 @@ const (
 	fbPurposeFriendsImport                           // selecting a friends list JSON
 	fbPurposeShareFolder                             // selecting a folder to share with friends
 )
+
+// CallState represents the current state of an audio call.
+type CallState int
+
+const (
+	CallStateRinging CallState = iota
+	CallStateActive
+	CallStateEnding
+)
+
+// ActiveCall holds state for an in-progress audio call with a friend.
+type ActiveCall struct {
+	CallID    string
+	PeerID    string
+	PeerName  string
+	StartTime time.Time
+	Muted     bool
+	PeerMuted bool
+	State     CallState
+	Outgoing  bool
+}
 
 // Custom message types for the TUI update loop.
 
@@ -195,6 +220,11 @@ type P2PReceivedMsg struct {
 	// Browse request sort parameters (for __browse_request__).
 	BrowseSortBy  string
 	BrowseSortDir string
+
+	// Call signaling fields (for __call_* messages).
+	CallID     string
+	CallerName string
+	CallMuted  bool
 }
 
 // SecureSessionReadyMsg signals that a secure session was established with a peer.
@@ -510,6 +540,9 @@ type Model struct {
 	// (user pressed Esc to return to chat). The game is paused
 	// and can be restored via /games or the taskbar indicator.
 	backgroundGame *GameOverlayModel
+
+	// activeCall holds state for an in-progress audio call.
+	activeCall *ActiveCall
 }
 
 // NewModel creates a new root TUI model.
@@ -770,6 +803,18 @@ func NewModel(wsList []*workspace.Workspace, cfg *config.Config, version string,
 					MsgID:     msg.MessageID,
 					ReplyToID: msg.ReplyToMsgID,
 					SentAt:    msg.Timestamp,
+				}
+			case secure.MsgTypeCallRequest,
+				secure.MsgTypeCallAccept,
+				secure.MsgTypeCallReject,
+				secure.MsgTypeCallEnd,
+				secure.MsgTypeCallMute:
+				p2pChan <- P2PReceivedMsg{
+					SenderID:   peerSlackID,
+					Text:       "__" + msg.Type + "__",
+					CallID:     msg.CallID,
+					CallerName: msg.CallerName,
+					CallMuted:  msg.CallMuted,
 				}
 			default:
 				p2pChan <- P2PReceivedMsg{SenderID: peerSlackID, Text: msg.Text}
@@ -1310,6 +1355,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.workspacesList = NewWorkspacesModel(m.workspaces, m.activeWsID)
 				m.workspacesList.SetSize(m.width, m.height)
 				m.overlay = overlayWorkspaces
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keymap.AudioCall):
+			if m.activeCall != nil {
+				m.overlay = overlayAudioCall
+			} else {
+				m.warning = "No active call"
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keymap.AudioMute):
+			if m.activeCall != nil {
+				m.activeCall.Muted = !m.activeCall.Muted
+				if m.p2pNode != nil {
+					m.p2pNode.SendCallSignal(m.activeCall.PeerID, secure.MsgTypeCallMute, m.activeCall.CallID, "", m.activeCall.Muted)
+				}
+				if m.activeCall.Muted {
+					m.warning = "Mic muted"
+				} else {
+					m.warning = "Mic unmuted"
+				}
 			}
 			return m, nil
 
@@ -3254,6 +3321,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return RemoteBrowseOpenMsg{PeerUID: friendID, PeerName: friendName}
 			}
+		case SidebarActionStartAudioCall:
+			if m.activeCall != nil {
+				m.warning = "Already in a call"
+				return m, nil
+			}
+			callID := generateCallID()
+			friendName := ""
+			if m.friendStore != nil {
+				if f := m.friendStore.Get(msg.UserID); f != nil {
+					friendName = f.Name
+				}
+			}
+			if friendName == "" {
+				friendName = msg.UserID
+			}
+			m.activeCall = &ActiveCall{
+				CallID:   callID,
+				PeerID:   msg.UserID,
+				PeerName: friendName,
+				State:    CallStateRinging,
+				Outgoing: true,
+			}
+			m.overlay = overlayAudioCall
+			if m.p2pNode != nil {
+				m.p2pNode.SendCallSignal(msg.UserID, secure.MsgTypeCallRequest, callID, m.cfg.MyName, false)
+			}
+			return m, nil
 		case SidebarActionRemoveFriend:
 			// Stage the removal behind a y/Enter confirmation
 			// prompt. The actual delete + sidebar refresh happens
@@ -4835,6 +4929,73 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Handle call signaling messages from a friend.
+		if msg.Text == "__call_request__" {
+			if m.activeCall != nil {
+				// Already in a call — auto-reject.
+				if m.p2pNode != nil {
+					m.p2pNode.SendCallSignal(msg.SenderID, secure.MsgTypeCallReject, msg.CallID, "", false)
+				}
+			} else {
+				callerName := msg.CallerName
+				if callerName == "" {
+					callerName = msg.SenderID
+				}
+				m.activeCall = &ActiveCall{
+					CallID:   msg.CallID,
+					PeerID:   msg.SenderID,
+					PeerName: callerName,
+					State:    CallStateRinging,
+					Outgoing: false,
+				}
+				m.overlay = overlayIncomingCall
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+		if msg.Text == "__call_accept__" {
+			if m.activeCall != nil && m.activeCall.CallID == msg.CallID {
+				m.activeCall.State = CallStateActive
+				m.activeCall.StartTime = time.Now()
+				m.overlay = overlayAudioCall
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+		if msg.Text == "__call_reject__" {
+			if m.activeCall != nil && m.activeCall.CallID == msg.CallID {
+				m.warning = m.activeCall.PeerName + " declined the call"
+				m.endCall()
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+		if msg.Text == "__call_end__" {
+			if m.activeCall != nil && m.activeCall.CallID == msg.CallID {
+				m.warning = m.activeCall.PeerName + " ended the call"
+				m.endCall()
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+		if msg.Text == "__call_mute__" {
+			if m.activeCall != nil && m.activeCall.CallID == msg.CallID {
+				m.activeCall.PeerMuted = msg.CallMuted
+			}
+			if m.p2pChan != nil {
+				return m, waitForP2PMsg(m.p2pChan)
+			}
+			return m, nil
+		}
+
 		// Handle plugin message from a friend.
 		if msg.Text == "__plugin__" {
 			pluginName := msg.PubKey
@@ -6297,6 +6458,21 @@ func (m *Model) expandFriendMarkers(text string) string {
 	})
 }
 
+// endCall clears the active call state and closes any call overlay.
+func (m *Model) endCall() {
+	m.activeCall = nil
+	if m.overlay == overlayAudioCall || m.overlay == overlayIncomingCall {
+		m.overlay = overlayNone
+	}
+}
+
+// generateCallID returns a random 16-hex-char call identifier.
+func generateCallID() string {
+	b := make([]byte, 8)
+	crand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 // buildSidebarOptionsItems assembles the context-menu items for a
 // right-clicked sidebar channel. Every entry gets Hide and Rename;
 // DM / Private-group entries pointing at a user who is NOT already
@@ -6320,6 +6496,9 @@ func (m *Model) buildSidebarOptionsItems(ch types.Channel) []sidebarOptionsItem 
 				})
 			}
 		}
+		items = append(items, sidebarOptionsItem{
+			label: "Start Audio Call", action: SidebarActionStartAudioCall,
+		})
 		items = append(items, sidebarOptionsItem{
 			label: "Remove Friend", action: SidebarActionRemoveFriend,
 		})
