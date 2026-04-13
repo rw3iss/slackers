@@ -65,9 +65,17 @@ const (
 	MsgTypeBrowseResponse    = "browse_response"   // response with directory listing JSON
 	MsgTypeFileRequestByPath = "file_request_path" // download a file by relative path from shared folder
 	MsgTypePlugin            = "plugin"             // plugin-to-plugin custom message
+	MsgTypeCallRequest       = "call_request"       // initiate an audio call
+	MsgTypeCallAccept        = "call_accept"        // accept an incoming call
+	MsgTypeCallReject        = "call_reject"        // reject an incoming call
+	MsgTypeCallEnd           = "call_end"           // end an active call
+	MsgTypeCallMute          = "call_mute"          // toggle mute status during a call
 
 	// Protocol for file transfers (separate from messaging).
 	P2PFileProtocol = protocol.ID("/slackers/file/1.0.0")
+
+	// Protocol for audio streams (separate from messaging and files).
+	P2PAudioProtocol = protocol.ID("/slackers/audio/1.0.0")
 )
 
 // P2PMessage is the wire format for messages sent over P2P.
@@ -123,6 +131,11 @@ type P2PMessage struct {
 	// Plugin message fields (used by MsgTypePlugin).
 	PluginName string `json:"plugin_name,omitempty"`
 	PluginData string `json:"plugin_data,omitempty"` // JSON payload
+
+	// Call signaling fields (used by call_request/accept/reject/end/mute).
+	CallID     string `json:"call_id,omitempty"`
+	CallerName string `json:"caller_name,omitempty"`
+	CallMuted  bool   `json:"call_muted,omitempty"`
 }
 
 // P2PNode manages the libp2p host and peer connections.
@@ -146,6 +159,7 @@ type P2PNode struct {
 	SharedFolderLookup func(relativePath string) (string, error)
 	peerMap            map[string]peer.ID
 	slackMap           map[peer.ID]string
+	onAudioStream      func(network.Stream)
 	sharedFiles        map[string]string // fileID -> local file path (files we've offered)
 	mu                 sync.RWMutex
 }
@@ -164,6 +178,56 @@ func (n *P2PNode) SetPeerLookup(fn func(peerIDStr string) string) {
 // flip the file's "uploading…" indicator off.
 func (n *P2PNode) SetFileServedCallback(fn func(fileID string)) {
 	n.onFileServed = fn
+}
+
+// handleAudioStream is the libp2p stream handler for incoming audio
+// connections. It delegates to the registered callback or closes the
+// stream if no handler is set.
+func (n *P2PNode) handleAudioStream(s network.Stream) {
+	n.mu.RLock()
+	handler := n.onAudioStream
+	n.mu.RUnlock()
+	if handler != nil {
+		handler(s)
+	} else {
+		s.Close()
+	}
+}
+
+// SetAudioStreamHandler registers a callback for incoming audio
+// streams. The callback takes ownership of the stream (including
+// closing it when done).
+func (n *P2PNode) SetAudioStreamHandler(h func(network.Stream)) {
+	n.mu.Lock()
+	n.onAudioStream = h
+	n.mu.Unlock()
+}
+
+// OpenAudioStream opens a new audio-protocol stream to the peer
+// identified by their Slack user ID. The caller owns the returned
+// stream and must close it when finished.
+func (n *P2PNode) OpenAudioStream(slackUserID string) (network.Stream, error) {
+	n.mu.RLock()
+	peerID, ok := n.peerMap[slackUserID]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("peer not found: %s", slackUserID)
+	}
+	return n.host.NewStream(n.ctx, peerID, P2PAudioProtocol)
+}
+
+// SendCallSignal sends a call-signaling message (request, accept,
+// reject, end, mute) to the specified peer over the regular P2P
+// messaging protocol.
+func (n *P2PNode) SendCallSignal(slackUserID string, msgType, callID, callerName string, muted bool) error {
+	msg := P2PMessage{
+		Type:       msgType,
+		CallID:     callID,
+		CallerName: callerName,
+		CallMuted:  muted,
+		Timestamp:  time.Now().Unix(),
+	}
+	return n.SendMessage(slackUserID, msg)
 }
 
 // hostKeyPath returns the on-disk location of the persisted libp2p
@@ -248,6 +312,9 @@ func NewP2PNode(port int, address string, onMessage func(string, P2PMessage)) (*
 
 	// Set stream handler for file transfers.
 	h.SetStreamHandler(P2PFileProtocol, node.handleFileRequest)
+
+	// Set stream handler for audio streams.
+	h.SetStreamHandler(P2PAudioProtocol, node.handleAudioStream)
 
 	return node, nil
 }
