@@ -1290,13 +1290,23 @@ func (m *MessageViewModel) RemovePendingMatching(text string) {
 }
 
 // EnterReactMode enters message selection mode for adding reactions.
+// EnterReactMode enters message select mode. If fromBottom is true,
+// the cursor starts at the last message (for Up arrow); if false,
+// at the first message (for Down arrow).
 func (m *MessageViewModel) EnterReactMode() bool {
+	return m.EnterReactModeAt(true)
+}
+
+func (m *MessageViewModel) EnterReactModeAt(fromBottom bool) bool {
 	view := m.viewMessages()
 	if len(view) > 0 {
-		// Exit any other selection modes first.
 		m.selectMode = false
 		m.reactMode = true
-		m.reactIdx = len(view) - 1
+		if fromBottom {
+			m.reactIdx = len(view) - 1
+		} else {
+			m.reactIdx = 0
+		}
 		m.reactionSelIdx = -1
 		m.replyIdx = -1
 		m.replyReactionSelIdx = -1
@@ -1869,9 +1879,14 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 		// Modifiers (Ctrl, Shift) and PgUp/PgDn fall through to viewport scrolling.
 		if !m.selectMode && !m.reactMode && !m.contextMode {
 			s := keyMsg.String()
-			if s == "up" || s == "down" {
-				if m.EnterReactMode() {
-					// Don't move on first entry — user sees the last message highlighted.
+			if s == "up" {
+				if m.EnterReactModeAt(true) {
+					m.scrollToReactCursor()
+					return m, nil
+				}
+			}
+			if s == "down" {
+				if m.EnterReactModeAt(false) {
 					m.scrollToReactCursor()
 					return m, nil
 				}

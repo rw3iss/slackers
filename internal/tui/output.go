@@ -201,10 +201,11 @@ func bodyToItems(body string) []outputItem {
 		return nil
 	}
 	it := outputItem{
-		text:       body,
-		selectable: false,
+		text: body,
 	}
 	it.snippets = parseSnippets(body)
+	// Make selectable if there are code snippets the user can copy.
+	it.selectable = len(it.snippets) > 0
 	return []outputItem{it}
 }
 
@@ -434,15 +435,21 @@ func (o *OutputViewModel) moveItem(delta int) {
 
 	if nextIdx >= 0 {
 		it := &o.items[nextIdx]
+		// When entering select mode for the first time (selectedItem was -1),
+		// jump directly to the item even if it's off-screen.
+		if o.selectedItem < 0 {
+			o.selectedItem = nextIdx
+			o.selectedSnippet = -1
+			o.rebuildRender()
+			o.ensureSelectionVisible()
+			return
+		}
 		// Is the next item's first row currently in the
 		// visible window? If yes → select it.
 		if it.startRow >= top && it.startRow <= bottom {
 			o.selectedItem = nextIdx
 			o.selectedSnippet = -1
 			o.rebuildRender()
-			// If the tail of the selected item runs past
-			// the bottom, nudge the viewport so the whole
-			// thing is visible.
 			o.ensureSelectionVisible()
 			return
 		}
@@ -531,11 +538,17 @@ func (o *OutputViewModel) rebuildRender() {
 			b.WriteString("\n")
 			rowCount++
 		}
-		rendered := renderItemText(it, isSel, o.selectedSnippet, dimStyle, snippetStyle, snippetSelStyle)
+		snippetCursor := -1
+		if isSel {
+			snippetCursor = o.selectedSnippet
+		}
+		rendered := renderItemText(it, isSel, snippetCursor, dimStyle, snippetStyle, snippetSelStyle)
+		firstLine := true
 		for _, line := range strings.Split(rendered, "\n") {
 			prefix := "  "
-			if isSel && it.title == "" {
+			if isSel && it.title == "" && firstLine {
 				prefix = "▶ "
+				firstLine = false
 			}
 			b.WriteString(prefix)
 			b.WriteString(line)

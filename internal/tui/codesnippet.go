@@ -58,30 +58,41 @@ func (m *MessageViewModel) styleCodeSpansPostWrap(textLines []string) []string {
 		return textLines
 	}
 
-	style := CodeSnippetStyle
-	selStyle := CodeSnippetSelectedStyle
-	selKind, selIdx := m.selectedItemKind()
-	snippetSelectedInMsg := m.reactMode &&
-		m.renderingMsgIdx == m.reactIdx &&
-		selKind == ItemCodeSnippet
-
-	pickStyle := func() lipgloss.Style {
-		s := style
-		if snippetSelectedInMsg && selIdx == m.renderingSnippetCount {
-			s = selStyle
-		}
-		return s
-	}
-
 	// Join all lines, process as one string, then split back.
 	// This lets us handle backtick spans that cross line boundaries.
 	joined := strings.Join(textLines, "\n")
 
 	// We'll walk the string character by character, tracking backtick
 	// state. This handles ```, `, and their interactions properly.
-	result := m.applyCodeStyles(joined, pickStyle)
+	result := m.applyCodeStyles(joined)
 
 	return strings.Split(result, "\n")
+}
+
+// codeSnippetSelSGR returns the ANSI SGR sequences for a SELECTED code
+// snippet (bold + snippet fg + subtle selection background). Uses raw
+// ANSI to avoid lipgloss \x1b[0m resets.
+func codeSnippetSelSGR() (on, off string) {
+	// Use the selection foreground color (ColorSelection) + bold + underline
+	// + selection background so it's clearly distinct from normal snippets.
+	fg := string(ColorSelection)
+	if fg == "" {
+		fg = string(ColorAccent)
+	}
+	bg := string(ColorSubtleBgAlt)
+	on = "\x1b[1;4m" + fgSGR(fg) // bold + underline + selection fg
+	if bg != "" {
+		on += bgSGR(lipgloss.Color(bg))
+	}
+	// "off" restores: unbold + no underline + message text fg + pane bg.
+	off = "\x1b[22;24m" + fgSGR(string(ColorMessageText))
+	paneBg := bgSGR(ColorBackgroundBg)
+	if paneBg != "" {
+		off += paneBg
+	} else if bg != "" {
+		off += "\x1b[49m"
+	}
+	return
 }
 
 // codeSnippetSGR returns the ANSI SGR sequences to turn code snippet
@@ -132,15 +143,14 @@ func fgSGR(c string) string {
 // backtick-delimited spans. Uses raw ANSI fg-only codes instead of
 // lipgloss.Style.Render() to avoid emitting \x1b[0m resets that would
 // clear the pane background. Records snippet hits.
-func (m *MessageViewModel) applyCodeStyles(text string, pickStyle func() lipgloss.Style) string {
+func (m *MessageViewModel) applyCodeStyles(text string) string {
 	on, off := codeSnippetSGR()
-	_ = pickStyle // select-mode highlight still uses lipgloss for inverted style
+	selOn, selOff := codeSnippetSelSGR()
 
-	selStyle := CodeSnippetSelectedStyle
 	selKind, selIdx := m.selectedItemKind()
-	snippetSelectedInMsg := m.reactMode &&
-		m.renderingMsgIdx == m.reactIdx &&
-		selKind == ItemCodeSnippet
+	// Only highlight snippets in the CURRENTLY SELECTED message.
+	isSelectedMsg := m.reactMode && m.renderingMsgIdx == m.reactIdx
+	snippetSelectedInMsg := isSelectedMsg && selKind == ItemCodeSnippet
 
 	var out strings.Builder
 	out.Grow(len(text) * 2)
@@ -168,7 +178,7 @@ func (m *MessageViewModel) applyCodeStyles(text string, pickStyle func() lipglos
 					out.WriteByte('\n')
 				}
 				if isSel {
-					out.WriteString(selStyle.Render(line))
+					out.WriteString(selOn + line + selOff)
 				} else {
 					out.WriteString(on + line + off)
 				}
@@ -197,7 +207,7 @@ func (m *MessageViewModel) applyCodeStyles(text string, pickStyle func() lipglos
 					out.WriteByte('\n')
 				}
 				if isSel {
-					out.WriteString(selStyle.Render(line))
+					out.WriteString(selOn + line + selOff)
 				} else {
 					out.WriteString(on + line + off)
 				}

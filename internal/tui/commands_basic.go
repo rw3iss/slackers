@@ -91,10 +91,13 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 					StatusBar: "Help topic not found: " + topic + " (try /help)",
 				}
 			}
+			// Split markdown into sections on ## headings so each
+			// section is independently selectable in the Output view.
+			sections := markdownToSections(body)
 			return commands.Result{
-				Status: commands.StatusOK,
-				Title:  "Help — " + topic,
-				Body:   body,
+				Status:   commands.StatusOK,
+				Title:    "Help — " + topic,
+				Sections: sections,
 			}
 		},
 	})
@@ -1493,4 +1496,44 @@ func (m *Model) activeWsSetupConfig() setup.Config {
 		}
 	}
 	return setup.Config{}
+}
+
+// markdownToSections splits a markdown help body into selectable
+// sections. It splits on lines starting with "## " (h2 headings).
+// Content before the first heading becomes a title-less section.
+// Sub-headings (###) are kept inline within their parent section.
+func markdownToSections(body string) []commands.Section {
+	lines := strings.Split(body, "\n")
+	var sections []commands.Section
+	var curTitle string
+	var curLines []string
+
+	flush := func() {
+		text := strings.TrimSpace(strings.Join(curLines, "\n"))
+		if text == "" && curTitle == "" {
+			return
+		}
+		sections = append(sections, commands.Section{
+			Title:      curTitle,
+			Text:       text,
+			Selectable: true,
+		})
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Skip the top-level # heading (it becomes the Output title).
+		if strings.HasPrefix(trimmed, "# ") && !strings.HasPrefix(trimmed, "## ") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "## ") {
+			flush()
+			curTitle = strings.TrimPrefix(trimmed, "## ")
+			curLines = nil
+			continue
+		}
+		curLines = append(curLines, line)
+	}
+	flush()
+	return sections
 }
