@@ -564,6 +564,26 @@ func (m *ChannelListModel) SelectedChannel() *types.Channel {
 	return row.channel
 }
 
+// SelectedRow returns the viewport-relative Y position of the currently
+// selected row (0-based from the top of the visible channel list area).
+// Returns -1 if nothing is selected.
+func (m *ChannelListModel) SelectedRow() int {
+	if m.selected < 0 {
+		return -1
+	}
+	lines := m.displayLineMap()
+	for lineIdx, rowIdx := range lines {
+		if rowIdx == m.selected {
+			viewY := lineIdx - m.scrollOff
+			if viewY >= 0 {
+				return viewY
+			}
+			return 0
+		}
+	}
+	return -1
+}
+
 // SelectByID moves the cursor to the channel with the given ID.
 // Lookup is O(1) via rowIndexByID maintained by buildRows.
 func (m *ChannelListModel) SelectByID(id string) {
@@ -850,8 +870,14 @@ func (m ChannelListModel) View() string {
 		wsHeaderLines = 1
 	}
 
-	// Apply scrolling. Reserve space for the workspace header and away footer.
-	viewHeight := m.height - 2 - wsHeaderLines - awayFooterLines
+	// Options hint takes 1 line when a channel (not header) is selected.
+	optionsHintLines := 0
+	if m.selected >= 0 && m.selected < len(m.rows) && !m.rows[m.selected].isHeader {
+		optionsHintLines = 1
+	}
+
+	// Apply scrolling. Reserve space for workspace header, away footer, and options hint.
+	viewHeight := m.height - 2 - wsHeaderLines - awayFooterLines - optionsHintLines
 	if viewHeight < 1 {
 		viewHeight = 1
 	}
@@ -876,34 +902,42 @@ func (m ChannelListModel) View() string {
 		}
 	}
 
+	// Options hint shown when focused and a channel is selected.
+	var optionsHint string
+	if optionsHintLines > 0 {
+		optionsHint = lipgloss.NewStyle().
+			Foreground(ColorMuted).
+			Italic(true).
+			Render(" Alt+O: options")
+	}
+
 	content := b.String()
-	// Append the away footer pinned at the bottom. Pad the
+	// Append footers pinned at the bottom. Pad the
 	// channel list content with exactly enough newlines so the
 	// footer's LAST line sits on the very last row inside the
 	// border — growing upward from there.
-	if awayFooterLines > 0 {
+	totalFooterLines := awayFooterLines + optionsHintLines
+	if totalFooterLines > 0 {
 		renderedLines := strings.Count(content, "\n") + 1
-		// Total rows available inside the border. The pane's
-		// lipgloss style uses Height(m.height) which includes
-		// the 2 border rows. The actual content area is
-		// m.height - 2 rows, but lipgloss adds one implicit
-		// trailing newline, so we use (m.height - 1) to push
-		// the footer flush against the bottom border.
 		totalRows := m.height - 1
-		gap := totalRows - renderedLines - awayFooterLines
+		gap := totalRows - renderedLines - totalFooterLines
 		if gap < 0 {
 			gap = 0
 		}
 		for i := 0; i < gap; i++ {
 			content += "\n"
 		}
-		awayStyle := lipgloss.NewStyle().
-			Foreground(ColorMuted).
-			Italic(true).
-			Bold(true)
-		for i, line := range awayFooterRendered {
-			content += "\n" + awayStyle.Render(" "+line)
-			_ = i
+		if awayFooterLines > 0 {
+			awayStyle := lipgloss.NewStyle().
+				Foreground(ColorMuted).
+				Italic(true).
+				Bold(true)
+			for _, line := range awayFooterRendered {
+				content += "\n" + awayStyle.Render(" "+line)
+			}
+		}
+		if optionsHint != "" {
+			content += "\n" + optionsHint
 		}
 	}
 

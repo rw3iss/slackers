@@ -23,8 +23,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/rw3iss/slackers/internal/audio"
 	"github.com/rw3iss/slackers/internal/commands"
 	"github.com/rw3iss/slackers/internal/config"
 	_ "github.com/rw3iss/slackers/internal/emotes"
@@ -794,8 +796,94 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		},
 	})
 
+	register(commands.Command{
+		Name:        "call",
+		Aliases:     []string{"audiocall", "audio"},
+		Description: "Open the active audio call, or start a call to the current friend",
+		Usage:       "/call",
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
+			// If a call is already active, open the call overlay.
+			if m.activeCall != nil {
+				return commands.Result{
+					Status: commands.StatusOK,
+					Cmd: func() tea.Msg {
+						return AudioCallOpenMsg{}
+					},
+				}
+			}
+			// No active call — try to start one with the current friend channel.
+			if m.currentCh == nil {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "No active call and no channel selected",
+				}
+			}
+			if !m.currentCh.IsFriend {
+				return commands.Result{
+					Status:    commands.StatusError,
+					StatusBar: "Audio calls are only available for friend channels",
+				}
+			}
+			// Check if friend is online.
+			if m.friendStore != nil {
+				if f := m.friendStore.Get(m.currentCh.UserID); f == nil || !f.Online {
+					return commands.Result{
+						Status:    commands.StatusError,
+						StatusBar: "Friend is offline — cannot start a call",
+					}
+				}
+			}
+			// Initiate the call.
+			return commands.Result{
+				Status: commands.StatusOK,
+				Cmd: func() tea.Msg {
+					return AudioCallStartMsg{UserID: m.currentCh.UserID}
+				},
+			}
+		},
+	})
+
+	register(commands.Command{
+		Name:        "calls",
+		Description: "View recent call history",
+		Usage:       "/calls",
+		Run: func(ctx *commands.Context) commands.Result {
+			m := ctx.Host.(*Model)
+			history := audio.LoadCallHistory(m.cfg.ConfigDir())
+			if len(history.Calls) == 0 {
+				return commands.Result{
+					Status:    commands.StatusOK,
+					StatusBar: "No call history",
+				}
+			}
+			var sections []commands.Section
+			for i := len(history.Calls) - 1; i >= 0; i-- {
+				c := history.Calls[i]
+				dur := c.Duration.Round(time.Second)
+				text := fmt.Sprintf("%s · %s · %s", c.Direction, c.PeerName, dur)
+				sections = append(sections, commands.Section{
+					Title:      c.Started.Format("Jan 2 15:04"),
+					Text:       text,
+					Selectable: false,
+				})
+			}
+			return commands.Result{
+				Status:   commands.StatusOK,
+				Title:    "Call History",
+				Sections: sections,
+			}
+		},
+	})
+
 	return r
 }
+
+// AudioCallOpenMsg opens the audio call overlay for an active call.
+type AudioCallOpenMsg struct{}
+
+// AudioCallStartMsg initiates a new call to the given friend.
+type AudioCallStartMsg struct{ UserID string }
 
 // EmoteSendMsg is dispatched by the emote command's Run closure.
 // The model handler routes it through the appropriate send path

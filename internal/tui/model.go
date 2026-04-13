@@ -13,12 +13,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rw3iss/slackers/internal/api"
+	"github.com/rw3iss/slackers/internal/audio"
 	"github.com/rw3iss/slackers/internal/commands"
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/debug"
@@ -29,6 +31,7 @@ import (
 	"github.com/rw3iss/slackers/internal/plugins"
 	gamesPlugin "github.com/rw3iss/slackers/internal/plugins/games"
 	weatherPlugin "github.com/rw3iss/slackers/internal/plugins/weather"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/rw3iss/slackers/internal/secure"
 	"github.com/rw3iss/slackers/internal/setup"
 	"github.com/rw3iss/slackers/internal/shortcuts"
@@ -36,6 +39,14 @@ import (
 	"github.com/rw3iss/slackers/internal/theme"
 	"github.com/rw3iss/slackers/internal/types"
 	"github.com/rw3iss/slackers/internal/workspace"
+)
+
+// pendingAudioStreamHolder is a package-level variable used to pass
+// an incoming audio stream from the libp2p callback goroutine to the
+// Model's startAudioEngine method.  Protected by pendingAudioStreamMu.
+var (
+	pendingAudioStreamHolder network.Stream
+	pendingAudioStreamMu     sync.Mutex
 )
 
 // Overlay represents which overlay is currently shown.
@@ -541,9 +552,13 @@ type Model struct {
 	// and can be restored via /games or the taskbar indicator.
 	backgroundGame *GameOverlayModel
 
+	// Multi-select delete confirmation.
+	pendingMultiDelete []string
+
 	// activeCall holds state for an in-progress audio call.
-	activeCall    *ActiveCall
+	activeCall     *ActiveCall
 	audioCallModel AudioCallModel
+	audioEngine *audio.Engine
 }
 
 // NewModel creates a new root TUI model.
@@ -865,6 +880,20 @@ func NewModel(wsList []*workspace.Workspace, cfg *config.Config, version string,
 		}
 	}
 
+	// Register incoming-audio-stream handler so the callee can
+	// receive the bidirectional audio stream opened by the caller.
+	if p2pNode != nil {
+		p2pNode.SetAudioStreamHandler(func(s network.Stream) {
+			// Delivered on a libp2p goroutine. Stash the stream in the
+			// package-level holder so startAudioEngine can pick it up
+			// when the callee's engine starts.
+			pendingAudioStreamMu.Lock()
+			pendingAudioStreamHolder = s
+			pendingAudioStreamMu.Unlock()
+			debug.Log("[audio] incoming audio stream received and stashed")
+		})
+	}
+
 	// Load and merge shortcuts.
 	defaults := shortcuts.DefaultShortcuts()
 	overrides, _ := shortcuts.Load(shortcuts.UserConfigPath())
@@ -1054,7 +1083,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// sequence (alt+O then M) leaks into the global shortcut
 		// dispatch and can trigger unintended actions.
 		str := msg.String()
-		if str == "alt+O" || str == "alt+o" {
+		// Intercept the Konsole Shift+Enter escape sequence (\eOM).
+		// Only catch uppercase alt+O — lowercase alt+o is the
+		// "open downloads folder / sidebar options" shortcut.
+		if str == "alt+O" {
 			m.shiftEnterPart = true
 			return m, nil
 		}
@@ -1081,6 +1113,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.shortcutsEditor, cmd = m.shortcutsEditor.Update(msg)
 			return m, cmd
+		}
+
+		// Multi-delete confirmation: 'y' confirms, anything else cancels.
+		if len(m.pendingMultiDelete) > 0 {
+			if msg.String() == "y" || msg.String() == "Y" {
+				ids := m.pendingMultiDelete
+				m.pendingMultiDelete = nil
+				m.warning = fmt.Sprintf("Deleting %d messages...", len(ids))
+				return m, m.multiDeleteCmd(ids)
+			}
+			m.pendingMultiDelete = nil
+			m.warning = "Delete cancelled"
+			return m, nil
 		}
 
 		// Quit must work from anywhere — EXCEPT when a game overlay
@@ -1319,6 +1364,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keymap.OpenDownloadsFolder):
+			// Alt+O opens the context menu for the selected channel
+			// (if one is selected and the sidebar is visible).
+			if !m.fullMode {
+				ch := m.channels.SelectedChannel()
+				if ch != nil {
+					items := m.buildSidebarOptionsItems(*ch)
+					if len(items) > 0 {
+						row := m.channels.SelectedRow()
+						x := 2
+						y := row + 1 // +1 for border
+						if m.channels.workspaceName != "" {
+							y++
+						}
+						m.sidebarOptions = NewSidebarOptions(ch.ID, ch.UserID, items, x, y)
+						m.sidebarOptions.SetSize(m.width, m.height)
+						m.overlay = overlaySidebarOptions
+						return m, nil
+					}
+				}
+			}
 			dlPath := ""
 			if m.cfg != nil {
 				dlPath = m.cfg.DownloadPath
@@ -1361,11 +1426,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keymap.AudioCall):
 			if m.activeCall != nil {
+				// Open existing call overlay.
 				m.audioCallModel = NewAudioCallModel(m.activeCall)
 				m.audioCallModel.SetSize(m.width, m.height)
 				m.overlay = overlayAudioCall
+			} else if m.currentCh != nil && m.currentCh.IsFriend {
+				// No active call — try to call the current friend.
+				online := false
+				if m.friendStore != nil {
+					if f := m.friendStore.Get(m.currentCh.UserID); f != nil && f.Online {
+						online = true
+					}
+				}
+				if !online {
+					m.warning = "Friend is offline — cannot start a call"
+				} else {
+					// Initiate the call.
+					callID := generateCallID()
+					friendName := ""
+					if m.friendStore != nil {
+						if f := m.friendStore.Get(m.currentCh.UserID); f != nil {
+							friendName = f.Name
+						}
+					}
+					if friendName == "" {
+						friendName = m.currentCh.UserID
+					}
+					m.activeCall = &ActiveCall{
+						CallID:   callID,
+						PeerID:   m.currentCh.UserID,
+						PeerName: friendName,
+						State:    CallStateRinging,
+						Outgoing: true,
+					}
+					m.audioCallModel = NewAudioCallModel(m.activeCall)
+					m.audioCallModel.SetSize(m.width, m.height)
+					m.overlay = overlayAudioCall
+					if m.p2pNode != nil {
+						m.p2pNode.SendCallSignal(m.currentCh.UserID, secure.MsgTypeCallRequest, callID, m.cfg.MyName, false)
+					}
+				}
 			} else {
-				m.warning = "No active call"
+				m.warning = "No active call (use Alt+P in a friend chat to start one)"
 			}
 			return m, nil
 
@@ -3641,6 +3743,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayNone
 		return m, nil
 
+	case AudioCallOpenMsg:
+		if m.activeCall != nil {
+			m.audioCallModel = NewAudioCallModel(m.activeCall)
+			m.audioCallModel.SetSize(m.width, m.height)
+			m.overlay = overlayAudioCall
+		}
+		return m, nil
+
+	case AudioCallStartMsg:
+		if m.activeCall != nil {
+			m.warning = "Already in a call"
+			return m, nil
+		}
+		callID := generateCallID()
+		friendName := ""
+		if m.friendStore != nil {
+			if f := m.friendStore.Get(msg.UserID); f != nil {
+				friendName = f.Name
+			}
+		}
+		if friendName == "" {
+			friendName = msg.UserID
+		}
+		m.activeCall = &ActiveCall{
+			CallID:   callID,
+			PeerID:   msg.UserID,
+			PeerName: friendName,
+			State:    CallStateRinging,
+			Outgoing: true,
+		}
+		m.audioCallModel = NewAudioCallModel(m.activeCall)
+		m.audioCallModel.SetSize(m.width, m.height)
+		m.overlay = overlayAudioCall
+		if m.p2pNode != nil {
+			m.p2pNode.SendCallSignal(msg.UserID, secure.MsgTypeCallRequest, callID, m.cfg.MyName, false)
+		}
+		return m, nil
+
+	case AudioCallMuteToggleMsg:
+		if m.activeCall != nil && m.p2pNode != nil {
+			m.p2pNode.SendCallSignal(m.activeCall.PeerID, secure.MsgTypeCallMute, m.activeCall.CallID, "", msg.Muted)
+			if m.audioEngine != nil {
+				m.audioEngine.SetMuted(msg.Muted)
+			}
+		}
+		return m, nil
+
 	case AudioCallCloseMsg:
 		m.overlay = overlayNone
 		return m, nil
@@ -3660,6 +3809,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.audioCallModel = NewAudioCallModel(m.activeCall)
 			m.audioCallModel.SetSize(m.width, m.height)
 			m.overlay = overlayAudioCall
+			// Start audio engine (callee side).
+			go m.startAudioEngine()
 		}
 		return m, audioCallTimerTickCmd()
 
@@ -4030,6 +4181,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.warning = "Message copied to clipboard"
 		} else {
 			m.warning = "Copy failed: no clipboard tool found"
+		}
+		return m, nil
+
+	case MultiCopyMsg:
+		if len(msg.MessageIDs) == 0 {
+			m.warning = "Nothing to copy"
+			return m, nil
+		}
+		var parts []string
+		for _, id := range msg.MessageIDs {
+			mm := m.messages.MessageByID(id)
+			if mm != nil {
+				parts = append(parts, formatMessageForCopy(*mm, m.users))
+			}
+		}
+		text := strings.Join(parts, "\n\n")
+		if copyToClipboard(text) {
+			m.warning = fmt.Sprintf("Copied %d messages to clipboard", len(parts))
+		} else {
+			m.warning = "Copy failed: no clipboard tool found"
+		}
+		return m, nil
+
+	case MultiDeleteMsg:
+		if len(msg.MessageIDs) == 0 {
+			return m, nil
+		}
+		// Confirm before deleting.
+		count := len(msg.MessageIDs)
+		m.warning = fmt.Sprintf("Delete %d messages? (y to confirm)", count)
+		m.pendingMultiDelete = msg.MessageIDs
+		return m, nil
+
+	case MultiDeleteCompleteMsg:
+		m.warning = fmt.Sprintf("Deleted %d messages", msg.Count)
+		// Reload history to reflect deletions.
+		if m.currentCh != nil && m.slackSvc != nil {
+			return m, loadHistoryCmd(m.slackSvc, m.currentCh.ID)
 		}
 		return m, nil
 
@@ -5009,6 +5198,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.audioCallModel = NewAudioCallModel(m.activeCall)
 				m.audioCallModel.SetSize(m.width, m.height)
 				m.overlay = overlayAudioCall
+				// Start audio engine and open stream to peer (caller side).
+				go m.startAudioEngine()
 			}
 			if m.p2pChan != nil {
 				return m, tea.Batch(waitForP2PMsg(m.p2pChan), audioCallTimerTickCmd())
@@ -6514,13 +6705,127 @@ func (m *Model) expandFriendMarkers(text string) string {
 	})
 }
 
-// endCall clears the active call state and closes any call overlay.
+// endCall tears down the audio engine, records call history, and
+// clears the active call state and any call overlay.
 func (m *Model) endCall() {
+	if m.audioEngine != nil {
+		m.audioEngine.Stop()
+		m.audioEngine = nil
+	}
+	// Record call in history.
+	if m.activeCall != nil && m.activeCall.State == CallStateActive {
+		dir := "outgoing"
+		if !m.activeCall.Outgoing {
+			dir = "incoming"
+		}
+		history := audio.LoadCallHistory(m.cfg.ConfigDir())
+		history.Add(audio.CallRecord{
+			CallID:    m.activeCall.CallID,
+			PeerID:    m.activeCall.PeerID,
+			PeerName:  m.activeCall.PeerName,
+			Started:   m.activeCall.StartTime,
+			Duration:  time.Since(m.activeCall.StartTime),
+			Direction: dir,
+		})
+		_ = history.Save(m.cfg.ConfigDir())
+	}
 	m.activeCall = nil
 	if m.overlay == overlayAudioCall || m.overlay == overlayIncomingCall {
 		m.overlay = overlayNone
 	}
 }
+
+// startAudioEngine creates the audio engine, wires the P2P stream,
+// applies effect profiles, and starts capture + playback.
+// Called from a goroutine after the call transitions to CallStateActive.
+func (m *Model) startAudioEngine() {
+	if m.activeCall == nil || m.p2pNode == nil {
+		return
+	}
+	bitrate := m.cfg.AudioBitrate
+	if bitrate <= 0 {
+		bitrate = 32000
+	}
+	jitterMs := m.cfg.AudioJitterMs
+	if jitterMs <= 0 {
+		jitterMs = 50
+	}
+	engine, err := audio.NewEngine(bitrate, jitterMs)
+	if err != nil {
+		debug.Log("[audio] engine create error: %v", err)
+		return
+	}
+
+	// Check for a pending incoming stream (callee case).
+	pendingAudioStreamMu.Lock()
+	pending := pendingAudioStreamHolder
+	pendingAudioStreamHolder = nil
+	pendingAudioStreamMu.Unlock()
+
+	if pending != nil {
+		engine.SetStreams(pending, pending)
+	} else {
+		// Caller: open outgoing stream to peer.
+		stream, err := m.p2pNode.OpenAudioStream(m.activeCall.PeerID)
+		if err != nil {
+			debug.Log("[audio] open stream error: %v", err)
+			engine.Stop()
+			return
+		}
+		engine.SetStreams(stream, stream)
+	}
+
+	// Apply audio profiles.
+	profiles := audio.LoadProfiles(m.cfg.ConfigDir())
+	if len(profiles) > 0 {
+		profileName := m.cfg.AudioProfile
+		for _, p := range profiles {
+			if p.Name == profileName || profileName == "" {
+				audio.ApplyToChain(engine.OutgoingEffects(), p.Outgoing)
+				audio.ApplyToChain(engine.IncomingEffects(), p.Incoming)
+				break
+			}
+		}
+	}
+
+	// Start capture + playback.
+	if err := engine.Start(); err != nil {
+		debug.Log("[audio] engine start error: %v", err)
+		engine.Stop()
+		return
+	}
+	m.audioEngine = engine
+
+	// Pass engine to the call overlay for effects UI.
+	m.audioCallModel.SetEngine(engine)
+	m.audioCallModel.SetConfigDir(m.cfg.ConfigDir())
+	m.audioCallModel.SetProfiles(profiles)
+
+	debug.Log("[audio] engine started for call %s", m.activeCall.CallID)
+}
+
+// multiDeleteCmd returns a tea.Cmd that deletes messages in parallel.
+func (m *Model) multiDeleteCmd(ids []string) tea.Cmd {
+	return func() tea.Msg {
+		if m.slackSvc == nil || m.currentCh == nil {
+			return nil
+		}
+		chID := m.currentCh.ID
+		var wg sync.WaitGroup
+		for _, id := range ids {
+			wg.Add(1)
+			go func(msgID string) {
+				defer wg.Done()
+				_ = m.slackSvc.DeleteMessage(chID, msgID)
+			}(id)
+		}
+		wg.Wait()
+		return MultiDeleteCompleteMsg{Count: len(ids)}
+	}
+}
+
+// MultiDeleteCompleteMsg signals that the multi-delete operation finished.
+type MultiDeleteCompleteMsg struct{ Count int }
 
 // generateCallID returns a random 16-hex-char call identifier.
 func generateCallID() string {
@@ -6552,9 +6857,14 @@ func (m *Model) buildSidebarOptionsItems(ch types.Channel) []sidebarOptionsItem 
 				})
 			}
 		}
-		items = append(items, sidebarOptionsItem{
-			label: "Start Audio Call", action: SidebarActionStartAudioCall,
-		})
+		// Only offer audio call when the friend is online.
+		if m.friendStore != nil {
+			if f := m.friendStore.Get(ch.UserID); f != nil && f.Online {
+				items = append(items, sidebarOptionsItem{
+					label: "Start Audio Call", action: SidebarActionStartAudioCall,
+				})
+			}
+		}
 		items = append(items, sidebarOptionsItem{
 			label: "Remove Friend", action: SidebarActionRemoveFriend,
 		})

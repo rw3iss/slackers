@@ -19,6 +19,9 @@ type AudioCallEndMsg struct{}
 // AudioCallAcceptMsg accepts an incoming call.
 type AudioCallAcceptMsg struct{}
 
+// AudioCallMuteToggleMsg signals the model to send the mute state to the peer.
+type AudioCallMuteToggleMsg struct{ Muted bool }
+
 // AudioCallTimerTickMsg fires once per second to refresh the call duration.
 type AudioCallTimerTickMsg struct{}
 
@@ -131,7 +134,7 @@ func (m AudioCallModel) handleKey(msg tea.KeyMsg) (AudioCallModel, tea.Cmd) {
 		switch key {
 		case "m":
 			m.call.Muted = !m.call.Muted
-			return m, nil
+			return m, func() tea.Msg { return AudioCallMuteToggleMsg{Muted: m.call.Muted} }
 		case "e":
 			m.showEffects = true
 			var cmd tea.Cmd

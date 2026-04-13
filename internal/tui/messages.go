@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +52,18 @@ type DeleteMessageRequestMsg struct {
 // contiguous block.
 type MessageCopyRequestMsg struct {
 	MessageID string
+}
+
+// MultiCopyMsg is sent when the user copies multiple selected messages.
+// The model formats them with author/timestamp using formatMessageForCopy.
+type MultiCopyMsg struct {
+	MessageIDs []string
+}
+
+// MultiDeleteMsg is sent when the user requests deletion of multiple
+// selected messages. The model handles confirmation and parallel deletion.
+type MultiDeleteMsg struct {
+	MessageIDs []string
 }
 
 // CopySnippetRequestMsg is sent when the user presses `c` in
@@ -230,6 +243,8 @@ type MessageViewModel struct {
 	// React mode — select a message to react to
 	reactMode      bool
 	reactIdx       int // index into messages
+	multiSelect    map[int]bool // indices of additionally selected messages
+	multiAnchor    int          // where shift-select started (-1 = none)
 	reactionSelIdx int // -1 = none. 0..len(reactions)-1 = a reaction. len(reactions) = "reply list" virtual element (when parent has replies in inline mode)
 	// Inline-mode reply list navigation: when reactionSelIdx == len(reactions),
 	// the user is targeting the reply list. replyIdx selects an individual reply.
@@ -1310,10 +1325,76 @@ func (m *MessageViewModel) EnterReactModeAt(fromBottom bool) bool {
 		m.reactionSelIdx = -1
 		m.replyIdx = -1
 		m.replyReactionSelIdx = -1
+		m.clearMultiSelect()
 		m.rebuildContent()
 		return true
 	}
 	return false
+}
+
+// clearMultiSelect resets the multi-select state.
+func (m *MessageViewModel) clearMultiSelect() {
+	m.multiSelect = nil
+	m.multiAnchor = -1
+}
+
+// IsMultiSelect returns true when multiple messages are selected.
+func (m *MessageViewModel) IsMultiSelect() bool {
+	return len(m.multiSelect) > 0
+}
+
+// isSelected returns true if the message at index i is part of the multi-selection
+// (or is the current reactIdx).
+func (m *MessageViewModel) isMessageSelected(i int) bool {
+	if m.multiSelect != nil && m.multiSelect[i] {
+		return true
+	}
+	return m.reactMode && i == m.reactIdx && m.multiSelect == nil
+}
+
+// MultiSelectedIndices returns sorted indices of all selected messages.
+func (m *MessageViewModel) MultiSelectedIndices() []int {
+	if m.multiSelect == nil {
+		if m.reactMode {
+			return []int{m.reactIdx}
+		}
+		return nil
+	}
+	var indices []int
+	for idx := range m.multiSelect {
+		indices = append(indices, idx)
+	}
+	sort.Ints(indices)
+	return indices
+}
+
+// MultiSelectedMessages returns the messages in multi-select order.
+func (m *MessageViewModel) MultiSelectedMessages() []types.Message {
+	indices := m.MultiSelectedIndices()
+	view := m.viewMessages()
+	var msgs []types.Message
+	for _, i := range indices {
+		if i >= 0 && i < len(view) {
+			msgs = append(msgs, view[i])
+		}
+	}
+	return msgs
+}
+
+// extendMultiSelect updates the multi-select range from the anchor to the
+// current reactIdx. Called on shift+up/shift+down.
+func (m *MessageViewModel) extendMultiSelect() {
+	if m.multiAnchor < 0 {
+		return
+	}
+	lo, hi := m.multiAnchor, m.reactIdx
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	m.multiSelect = make(map[int]bool, hi-lo+1)
+	for i := lo; i <= hi; i++ {
+		m.multiSelect[i] = true
+	}
 }
 
 // SelectedReplyMessageID returns the ID of the currently-selected inline reply,
@@ -1962,7 +2043,39 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 			onReplyList := selKind == ItemReplyList
 
 			switch keyMsg.String() {
+			case "shift+up":
+				// Multi-select: extend selection upward.
+				if m.multiAnchor < 0 {
+					m.multiAnchor = m.reactIdx
+					m.multiSelect = map[int]bool{m.reactIdx: true}
+				}
+				if m.reactIdx > 0 {
+					m.reactIdx--
+					m.reactionSelIdx = -1
+					m.replyIdx = -1
+					m.extendMultiSelect()
+					m.rebuildContent()
+					m.scrollToReactCursor()
+				}
+				return m, nil
+			case "shift+down":
+				// Multi-select: extend selection downward.
+				if m.multiAnchor < 0 {
+					m.multiAnchor = m.reactIdx
+					m.multiSelect = map[int]bool{m.reactIdx: true}
+				}
+				if m.reactIdx < len(view)-1 {
+					m.reactIdx++
+					m.reactionSelIdx = -1
+					m.replyIdx = -1
+					m.extendMultiSelect()
+					m.rebuildContent()
+					m.scrollToReactCursor()
+				}
+				return m, nil
 			case "up":
+				// Regular up clears multi-select.
+				m.clearMultiSelect()
 				// If reply list is active and a reply is selected, navigate within replies.
 				if onReplyList && m.replyIdx > 0 {
 					m.replyIdx--
@@ -1993,6 +2106,7 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				}
 				return m, nil
 			case "down":
+				m.clearMultiSelect()
 				if onReplyList {
 					if m.replyIdx < 0 {
 						m.replyIdx = 0
@@ -2181,8 +2295,23 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					return ReactModeSelectMsg{MessageID: msgID}
 				}
 			case "d", "x":
+				// Multi-select delete.
+				if m.IsMultiSelect() {
+					msgs := m.MultiSelectedMessages()
+					var ids []string
+					for _, msg := range msgs {
+						if msg.MessageID != "" {
+							ids = append(ids, msg.MessageID)
+						}
+					}
+					m.clearMultiSelect()
+					m.reactMode = false
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return MultiDeleteMsg{MessageIDs: ids}
+					}
+				}
 				// 'd' / 'x' requests deletion of the selected message (parent or reply).
-				// The model verifies authorship and prompts for confirmation.
 				msgID := m.SelectedReplyMessageID()
 				if msgID == "" {
 					msgID = m.SelectedMessageID()
@@ -2255,6 +2384,22 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				}
 				return m, nil
 			case "c":
+				// Multi-select copy: all selected messages.
+				if m.IsMultiSelect() {
+					msgs := m.MultiSelectedMessages()
+					var ids []string
+					for _, msg := range msgs {
+						if msg.MessageID != "" {
+							ids = append(ids, msg.MessageID)
+						}
+					}
+					m.clearMultiSelect()
+					m.reactMode = false
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return MultiCopyMsg{MessageIDs: ids}
+					}
+				}
 				// 'c' has four meanings depending on what's
 				// selected inside the current message:
 				//   - card selected → Copy Contact Info
@@ -2307,6 +2452,12 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					return MessageCopyRequestMsg{MessageID: msgID}
 				}
 			case "esc":
+				// If multi-selecting, first Esc clears multi-select but stays in react mode.
+				if m.IsMultiSelect() {
+					m.clearMultiSelect()
+					m.rebuildContent()
+					return m, nil
+				}
 				// Esc unwinds: reply-reaction → reply → reactionSelIdx → exit react mode.
 				if onReplyList && m.replyReactionSelIdx >= 0 {
 					m.replyReactionSelIdx = -1
@@ -2678,18 +2829,24 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			headerLine += "  " + MessagePendingStyle.Render("⏳ pending")
 		}
 
-		// Highlight selected message in select mode.
-		if m.reactMode && i == m.reactIdx {
+		// Highlight selected message(s) in select mode.
+		isMultiSel := m.multiSelect != nil && m.multiSelect[i]
+		if m.reactMode && (i == m.reactIdx || isMultiSel) {
 			selectHighlight := MessageSelectBgStyle
+			// In multi-select mode, show a compact hint on the cursor message only.
+			if m.IsMultiSelect() {
+				if i == m.reactIdx {
+					hint := fmt.Sprintf(" [%d selected · c: copy · d: delete · Esc: cancel]", len(m.multiSelect))
+					headerLine = selectHighlight.Render(headerLine + hint)
+				} else {
+					headerLine = selectHighlight.Render(headerLine)
+				}
+			} else {
 			cards, files, snippets, _, hasInlineReplies := m.itemCounts(&msg)
 			hasReactions := len(msg.Reactions) > 0
-			// Only authors can edit or delete their own messages,
-			// so hide the "e: edit" / "d: delete" hints when the
-			// local user isn't the author.
 			authorHint := ""
 			if m.isMyMessage(msg) {
 				if msg.IsEmote {
-					// Emotes can be deleted but not edited.
 					authorHint = "  d: delete"
 				} else {
 					authorHint = "  e: edit  d: delete"
@@ -2733,7 +2890,8 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				hint = " [Enter: reply  r: react" + authorHint + "  c: copy" + navHint + replyDownHint + "]"
 			}
 			headerLine = selectHighlight.Render(headerLine + hint)
-		}
+		} // end single-select hints
+		} // end multi-select else
 
 		// Pick the body text style based on whether this is an
 		// emote action or a regular message. Emotes render in

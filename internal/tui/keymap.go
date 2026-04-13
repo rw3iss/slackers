@@ -116,10 +116,10 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		CommandList:      binding(sm, "command_list", "alt+c", "open the command list"),
 		AwayStatus:       binding(sm, "away_status", "alt+a", "set away status"),
 		Downloads:           binding(sm, "downloads", "alt+d", "downloads manager"),
-		OpenDownloadsFolder: binding(sm, "open_downloads_folder", "alt+o", "browse downloads folder"),
+		OpenDownloadsFolder: binding(sm, "open_downloads_folder", "alt+o", "options / downloads folder"),
 		Workspaces:          binding(sm, "workspaces", "alt+w", "manage workspaces"),
 		AudioCall:           binding(sm, "audio_call", "alt+p", "open active call"),
-		AudioMute:           binding(sm, "audio_mute", "alt+shift+m", "toggle mute"),
+		AudioMute:           binding(sm, "audio_mute", "alt+x", "toggle mute"),
 	}
 }
 

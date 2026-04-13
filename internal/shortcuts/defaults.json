@@ -46,5 +46,5 @@
   "open_downloads_folder": ["alt+o"],
   "workspaces": ["alt+w"],
   "audio_call": ["alt+p"],
-  "audio_mute": ["alt+m"]
+  "audio_mute": ["alt+x"]
 }

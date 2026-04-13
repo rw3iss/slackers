@@ -16,7 +16,11 @@ func renderAudioCallButton(call *ActiveCall) string {
 	dur := time.Since(call.StartTime)
 	min := int(dur.Minutes())
 	sec := int(dur.Seconds()) % 60
-	text := fmt.Sprintf(" 📞 %d:%02d ", min, sec)
+	mic := "🎤"
+	if call.Muted {
+		mic = "🔇"
+	}
+	text := fmt.Sprintf(" %s 📞 %d:%02d ", mic, min, sec)
 	return lipgloss.NewStyle().
 		Background(ColorAccent).
 		Foreground(lipgloss.Color("#ffffff")).
