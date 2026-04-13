@@ -54,9 +54,8 @@ func (c *Codec) Decode(data []byte, pcm []int16) (int, error) {
 }
 
 func (c *Codec) DecodePLC(pcm []int16) (int, error) {
-	n, err := c.Decoder.Decode(nil, pcm)
-	if err != nil {
+	if err := c.Decoder.DecodePLC(pcm); err != nil {
 		return 0, fmt.Errorf("opus plc: %w", err)
 	}
-	return n, nil
+	return len(pcm), nil
 }
