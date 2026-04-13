@@ -345,6 +345,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					return m, func() tea.Msg { return GameOverlayOpenMsg{GameName: gameName} }
 				}
 			}
+			// Audio call taskbar button.
+			if ax0, ax1, ay, aVisible := m.audioCallButtonClickArea(); aVisible && y == ay && x >= ax0 && x < ax1 {
+				m.audioCallModel = NewAudioCallModel(m.activeCall)
+				m.audioCallModel.SetSize(m.width, m.height)
+				m.overlay = overlayAudioCall
+				return m, nil
+			}
 			// matching the keyboard binding behaviour.
 			if nx0, nx1, ny, visible := m.notificationsButtonClickArea(); visible && y == ny && x >= nx0 && x < nx1 {
 				m.notifs = NewNotificationsOverlay(m.notifStore.All())

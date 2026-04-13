@@ -542,7 +542,8 @@ type Model struct {
 	backgroundGame *GameOverlayModel
 
 	// activeCall holds state for an in-progress audio call.
-	activeCall *ActiveCall
+	activeCall    *ActiveCall
+	audioCallModel AudioCallModel
 }
 
 // NewModel creates a new root TUI model.
@@ -1360,6 +1361,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keymap.AudioCall):
 			if m.activeCall != nil {
+				m.audioCallModel = NewAudioCallModel(m.activeCall)
+				m.audioCallModel.SetSize(m.width, m.height)
 				m.overlay = overlayAudioCall
 			} else {
 				m.warning = "No active call"
@@ -1767,6 +1770,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayWorkspaceEdit {
 			var cmd tea.Cmd
 			m.workspaceEdit, cmd = m.workspaceEdit.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayAudioCall || m.overlay == overlayIncomingCall {
+			var cmd tea.Cmd
+			m.audioCallModel, cmd = m.audioCallModel.Update(msg)
 			return m, cmd
 		}
 		// Normal key handling (no overlay)
@@ -3343,6 +3351,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				State:    CallStateRinging,
 				Outgoing: true,
 			}
+			m.audioCallModel = NewAudioCallModel(m.activeCall)
+			m.audioCallModel.SetSize(m.width, m.height)
 			m.overlay = overlayAudioCall
 			if m.p2pNode != nil {
 				m.p2pNode.SendCallSignal(msg.UserID, secure.MsgTypeCallRequest, callID, m.cfg.MyName, false)
@@ -3629,6 +3639,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case WorkspacesCloseMsg:
 		m.overlay = overlayNone
+		return m, nil
+
+	case AudioCallCloseMsg:
+		m.overlay = overlayNone
+		return m, nil
+
+	case AudioCallEndMsg:
+		if m.activeCall != nil && m.p2pNode != nil {
+			m.p2pNode.SendCallSignal(m.activeCall.PeerID, secure.MsgTypeCallEnd, m.activeCall.CallID, "", false)
+		}
+		m.endCall()
+		return m, nil
+
+	case AudioCallAcceptMsg:
+		if m.activeCall != nil && !m.activeCall.Outgoing && m.p2pNode != nil {
+			m.p2pNode.SendCallSignal(m.activeCall.PeerID, secure.MsgTypeCallAccept, m.activeCall.CallID, "", false)
+			m.activeCall.State = CallStateActive
+			m.activeCall.StartTime = time.Now()
+			m.audioCallModel = NewAudioCallModel(m.activeCall)
+			m.audioCallModel.SetSize(m.width, m.height)
+			m.overlay = overlayAudioCall
+		}
+		return m, audioCallTimerTickCmd()
+
+	case AudioCallTimerTickMsg:
+		if m.activeCall != nil && m.activeCall.State == CallStateActive {
+			return m, audioCallTimerTickCmd()
+		}
 		return m, nil
 
 	case WorkspaceEditOpenMsg:
@@ -4948,6 +4986,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					State:    CallStateRinging,
 					Outgoing: false,
 				}
+				m.audioCallModel = NewAudioCallModel(m.activeCall)
+				m.audioCallModel.SetSize(m.width, m.height)
 				m.overlay = overlayIncomingCall
 			}
 			if m.p2pChan != nil {
@@ -4959,12 +4999,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeCall != nil && m.activeCall.CallID == msg.CallID {
 				m.activeCall.State = CallStateActive
 				m.activeCall.StartTime = time.Now()
+				m.audioCallModel = NewAudioCallModel(m.activeCall)
+				m.audioCallModel.SetSize(m.width, m.height)
 				m.overlay = overlayAudioCall
 			}
 			if m.p2pChan != nil {
-				return m, waitForP2PMsg(m.p2pChan)
+				return m, tea.Batch(waitForP2PMsg(m.p2pChan), audioCallTimerTickCmd())
 			}
-			return m, nil
+			return m, audioCallTimerTickCmd()
 		}
 		if msg.Text == "__call_reject__" {
 			if m.activeCall != nil && m.activeCall.CallID == msg.CallID {
@@ -5948,6 +5990,8 @@ func (m Model) viewInner() string {
 		return m.workspacesList.View()
 	case overlayWorkspaceEdit:
 		return m.workspaceEdit.View()
+	case overlayAudioCall, overlayIncomingCall:
+		return m.audioCallModel.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the
@@ -6015,6 +6059,11 @@ func (m Model) renderBaseView() string {
 		base = strings.Join(baseLines, "\n")
 	}
 
+	// Audio call badge.
+	if x0, _, y, vis := m.audioCallButtonClickArea(); vis {
+		badge := renderAudioCallButton(m.activeCall)
+		base = overlayOnRow(base, y, x0, badge)
+	}
 	// Notifications indicator overlay.
 	if x0, _, y, visible := m.notificationsButtonClickArea(); visible {
 		base = overlayOnRow(base, y, x0, renderNotificationsButton(m.notifStore.Count()))
