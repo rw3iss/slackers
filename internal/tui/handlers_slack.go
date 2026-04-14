@@ -549,6 +549,9 @@ func (m *Model) recordUnreadMessage(channelID, messageID, userID, userName, text
 	if m.notifStore == nil {
 		return
 	}
+	if m.cfg != nil && !m.cfg.NotifPrefs.NewMessages {
+		return
+	}
 	debug.Log("[notif] recordUnreadMessage ch=%s msgID=%s user=%s name=%s text=%q",
 		channelID, messageID, userID, userName, truncateStr(text, 40))
 	m.notifStore.Add(notifications.Notification{
@@ -572,6 +575,9 @@ func truncateStr(s string, maxLen int) string {
 // recordReaction drops a TypeReaction notification.
 func (m *Model) recordReaction(channelID, messageID, reactorID, reactorName, emoji, targetText string) {
 	if m.notifStore == nil {
+		return
+	}
+	if m.cfg != nil && !m.cfg.NotifPrefs.Reactions {
 		return
 	}
 	debug.Log("[notif] recordReaction ch=%s reactor=%s emoji=%s", channelID, reactorName, emoji)

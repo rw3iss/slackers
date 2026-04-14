@@ -19,6 +19,7 @@ const (
 	MsgActionEdit
 	MsgActionDelete
 	MsgActionCopy
+	MsgActionViewFile
 )
 
 // MsgOptionsSelectMsg signals which option the user chose.
@@ -52,8 +53,8 @@ type MsgOptionsModel struct {
 // NewMsgOptions creates an options popup at the given position.
 // minX is the minimum left X (e.g. chat history left edge) — popup never starts left of this.
 // allowAuthorActions controls whether the author-only "Edit" and "Delete"
-// entries are appended to the menu.
-func NewMsgOptions(messageID, preview string, x, y, minX int, allowAuthorActions bool) MsgOptionsModel {
+// entries are appended to the menu. hasFiles adds a "View File" entry.
+func NewMsgOptions(messageID, preview string, x, y, minX int, allowAuthorActions, hasFiles bool) MsgOptionsModel {
 	items := []msgOptionsItem{
 		{"React", MsgActionReact},
 		{"Reply", MsgActionReply},
@@ -68,6 +69,9 @@ func NewMsgOptions(messageID, preview string, x, y, minX int, allowAuthorActions
 	// after Edit (when visible) so the author-only actions
 	// cluster together at the top.
 	items = append(items, msgOptionsItem{"Copy Message", MsgActionCopy})
+	if hasFiles {
+		items = append(items, msgOptionsItem{"View File", MsgActionViewFile})
+	}
 	if allowAuthorActions {
 		items = append(items, msgOptionsItem{"Delete", MsgActionDelete})
 	}

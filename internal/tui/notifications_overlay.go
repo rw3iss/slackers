@@ -244,6 +244,24 @@ func (m NotificationsOverlayModel) renderEntry(n notifications.Notification, sel
 			tagStyle.Render("[friend request]"),
 			headerStyle.Render(who))
 		body = "  " + dimStyle.Render("Enter to open the request and accept/reject")
+	case notifications.TypeFileShare:
+		who := n.UserName
+		if who == "" {
+			who = n.UserID
+		}
+		header = fmt.Sprintf("%s %s sent a file",
+			tagStyle.Render("[file share]"),
+			headerStyle.Render(who))
+		body = "  " + bodyStyle.Render(n.Text)
+	case notifications.TypeAudioCall:
+		who := n.UserName
+		if who == "" {
+			who = n.UserID
+		}
+		header = fmt.Sprintf("%s %s called",
+			tagStyle.Render("[audio call]"),
+			headerStyle.Render(who))
+		body = "  " + dimStyle.Render("Incoming audio call")
 	default:
 		header = fmt.Sprintf("[%s] %s", n.Type, n.UserName)
 		body = "  " + bodyStyle.Render(n.Text)

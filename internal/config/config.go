@@ -12,6 +12,16 @@ import (
 	"time"
 )
 
+// NotificationPrefs controls which notification categories fire terminal
+// bells, desktop popups, and entries in the notifications panel.
+type NotificationPrefs struct {
+	NewMessages    bool `json:"new_messages"`
+	Reactions      bool `json:"reactions"`
+	FriendRequests bool `json:"friend_requests"`
+	FileShares     bool `json:"file_shares"`
+	AudioCalls     bool `json:"audio_calls"`
+}
+
 // Config holds all application configuration values.
 type Config struct {
 	BotToken        string            `json:"bot_token"`
@@ -114,6 +124,9 @@ type Config struct {
 	// Multi-workspace support.
 	LastActiveWorkspace string `json:"last_active_workspace,omitempty"`
 
+	// Per-type notification preferences.
+	NotifPrefs NotificationPrefs `json:"notif_prefs,omitempty"`
+
 	// Audio call settings.
 	AudioBitrate      int    `json:"audio_bitrate,omitempty"`
 	AudioJitterMs     int    `json:"audio_jitter_ms,omitempty"`
@@ -191,6 +204,13 @@ func defaults() *Config {
 		// value (an empty string falls through to the same default).
 		ShareMyInfoFormat: "json",
 		ConfigPath:        DefaultConfigPath(),
+		NotifPrefs: NotificationPrefs{
+			NewMessages:    true,
+			Reactions:      true,
+			FriendRequests: true,
+			FileShares:     true,
+			AudioCalls:     true,
+		},
 	}
 }
 

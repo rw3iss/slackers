@@ -89,6 +89,7 @@ const (
 	overlayWorkspaceEdit
 	overlayAudioCall
 	overlayIncomingCall
+	overlayNotificationSettings
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -423,14 +424,20 @@ type Model struct {
 	// key cancels. See file_clipboard.go for the full flow.
 	pendingCopyFile *types.FileInfo
 
+	// Pending file-view confirmation for a non-text or large file.
+	// When non-nil, y/Enter proceeds with the view; any other key
+	// cancels. See file_clipboard.go for the full flow.
+	pendingViewFile *types.FileInfo
+
 	// Friends
 	friendStore    *friends.FriendStore
 	friendHistory  *friends.ChatHistoryStore
 	friendMessages map[string][]types.Message // in-memory cache (backed by friendHistory)
 
 	// Notifications
-	notifStore *notifications.Store
-	notifs     NotificationsOverlayModel
+	notifStore   *notifications.Store
+	notifs       NotificationsOverlayModel
+	notifSettings NotificationSettingsModel
 
 	// friendActivity tracks the last time a friend chat was
 	// touched (opened, focused, typed in). Connections that go
@@ -1277,6 +1284,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Pending file-view confirmation for non-text / large files.
+		if m.pendingViewFile != nil {
+			s := msg.String()
+			if s == "y" || s == "Y" || s == "enter" {
+				f := *m.pendingViewFile
+				m.pendingViewFile = nil
+				m.warning = fmt.Sprintf("Loading %s...", f.Name)
+				return m, viewFileCmd(m.slackSvc, m.p2pNode, f)
+			}
+			m.pendingViewFile = nil
+			m.warning = "View cancelled"
+			return m, nil
+		}
+
 		// Pending file-upload-cancel confirmation: y/Enter confirm.
 		if m.pendingCancelUploadKey != "" {
 			s := msg.String()
@@ -1763,6 +1784,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.whitelist, cmd = m.whitelist.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayNotificationSettings {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.notifSettings, cmd = m.notifSettings.Update(msg)
 			return m, cmd
 		}
 		if m.overlay == overlayFriendRequest {
@@ -2895,7 +2925,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastSeen[id] = ts
 			}
 		}
-		if newUnread > 0 && m.cfg.Notifications {
+		if newUnread > 0 && m.cfg.Notifications && m.cfg.NotifPrefs.NewMessages {
 			debug.Log("[notif] BELL: %d new unread channels from poll", newUnread)
 			sendNotification("multiple channels", newUnread)
 			setWindowUrgent()
@@ -2943,6 +2973,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.whitelist = NewWhitelistModel(m.cfg.SecureWhitelist, m.users)
 		m.whitelist.SetSize(m.width, m.height)
 		m.overlay = overlayWhitelist
+		return m, nil
+
+	case NotificationSettingsOpenMsg:
+		m.notifSettings = NewNotificationSettingsModel(m.cfg)
+		m.notifSettings.SetSize(m.width, m.height)
+		m.overlay = overlayNotificationSettings
 		return m, nil
 
 	case FriendsConfigOpenMsg:
@@ -3366,6 +3402,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case MsgActionCopy:
 			return m, func() tea.Msg {
 				return MessageCopyRequestMsg{MessageID: msg.MessageID}
+			}
+		case MsgActionViewFile:
+			// Find the first file on the message and request a view.
+			if mm := m.messages.MessageByID(msg.MessageID); mm != nil && len(mm.Files) > 0 {
+				f := mm.Files[0]
+				return m, func() tea.Msg {
+					return FileViewRequestMsg{File: f}
+				}
 			}
 		case MsgActionDelete:
 			m.requestMessageDelete(msg.MessageID)
@@ -4525,6 +4569,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, clearWarningCmd()
 
+	case FileViewRequestMsg:
+		// Check if the file is a recognised text type.
+		if ok, reason := isViewableTextFile(msg.File); !ok {
+			// Not a known text file — prompt the user.
+			f := msg.File
+			m.pendingViewFile = &f
+			m.warning = fmt.Sprintf(
+				"%s — %s. Try to view anyway? [y/N]",
+				msg.File.Name, reason,
+			)
+			return m, nil
+		}
+		// Large-file guard.
+		if msg.File.Size > viewFileSizeLimit {
+			f := msg.File
+			m.pendingViewFile = &f
+			m.warning = fmt.Sprintf(
+				"%s is %s — load into viewer? [y/N]",
+				msg.File.Name, formatCopyFileSize(msg.File),
+			)
+			return m, nil
+		}
+		m.warning = fmt.Sprintf("Loading %s...", msg.File.Name)
+		return m, viewFileCmd(m.slackSvc, m.p2pNode, msg.File)
+
+	case FileViewCompleteMsg:
+		if msg.Err != nil {
+			m.warning = fmt.Sprintf("View failed: %s", msg.Err.Error())
+			return m, clearWarningCmd()
+		}
+		m.warning = ""
+		m.outputView = NewOutputView(msg.Name, msg.Content)
+		m.outputView.MakeSelectable()
+		m.outputActive = true
+		m.outputView.SetSize(m.messages.width, m.messages.height)
+		m.focus = types.FocusMessages
+		m.updateFocus()
+		return m, nil
+
 	case FileDownloadMsg:
 		downloadPath := m.cfg.DownloadPath
 		if downloadPath == "" {
@@ -5238,6 +5321,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.p2pNode != nil {
 					m.p2pNode.SendCallSignal(msg.SenderID, secure.MsgTypeCallReject, msg.CallID, "", false)
 				}
+			} else if !m.cfg.NotifPrefs.AudioCalls {
+				// Audio call notifications disabled — auto-reject silently.
+				if m.p2pNode != nil {
+					m.p2pNode.SendCallSignal(msg.SenderID, secure.MsgTypeCallReject, msg.CallID, "", false)
+				}
 			} else {
 				callerName := msg.CallerName
 				if callerName == "" {
@@ -5253,6 +5341,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.initAudioCallModel()
 				m.audioCallModel.SetSize(m.width, m.height)
 				m.overlay = overlayIncomingCall
+				// Record an audio call notification.
+				if m.notifStore != nil {
+					m.notifStore.Add(notifications.Notification{
+						Type:     notifications.TypeAudioCall,
+						ChannelID: "friend:" + msg.SenderID,
+						UserID:   msg.SenderID,
+						UserName: callerName,
+						Text:     "Incoming audio call",
+					})
+				}
 			}
 			if m.p2pChan != nil {
 				return m, waitForP2PMsg(m.p2pChan)
@@ -5682,6 +5780,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.channels.MarkUnread(friendChID)
 			}
 			m.appendFriendMessage(msg.SenderID, fileMsg)
+
+			// Record a file-share notification (gated by NotifPrefs).
+			if m.notifStore != nil && m.cfg.NotifPrefs.FileShares {
+				m.notifStore.Add(notifications.Notification{
+					Type:     notifications.TypeFileShare,
+					ChannelID: "friend:" + msg.SenderID,
+					UserID:   msg.SenderID,
+					UserName: userName,
+					Text:     fileName,
+				})
+			}
 
 			if m.p2pChan != nil {
 				return m, waitForP2PMsg(m.p2pChan)
@@ -6258,6 +6367,8 @@ func (m Model) viewInner() string {
 		return m.workspaceEdit.View()
 	case overlayAudioCall, overlayIncomingCall:
 		return m.audioCallModel.View()
+	case overlayNotificationSettings:
+		return m.notifSettings.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the

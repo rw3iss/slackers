@@ -245,8 +245,8 @@ type MessageViewModel struct {
 	reactIdx       int // index into messages
 	multiSelect    map[int]bool // indices of additionally selected messages
 	multiAnchor    int          // where shift-select started (-1 = none)
-	reactionSelIdx int // -1 = none. 0..len(reactions)-1 = a reaction. len(reactions) = "reply list" virtual element (when parent has replies in inline mode)
-	// Inline-mode reply list navigation: when reactionSelIdx == len(reactions),
+	reactionSelIdx int // -1 = none. Combined index into [cards|files|snippets|reactions|replyList?]. Use selectedItemKind() to resolve.
+	// Inline-mode reply list navigation: when selectedItemKind() == ItemReplyList,
 	// the user is targeting the reply list. replyIdx selects an individual reply.
 	replyIdx            int // -1 = none, otherwise index into selected parent's Replies
 	replyReactionSelIdx int // -1 = none, otherwise index into selected reply's Reactions
@@ -1403,10 +1403,10 @@ func (m *MessageViewModel) SelectedReplyMessageID() string {
 	if !m.reactMode || m.reactIdx < 0 || m.reactIdx >= len(m.messages) {
 		return ""
 	}
-	parent := &m.messages[m.reactIdx]
-	if m.reactionSelIdx != len(parent.Reactions) {
+	if k, _ := m.selectedItemKind(); k != ItemReplyList {
 		return ""
 	}
+	parent := &m.messages[m.reactIdx]
 	if m.replyIdx < 0 || m.replyIdx >= len(parent.Replies) {
 		return ""
 	}
@@ -2006,6 +2006,21 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 						return FileDownloadMsg{File: f}
 					}
 				}
+			case "v", "V":
+				// 'v' in file-select mode = view file contents in
+				// the Output pane (download → read → display).
+				if m.selectIdx >= 0 && m.selectIdx < len(m.selectables) {
+					f := m.selectables[m.selectIdx].file
+					if f.Uploading {
+						return m, nil // can't view a file still uploading
+					}
+					m.selectMode = false
+					m.rebuildContent()
+					return m, func() tea.Msg {
+						return FileViewRequestMsg{File: f}
+					}
+				}
+				return m, nil
 			case "c", "C":
 				// 'c' in file-select mode serves two purposes:
 				//   * Uploading file → request upload cancellation.
@@ -2382,6 +2397,19 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 						}
 					}
 				}
+				// 'v' on a selected file = view file contents
+				// in the Output pane.
+				if file := m.SelectedFileInItem(); file != nil {
+					f := *file
+					if !f.Uploading {
+						m.reactMode = false
+						m.reactionSelIdx = -1
+						m.rebuildContent()
+						return m, func() tea.Msg {
+							return FileViewRequestMsg{File: f}
+						}
+					}
+				}
 				return m, nil
 			case "c":
 				// Multi-select copy: all selected messages.
@@ -2542,7 +2570,7 @@ func (m MessageViewModel) View() string {
 	}
 
 	if m.selectMode {
-		headerParts = append(headerParts, MessageHeaderHighlight.Render("  [FILE SELECT: ↑↓ navigate | Enter: download | c: copy | f/Esc: exit]"))
+		headerParts = append(headerParts, MessageHeaderHighlight.Render("  [FILE SELECT: ↑↓ navigate | Enter: download | v: view | c: copy | f/Esc: exit]"))
 	} else if m.contextMode {
 		headerParts = append(headerParts, MessageHeaderHighlight.Render("  [Context - PgUp: load more | scroll bottom: exit]"))
 	} else if len(m.selectables) > 0 {
@@ -2863,7 +2891,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			case ItemCard:
 				hint = " [a: add friend  v: view info  c: copy info  ←/→: navigate]"
 			case ItemFile:
-				hint = " [Enter: download  c: copy contents  ←/→: navigate]"
+				hint = " [Enter: download  v: view  c: copy contents  ←/→: navigate]"
 			case ItemCodeSnippet:
 				hint = " [c: copy snippet  ←/→: navigate]"
 			default:
@@ -3018,10 +3046,20 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			if len(msg.Reactions) > 0 {
 				reactionStyle := MessageReactionStyle
 				selectedReactionStyle := MessageReactionSelStyle
+				// Resolve which reaction (if any) is highlighted
+				// via the combined sub-element index so that
+				// cards/files/snippets before reactions don't
+				// cause a false highlight on reaction 0.
+				selReactionIdx := -1
+				if m.reactMode && i == m.reactIdx {
+					if k, ri := m.selectedItemKind(); k == ItemReaction {
+						selReactionIdx = ri
+					}
+				}
 				for ri, r := range msg.Reactions {
 					emoji := resolveEmoji(r.Emoji)
 					var rendered string
-					if m.reactMode && i == m.reactIdx && ri == m.reactionSelIdx {
+					if ri == selReactionIdx {
 						rendered = selectedReactionStyle.Render(fmt.Sprintf("%s %d", emoji, r.Count))
 					} else {
 						rendered = reactionStyle.Render(fmt.Sprintf("%s %d", emoji, r.Count))
@@ -3083,7 +3121,14 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 				lines = append(lines, "")
 			}
 			// Highlight when this parent message has its reply list active.
-			replyListActive := m.reactMode && i == m.reactIdx && m.reactionSelIdx == len(msg.Reactions) && replyCount > 0
+			// Use selectedItemKind rather than raw reactionSelIdx so
+			// the combined sub-element offset is respected.
+			replyListActive := false
+			if m.reactMode && i == m.reactIdx && replyCount > 0 {
+				if k, _ := m.selectedItemKind(); k == ItemReplyList {
+					replyListActive = true
+				}
+			}
 			for ri, reply := range msg.Replies {
 				if ri > 0 {
 					for k := 0; k < betweenReplies; k++ {

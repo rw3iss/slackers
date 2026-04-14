@@ -202,6 +202,12 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				options:     []string{"on", "off"},
 			},
 			{
+				label:       "Notification Types",
+				key:         "notification_settings",
+				value:       "Edit...",
+				description: "Enable or disable each notification type (messages, reactions, friends, files, calls)",
+			},
+			{
 				label:       "Auto Update",
 				key:         "auto_update",
 				value:       autoUpdateValue(cfg.AutoUpdate),
@@ -610,6 +616,13 @@ func (m SettingsModel) updateNavigating(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 		if f.key == "bot_token" || f.key == "app_token" || f.key == "user_token" {
 			m.message = "Run 'slackers setup' to change tokens"
 			return m, nil
+		}
+
+		// Notification settings opens the notification type toggle panel.
+		if f.key == "notification_settings" {
+			return m, func() tea.Msg {
+				return NotificationSettingsOpenMsg{}
+			}
 		}
 
 		// Keyboard shortcuts opens the shortcuts editor.

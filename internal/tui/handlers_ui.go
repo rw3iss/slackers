@@ -265,7 +265,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					if mm := m.messages.MessageByID(msgID); mm != nil && m.isMyMessage(*mm) {
 						allowDelete = true
 					}
-					m.msgOptions = NewMsgOptions(msgID, preview, x+1, y, minX, allowDelete)
+					hasFiles := false
+					if mm := m.messages.MessageByID(msgID); mm != nil {
+						hasFiles = len(mm.Files) > 0
+					}
+					m.msgOptions = NewMsgOptions(msgID, preview, x+1, y, minX, allowDelete, hasFiles)
 					m.msgOptions.SetSize(m.width, m.height)
 					m.overlay = overlayMsgOptions
 					return m, nil

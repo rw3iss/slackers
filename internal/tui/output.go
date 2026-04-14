@@ -178,6 +178,16 @@ func (o *OutputViewModel) SetItems(sections []commands.Section) {
 	o.viewport.GotoTop()
 }
 
+// MakeSelectable marks all items as selectable so the user can
+// navigate to them and press 'c' to copy. Used by the file viewer
+// where the entire body is one copyable block with no code fences.
+func (o *OutputViewModel) MakeSelectable() {
+	for i := range o.items {
+		o.items[i].selectable = true
+	}
+	o.rebuildRender()
+}
+
 // SetFocused syncs the pane's focused state with the model's
 // focus cursor. Updated from updateFocus so the active border
 // reflects where keystrokes go.

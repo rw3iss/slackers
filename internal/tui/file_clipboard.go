@@ -289,3 +289,91 @@ func formatCopyFileSize(f types.FileInfo) string {
 	}
 	return formatFileSize(f.Size)
 }
+
+// ── File viewer ─────────────────────────────────────────────────
+
+// FileViewRequestMsg is emitted when the user presses 'v' on a
+// selected file in file-select or react mode.
+type FileViewRequestMsg struct {
+	File types.FileInfo
+}
+
+// FileViewCompleteMsg is delivered after the async file download +
+// read completes. Content holds the file text; Err is set on failure.
+type FileViewCompleteMsg struct {
+	Name    string
+	Content string
+	Err     error
+}
+
+// viewFileSizeLimit caps files loaded into the output viewer.
+// Files larger than this trigger a y/N confirmation.
+const viewFileSizeLimit int64 = 10 * 1024 * 1024 // 10 MiB
+
+// isViewableTextFile returns (true, "") when the file looks like
+// text that can be rendered in the output pane, and (false, reason)
+// when it's a suspected binary. The reason string is user-facing.
+func isViewableTextFile(f types.FileInfo) (bool, string) {
+	// Reuse the copy-to-clipboard text detection — the criteria
+	// are identical (we can display anything we can copy).
+	ok, reason := isCopyableTextFile(f)
+	if ok {
+		return true, ""
+	}
+	// Rewrite the reason to say "view" instead of "copy".
+	return false, strings.Replace(reason, "download instead", "may not display correctly", 1)
+}
+
+// viewFileCmd downloads the given file to a temp location, reads
+// its contents, and returns a FileViewCompleteMsg.
+func viewFileCmd(svc slackpkg.SlackService, p2p *secure.P2PNode, file types.FileInfo) tea.Cmd {
+	return func() tea.Msg {
+		tmpDir, err := os.MkdirTemp("", "slackers-view-*")
+		if err != nil {
+			return FileViewCompleteMsg{Name: file.Name, Err: fmt.Errorf("create temp dir: %w", err)}
+		}
+		defer os.RemoveAll(tmpDir)
+
+		safeName := file.ID
+		if safeName == "" {
+			safeName = "content"
+		}
+		tmpPath := filepath.Join(tmpDir, safeName)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		if strings.HasPrefix(file.URL, "p2p://") {
+			if p2p == nil {
+				return FileViewCompleteMsg{Name: file.Name, Err: fmt.Errorf("P2P not available")}
+			}
+			parts := strings.SplitN(strings.TrimPrefix(file.URL, "p2p://"), "/", 2)
+			if len(parts) != 2 {
+				return FileViewCompleteMsg{Name: file.Name, Err: fmt.Errorf("malformed p2p url")}
+			}
+			peerUID, fileID := parts[0], parts[1]
+			if err := p2p.DownloadFileFromPeer(ctx, peerUID, fileID, tmpPath); err != nil {
+				return FileViewCompleteMsg{Name: file.Name, Err: fmt.Errorf("p2p download: %w", err)}
+			}
+		} else {
+			if svc == nil {
+				return FileViewCompleteMsg{Name: file.Name, Err: fmt.Errorf("Slack not available")}
+			}
+			if err := svc.DownloadFile(ctx, file.URL, tmpPath); err != nil {
+				return FileViewCompleteMsg{Name: file.Name, Err: fmt.Errorf("slack download: %w", err)}
+			}
+		}
+
+		data, err := os.ReadFile(tmpPath)
+		if err != nil {
+			return FileViewCompleteMsg{Name: file.Name, Err: fmt.Errorf("read temp: %w", err)}
+		}
+		if contentIsBinary(data) {
+			return FileViewCompleteMsg{
+				Name: file.Name,
+				Err:  fmt.Errorf("file contains binary data and cannot be displayed"),
+			}
+		}
+		return FileViewCompleteMsg{Name: file.Name, Content: string(data)}
+	}
+}

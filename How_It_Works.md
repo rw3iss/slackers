@@ -31,6 +31,9 @@ Model (root)
   FilesListModel     -- all-files browser with search
   ShortcutsEditorModel -- keyboard shortcut editor
   WhitelistModel     -- secure messaging whitelist
+  AudioCallModel     -- P2P audio call overlay (ringing/active/effects)
+  WorkspaceOverlayModel -- multi-workspace manager
+  OutputViewModel    -- temporary console pane (file viewer, /help, /friends)
 ```
 
 Each sub-model has its own `Update` and `View` methods. The root model delegates based on focus state and active overlay. Overlays render on top of the main layout and capture all keyboard input while active.
@@ -114,6 +117,7 @@ Sent messages are saved (configurable limit, default 20) and navigable with `Up`
 - **Download**: Supports context cancellation (`Ctrl-D`) and progress reporting in the status bar. Downloaded to the configurable download path.
 - **File browser**: Full directory browser with file type filters, used for both uploads and selecting the download path in settings.
 - **File drop detection**: Pasting a file path (detected via heuristic pattern matching) triggers an upload prompt.
+- **File viewer** (`v` in file-select or message-select mode): Downloads the file to a temporary directory, reads its contents, and displays them in the Output pane with the filename in the title bar. The same text-file detection logic used by clipboard copy (`isCopyableTextFile`) gates automatic viewing — recognised text files (by MIME type or extension from the `textFileExts` allowlist) open immediately; unrecognised or binary types show a `"Try to view anyway? [y/N]"` confirmation. Files over 10 MiB also prompt before loading. The viewer's content is marked selectable so `↑`/`↓` highlights it and `c` copies the full file text to the clipboard. Binary content (NUL bytes in the first 4 KiB) is rejected with an error message even after user confirmation.
 
 ## Channel management
 
@@ -431,16 +435,19 @@ The TUI exposes three overlay-backed right-click context menus that share the sa
 
 ## In-message item navigation (select mode)
 
-The message select mode (`Ctrl-J` or `s`) extends beyond reactions and the inline reply list to cycle through every interactive item in a parent message in priority order. Left/right arrow keys walk a combined index over `[ contact cards | files | reactions | reply list virtual ]`, with the existing "down into replies" navigation preserved at the end.
+The message select mode (`Ctrl-J` or `s`) extends beyond reactions and the inline reply list to cycle through every interactive item in a parent message in priority order. Left/right arrow keys walk a combined index over `[ contact cards | files | code snippets | reactions | reply list virtual ]`, with the existing "down into replies" navigation preserved at the end.
 
 Each kind of selection swaps the inline keyboard hint shown above the highlighted message:
 
 - **Contact card pill** — `[a: add friend  v: view info  c: copy info  ←/→: navigate]`. Pressing `a` routes through the same `FriendCardOptionsSelectMsg` dispatch the right-click menu uses (so the existing self-check, conflict prompt, and handshake all run unchanged); `v` opens the temporary contact card view modal; `c` marshals the card to JSON and copies it to the clipboard; `Enter` defaults to View Contact Info.
-- **File row** — `[Enter: download  c: copy contents  ←/→: navigate]`. Enter routes through the existing `FilesListDownloadMsg` path; `c` triggers the existing `FileCopyRequestMsg` flow (large-file confirmation included).
+- **File row** — `[Enter: download  v: view  c: copy contents  ←/→: navigate]`. Enter routes through the existing `FilesListDownloadMsg` path; `v` downloads the file to a temp location, reads it, and opens the contents in the Output pane (with a confirmation prompt for non-text/binary files); `c` triggers the existing `FileCopyRequestMsg` flow (large-file confirmation included).
+- **Code snippet** — `[c: copy snippet  ←/→: navigate]`.
 - **Reaction badge** — Enter toggles, behaviour unchanged.
 - **Reply list virtual element** — down arrow enters the reply tree, behaviour unchanged.
 
-The selection state is encoded in the existing `reactionSelIdx` field, reinterpreted via `selectedItemKind() (kind, localIdx)`. A per-message render counter (`renderingCardCount`) is reset at the top of each parent message in `renderMessageList` and incremented for every pill emitted by `rewriteFriendCards`, so the pill style flips to `FriendCardPillSelectedStyle` for whichever card matches the cursor position. File rendering checks the same kind/index pair to switch to `MessageFileSelectedStyle` when the cursor lands on a file row.
+The standalone file-select mode (`f` or `Ctrl-Up`) also supports `v` to view the selected file.
+
+The selection state is encoded in the existing `reactionSelIdx` field, reinterpreted via `selectedItemKind() (kind, localIdx)`. The rendering code resolves the combined index through `selectedItemKind()` rather than comparing `reactionSelIdx` directly against reaction indices — this ensures that cards, files, and snippets earlier in the combined list don't cause false highlights on reaction badges. A per-message render counter (`renderingCardCount`) is reset at the top of each parent message in `renderMessageList` and incremented for every pill emitted by `rewriteFriendCards`, so the pill style flips to `FriendCardPillSelectedStyle` for whichever card matches the cursor position. File rendering checks the same kind/index pair to switch to `MessageFileSelectedStyle` when the cursor lands on a file row.
 
 ## Slash command framework
 
@@ -697,3 +704,58 @@ The suppression is implemented in `effectiveStatus()` on the Model. Every status
 - **Away status:** If the user has both `HideOnlineStatus` and a manual away status set, the hide takes precedence -- no broadcasts are sent at all.
 - **Ping cycle:** The friend ping cycle still checks connectivity for the local user's benefit (updating the sidebar's online/offline indicators for friends), but the status response to the remote peer is suppressed.
 - **Friend store:** The `AwayStatus` field on remote friend records can be `"offline"` when the remote friend has hidden their status. The ping cycle respects this -- even if the transport connection succeeds, a friend whose `AwayStatus` is `"offline"` is treated as offline for sidebar display purposes.
+
+## Multi-workspace support
+
+Slackers supports connecting to multiple Slack teams simultaneously. Each workspace stores its own bot token, app token, user token, and per-workspace channel metadata under `~/.config/slackers/workspaces/<id>/workspace.json`.
+
+### Workspace overlay (`Alt-W`)
+
+The overlay lists all configured workspaces with indicators for the active one. From here the user can:
+
+- **Switch** — select a workspace and press Enter to activate it
+- **Add** — create a new workspace via `slackers login` or manual token entry
+- **Edit** — modify tokens and display name for an existing workspace
+- **Remove** — delete a workspace and its stored data
+
+### Migration
+
+Existing single-workspace configs (with `bot_token`/`app_token` at the top level of `config.json`) are automatically migrated into the `workspaces/` folder structure on first launch. The `NeedsMigration()` check on Config detects the old layout; `ClearWorkspaceFields()` zeros the legacy fields after migration. `config.Validate()` passes when either `LastActiveWorkspace` is set or the `workspaces/` directory has at least one entry.
+
+### Sidebar
+
+The active workspace name is displayed centered at the top of the sidebar channel list, making it immediately visible which team's channels are shown.
+
+## P2P audio calling
+
+Slackers includes peer-to-peer audio calling between friends, implemented entirely over libp2p with Opus-encoded audio.
+
+### Audio pipeline
+
+The audio stack lives in `internal/audio/` and is composed of several layers:
+
+- **Opus codec** (`codec.go`) — wraps the `hraban/opus` library for encoding (voice/music profiles) and decoding with packet loss concealment (PLC). Configurable bitrate (default 32 kbps for voice).
+- **Jitter buffer** (`jitter.go`) — reorders out-of-sequence packets using a sequence-number ring, with a configurable depth (`AudioJitterMs` config, default 50 ms). Fills gaps with PLC-generated frames to maintain smooth playback.
+- **Audio engine** (`engine.go`) — manages capture (microphone) and playback (speaker) via the `malgo` (miniaudio) library. Coordinates the encode → send → receive → decode → play loop. Supports mute toggle and device selection.
+- **Effects chain** — 7-band parametric EQ (`eq.go`) with per-band frequency/gain/Q, compressor with threshold/ratio/attack/release/makeup and live gain-reduction metering (`compressor.go`), and switchable effect profiles (Flat, Voice Clarity, Bass Boost, Warm, Broadcast).
+
+### Call signaling
+
+Call setup and teardown use the existing libp2p stream protocol. Signaling messages (`MsgTypeCallOffer`, `MsgTypeCallAnswer`, `MsgTypeCallEnd`) are exchanged over the friend's P2P connection. The call state machine handles ringing → active → ended transitions.
+
+### TUI overlay (`Alt-P`)
+
+The `AudioCallModel` overlay shows:
+
+- **Ringing state** — who's calling, accept/decline controls
+- **Active call** — elapsed time, mute toggle (`Alt-X`), live mic and peer audio level meters (when enabled in config), hang-up button
+- **Effects sub-screen** — 7-band EQ sliders, compressor controls with live gain-reduction meter, profile selector
+- **Active call badge** — when a call is in progress and the overlay is closed, a taskbar indicator appears in the message pane header; clicking it or pressing `Alt-P` reopens the call overlay
+
+### Voice Activity Detection (VAD)
+
+The engine includes simple energy-based VAD that suppresses transmission of silence frames, reducing bandwidth usage during pauses in speech.
+
+### Call history
+
+Completed calls are persisted with duration, timestamp, and peer info for later reference.

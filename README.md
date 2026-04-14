@@ -24,7 +24,8 @@ A lightweight, terminal-based Slack client.
 - **Customizable shortcuts** -- rebind any key in-app, changes take effect immediately
 - **Color themes** -- 15 built-in themes (6 light, 9 dark — light themes are tagged `(light)` in the picker), an in-app editor with a 256-color picker (fg/bg + bold/italic), live preview, and Ctrl-Y to flip between a primary + alternate theme
 - **Reactions on replies, edit / delete own messages, inline reply selection** -- everything Slack does, in a TUI
-- **In-message item navigation** -- in select mode (`Ctrl-J`), arrow keys cycle through every interactive item in a message in priority order: contact-card pills → file rows → reactions → reply list. Each selection shows a context-aware hint in the message header (`a`/`v`/`c` for cards, `Enter`/`c` for files).
+- **In-message item navigation** -- in select mode (`Ctrl-J`), arrow keys cycle through every interactive item in a message in priority order: contact-card pills → file rows → code snippets → reactions → reply list. Each selection shows a context-aware hint in the message header (`a`/`v`/`c` for cards, `Enter`/`v`/`c` for files).
+- **File viewer** -- press `v` on any selected file (in file-select mode or message select mode) to download and display its contents in the Output pane. Recognised text files open immediately; unknown/binary types prompt for confirmation. The viewer is scrollable and supports `c` to copy the full contents to the clipboard.
 - **Notifications view** (`Alt-N`) -- a single panel collects unread messages, reactions on your messages, and pending friend requests, each click jumps straight to the source
 - **Right-click context menus** -- right-click a message for React / Reply / Edit / Delete, or a sidebar channel for Hide / Rename / Invite to Slackers / View Contact Info / Remove Friend (friend channels). Right-click a `[FRIEND:...]` pill in chat for Add Friend / View Contact Info / Copy Contact Info, with self/friend/non-friend variants.
 - **Channel management** -- hide, alias (with a filterable Ctrl-G hidden-channels overlay), collapse groups, sort by type/name/recent
@@ -33,6 +34,8 @@ A lightweight, terminal-based Slack client.
 - **Friend contact cards in chat** -- type `[FRIEND:me]` / right-click → "Invite to Slackers" to share a compact hash or full JSON profile that renders as a clickable pill on the receiver's side; click to import, merge, or replace
 - **Automatic profile sync** -- connected peers exchange their latest contact card so stale fields (public key, multiaddr, email) get refreshed in place, without overwriting your chosen display name
 - **Pending messages** -- messages sent while a friend was offline are flagged ⏳ pending, auto-resent in original order the moment the peer reconnects (via both a local reconnect detector and a `request_pending` pull from either side)
+- **P2P audio calling** (`Alt-P`) -- call any online friend directly over libp2p with Opus-encoded audio, a jitter buffer, and voice activity detection. The call overlay shows ringing/active states, live mic/peer level meters, mute toggle (`Alt-X`), and an effects sub-screen with a 7-band parametric EQ, compressor with live gain-reduction metering, and switchable effect profiles
+- **Multi-workspace support** (`Alt-W`) -- connect multiple Slack teams simultaneously; each workspace gets its own token set, channel list, and last-channel memory stored under `~/.config/slackers/workspaces/`. The sidebar shows the active workspace name, and the workspace overlay lets you add, edit, switch, or remove workspaces
 - **Backup & restore** -- `slackers export` / `slackers import` (and the Settings → Backup panel) produce a single-file zip of your entire config, with `replace` and `merge` modes
 - **Auto-update** -- new versions downloaded and installed on startup
 - **One-command onboarding** -- `slackers join <url>` for team setup, OAuth browser login
@@ -150,6 +153,7 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Ctrl-D` | Cancel download (if active) or half-page down (messages) |
 | `Ctrl-L` | Browse all files |
 | `f` (messages) | Toggle file select mode |
+| `v` (file/card selected) | View file contents / contact info |
 | `Ctrl-Up` | Enter file select mode from anywhere |
 | `Ctrl-Down` | Exit file select, focus input |
 | `Ctrl-X` | Hide channel |
@@ -175,6 +179,10 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Alt-N` | Open the notifications view |
 | `Alt-C` | Open the slash-command browser (also `/commands`) |
 | `Alt-K` | Open the keyboard shortcuts editor |
+| `Alt-W` | Open the workspace manager |
+| `Alt-P` | Open/resume audio call with friend |
+| `Alt-X` | Toggle mute during audio call |
+| `Alt-V` | Paste image from clipboard |
 | `Ctrl-Y` | Toggle between primary and alternate theme |
 | `/` (in input) | Start a slash command — popup shows fuzzy matches |
 | `Tab` (slash popup) | Complete the highlighted command into the input |
@@ -226,8 +234,16 @@ Settings are grouped into named sections (Appearance, Behavior, Channels, Files,
 | Ping Interval | 2+ seconds | Friend online-status / pending-resend poll (default 5) |
 | Share Format | JSON / Hash | How `[FRIEND:me]` is encoded on the wire (JSON = full profile, default; Hash = compact SLF2, fewer fields) |
 | Auto-accept Friend Requests | on / off | Silently accept incoming friend requests |
+| Audio Bitrate | kbps | Opus encoding bitrate for calls |
+| Audio Jitter Buffer | ms | Jitter buffer depth for call audio |
+| Audio Profile | voice / music | Opus application profile |
+| Audio Input Device | device name | Microphone device |
+| Audio Output Device | device name | Speaker device |
+| Show Mic Meter | on / off | Live input level meter during calls |
+| Show Peer Meter | on / off | Live peer audio level meter during calls |
 | Secure Whitelist | Manage... | Users allowed for encrypted messaging |
 | Keyboard Shortcuts | Customize... | Rebind any key in-app |
+| Workspaces | Manage... | Add, edit, switch, or remove Slack workspaces |
 | Export Settings | Button | Write a full backup zip to `~/Downloads` |
 
 
@@ -427,6 +443,8 @@ That folder contains:
 | `friend_history/` | Encrypted P2P chat history per friend |
 | `secure.key` | Your local Curve25519 key pair (do not share) |
 | `shortcuts.json` | Custom keyboard-shortcut overrides |
+| `notifications.json` | Persistent notification entries |
+| `workspaces/` | Per-workspace token + channel configs |
 | `plugins/` | Plugin index and per-plugin config |
 | `debug.log` | Debug output (when `--debug` is set) |
 
@@ -510,6 +528,9 @@ internal/
   slack/            SlackService + SocketService interfaces and implementations
   tui/              Bubbletea model, UI components, overlays
   types/            Shared domain types
+  workspace/        Multi-workspace filesystem store and migration
+  audio/            Opus codec, jitter buffer, audio engine, effects (EQ, compressor)
+  notifications/    Persistent notification store
 scripts/            Install/uninstall/cleanup scripts
 configs/            Default config, Slack app manifest
 ```

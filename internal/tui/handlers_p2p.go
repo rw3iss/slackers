@@ -335,6 +335,9 @@ func (m *Model) recordFriendRequest(senderID, senderName, pubKey, multiaddr stri
 	if m.notifStore == nil {
 		return
 	}
+	if m.cfg != nil && !m.cfg.NotifPrefs.FriendRequests {
+		return
+	}
 	debug.Log("[notif] recordFriendRequest from=%s name=%s", senderID, senderName)
 	m.notifStore.Add(notifications.Notification{
 		Type:            notifications.TypeFriendRequest,

@@ -32,6 +32,12 @@ const (
 	// the requesting peer's identity. Cleared once the user accepts,
 	// rejects, or independently befriends the peer.
 	TypeFriendRequest Type = "friend_request"
+
+	// TypeFileShare is created when a friend sends a P2P file offer.
+	TypeFileShare Type = "file_share"
+
+	// TypeAudioCall is created when an incoming audio call arrives.
+	TypeAudioCall Type = "audio_call"
 )
 
 // Notification is a single entry in the store. The same struct serves
