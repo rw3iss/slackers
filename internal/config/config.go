@@ -120,6 +120,8 @@ type Config struct {
 	AudioProfile      string `json:"audio_profile,omitempty"`
 	AudioInputDevice  string `json:"audio_input_device,omitempty"`
 	AudioOutputDevice string `json:"audio_output_device,omitempty"`
+	AudioShowMicMeter  bool  `json:"audio_show_mic_meter,omitempty"`
+	AudioShowPeerMeter bool  `json:"audio_show_peer_meter,omitempty"`
 
 	ConfigPath string `json:"-"`
 }

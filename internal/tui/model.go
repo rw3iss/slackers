@@ -555,6 +555,9 @@ type Model struct {
 	// Multi-select delete confirmation.
 	pendingMultiDelete []string
 
+	// Clipboard image paste confirmation.
+	pendingPasteImage string // temp file path awaiting y/n
+
 	// activeCall holds state for an in-progress audio call.
 	activeCall     *ActiveCall
 	audioCallModel AudioCallModel
@@ -1115,6 +1118,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		// Clipboard image paste confirmation: 'y' sends, anything else cancels.
+		if m.pendingPasteImage != "" {
+			if msg.String() == "y" || msg.String() == "Y" {
+				path := m.pendingPasteImage
+				m.pendingPasteImage = ""
+				m.input.InsertAtCursor("[FILE:" + path + "]")
+				m.focus = types.FocusInput
+				m.updateFocus()
+				m.warning = "Image attached — press Enter to send"
+			} else {
+				cleanupClipboardTempFile(m.pendingPasteImage)
+				m.pendingPasteImage = ""
+				m.warning = "Paste cancelled"
+			}
+			return m, nil
+		}
+
 		// Multi-delete confirmation: 'y' confirms, anything else cancels.
 		if len(m.pendingMultiDelete) > 0 {
 			if msg.String() == "y" || msg.String() == "Y" {
@@ -1427,7 +1447,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keymap.AudioCall):
 			if m.activeCall != nil {
 				// Open existing call overlay.
-				m.audioCallModel = NewAudioCallModel(m.activeCall)
+				m.initAudioCallModel()
 				m.audioCallModel.SetSize(m.width, m.height)
 				m.overlay = overlayAudioCall
 			} else if m.currentCh != nil && m.currentCh.IsFriend {
@@ -1459,7 +1479,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						State:    CallStateRinging,
 						Outgoing: true,
 					}
-					m.audioCallModel = NewAudioCallModel(m.activeCall)
+					m.initAudioCallModel()
 					m.audioCallModel.SetSize(m.width, m.height)
 					m.overlay = overlayAudioCall
 					if m.p2pNode != nil {
@@ -1484,6 +1504,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+
+		case key.Matches(msg, m.keymap.PasteImage):
+			if m.currentCh == nil {
+				m.warning = "No channel selected"
+				return m, nil
+			}
+			if m.pendingPasteImage != "" {
+				m.warning = "Already processing a paste..."
+				return m, nil
+			}
+			m.warning = "Checking clipboard for image..."
+			return m, probeClipboardImageCmd()
 
 		case key.Matches(msg, m.keymap.Settings):
 			if m.overlay == overlaySettings {
@@ -3453,8 +3485,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				State:    CallStateRinging,
 				Outgoing: true,
 			}
-			m.audioCallModel = NewAudioCallModel(m.activeCall)
-			m.audioCallModel.SetSize(m.width, m.height)
+			m.initAudioCallModel()
 			m.overlay = overlayAudioCall
 			if m.p2pNode != nil {
 				m.p2pNode.SendCallSignal(msg.UserID, secure.MsgTypeCallRequest, callID, m.cfg.MyName, false)
@@ -3745,8 +3776,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AudioCallOpenMsg:
 		if m.activeCall != nil {
-			m.audioCallModel = NewAudioCallModel(m.activeCall)
-			m.audioCallModel.SetSize(m.width, m.height)
+			m.initAudioCallModel()
 			m.overlay = overlayAudioCall
 		}
 		return m, nil
@@ -3773,12 +3803,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			State:    CallStateRinging,
 			Outgoing: true,
 		}
-		m.audioCallModel = NewAudioCallModel(m.activeCall)
+		m.initAudioCallModel()
 		m.audioCallModel.SetSize(m.width, m.height)
 		m.overlay = overlayAudioCall
 		if m.p2pNode != nil {
 			m.p2pNode.SendCallSignal(msg.UserID, secure.MsgTypeCallRequest, callID, m.cfg.MyName, false)
 		}
+		return m, nil
+
+	case ClipboardImageReadyMsg:
+		if msg.Path == "" {
+			m.warning = "No image found in clipboard"
+			return m, nil
+		}
+		sizeStr := fmt.Sprintf("%.1f KB", float64(msg.Size)/1024)
+		m.pendingPasteImage = msg.Path
+		m.warning = fmt.Sprintf("Paste %s image (%s)? (y/n)", msg.MimeType, sizeStr)
+		return m, nil
+
+	case ClipboardImageNoneMsg:
+		m.warning = "No image found in clipboard"
+		return m, nil
+
+	case ClipboardImageSentMsg:
+		cleanupClipboardTempFile(msg.Path)
+		return m, nil
+
+	case AudioEngineReadyMsg:
+		if msg.Err != nil {
+			debug.Log("[audio] engine failed: %v", msg.Err)
+			m.warning = "Audio engine failed: " + msg.Err.Error()
+			return m, nil
+		}
+		m.audioEngine = msg.Engine
+		m.audioCallModel.SetEngine(msg.Engine)
+		m.audioCallModel.SetConfigDir(m.cfg.ConfigDir())
+		m.audioCallModel.SetProfiles(msg.Profiles)
+		debug.Log("[audio] engine ready, call active")
+		return m, nil
+
+	case AudioCallMeterSettingMsg:
+		m.cfg.AudioShowMicMeter = msg.ShowMic
+		m.cfg.AudioShowPeerMeter = msg.ShowPeer
+		config.SaveDebounced(m.cfg)
 		return m, nil
 
 	case AudioCallMuteToggleMsg:
@@ -3806,13 +3873,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.p2pNode.SendCallSignal(m.activeCall.PeerID, secure.MsgTypeCallAccept, m.activeCall.CallID, "", false)
 			m.activeCall.State = CallStateActive
 			m.activeCall.StartTime = time.Now()
-			m.audioCallModel = NewAudioCallModel(m.activeCall)
-			m.audioCallModel.SetSize(m.width, m.height)
+			m.initAudioCallModel()
 			m.overlay = overlayAudioCall
-			// Start audio engine (callee side).
-			go m.startAudioEngine()
 		}
-		return m, audioCallTimerTickCmd()
+		return m, tea.Batch(audioCallTimerTickCmd(), m.startAudioEngineCmd())
 
 	case AudioCallTimerTickMsg:
 		if m.activeCall != nil && m.activeCall.State == CallStateActive {
@@ -4791,12 +4855,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					go func() {
 						done <- svc.UploadFile(channelID, path)
 					}()
+					var result FileUploadDoneMsg
 					select {
 					case err := <-done:
-						return FileUploadDoneMsg{MessageID: localMsgID, FileID: fileID, Err: err}
+						result = FileUploadDoneMsg{MessageID: localMsgID, FileID: fileID, Err: err}
 					case <-ctx.Done():
-						return FileUploadDoneMsg{MessageID: localMsgID, FileID: fileID, Err: ctx.Err()}
+						result = FileUploadDoneMsg{MessageID: localMsgID, FileID: fileID, Err: ctx.Err()}
 					}
+					// Clean up clipboard paste temp files after upload.
+					cleanupClipboardTempFile(path)
+					return result
 				})
 			}
 
@@ -5182,7 +5250,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					State:    CallStateRinging,
 					Outgoing: false,
 				}
-				m.audioCallModel = NewAudioCallModel(m.activeCall)
+				m.initAudioCallModel()
 				m.audioCallModel.SetSize(m.width, m.height)
 				m.overlay = overlayIncomingCall
 			}
@@ -5195,16 +5263,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeCall != nil && m.activeCall.CallID == msg.CallID {
 				m.activeCall.State = CallStateActive
 				m.activeCall.StartTime = time.Now()
-				m.audioCallModel = NewAudioCallModel(m.activeCall)
+				m.initAudioCallModel()
 				m.audioCallModel.SetSize(m.width, m.height)
 				m.overlay = overlayAudioCall
-				// Start audio engine and open stream to peer (caller side).
-				go m.startAudioEngine()
 			}
+			var cmds []tea.Cmd
+			cmds = append(cmds, audioCallTimerTickCmd(), m.startAudioEngineCmd())
 			if m.p2pChan != nil {
-				return m, tea.Batch(waitForP2PMsg(m.p2pChan), audioCallTimerTickCmd())
+				cmds = append(cmds, waitForP2PMsg(m.p2pChan))
 			}
-			return m, audioCallTimerTickCmd()
+			return m, tea.Batch(cmds...)
 		}
 		if msg.Text == "__call_reject__" {
 			if m.activeCall != nil && m.activeCall.CallID == msg.CallID {
@@ -6259,7 +6327,7 @@ func (m Model) renderBaseView() string {
 
 	// Audio call badge.
 	if x0, _, y, vis := m.audioCallButtonClickArea(); vis {
-		badge := renderAudioCallButton(m.activeCall)
+		badge := renderAudioCallButton(m.activeCall, m.audioEngine, m.audioCallModel.ShowMicMeter(), m.audioCallModel.ShowPeerMeter())
 		base = overlayOnRow(base, y, x0, badge)
 	}
 	// Notifications indicator overlay.
@@ -6707,6 +6775,14 @@ func (m *Model) expandFriendMarkers(text string) string {
 
 // endCall tears down the audio engine, records call history, and
 // clears the active call state and any call overlay.
+// initAudioCallModel creates and configures an AudioCallModel with
+// persisted meter settings from config.
+func (m *Model) initAudioCallModel() {
+	m.audioCallModel = NewAudioCallModel(m.activeCall)
+	m.audioCallModel.SetSize(m.width, m.height)
+	m.audioCallModel.SetMeterFlags(m.cfg.AudioShowMicMeter, m.cfg.AudioShowPeerMeter)
+}
+
 func (m *Model) endCall() {
 	if m.audioEngine != nil {
 		m.audioEngine.Stop()
@@ -6738,10 +6814,21 @@ func (m *Model) endCall() {
 // startAudioEngine creates the audio engine, wires the P2P stream,
 // applies effect profiles, and starts capture + playback.
 // Called from a goroutine after the call transitions to CallStateActive.
-func (m *Model) startAudioEngine() {
-	if m.activeCall == nil || m.p2pNode == nil {
-		return
-	}
+// AudioEngineReadyMsg is returned by startAudioEngineCmd when the engine
+// is created and streams are connected. The Update handler installs it
+// on the Model (safe — runs in the Bubbletea loop, no data race).
+type AudioEngineReadyMsg struct {
+	Engine   *audio.Engine
+	Profiles []audio.EffectProfile
+	Err      error
+}
+
+// startAudioEngineCmd creates the audio engine, opens streams, and returns
+// an AudioEngineReadyMsg. Runs as a tea.Cmd (background goroutine) so
+// device init doesn't block the UI.
+func (m *Model) startAudioEngineCmd() tea.Cmd {
+	peerID := m.activeCall.PeerID
+	p2p := m.p2pNode
 	bitrate := m.cfg.AudioBitrate
 	if bitrate <= 0 {
 		bitrate = 32000
@@ -6750,58 +6837,51 @@ func (m *Model) startAudioEngine() {
 	if jitterMs <= 0 {
 		jitterMs = 50
 	}
-	engine, err := audio.NewEngine(bitrate, jitterMs)
-	if err != nil {
-		debug.Log("[audio] engine create error: %v", err)
-		return
-	}
+	configDir := m.cfg.ConfigDir()
+	profileName := m.cfg.AudioProfile
 
-	// Check for a pending incoming stream (callee case).
-	pendingAudioStreamMu.Lock()
-	pending := pendingAudioStreamHolder
-	pendingAudioStreamHolder = nil
-	pendingAudioStreamMu.Unlock()
-
-	if pending != nil {
-		engine.SetStreams(pending, pending)
-	} else {
-		// Caller: open outgoing stream to peer.
-		stream, err := m.p2pNode.OpenAudioStream(m.activeCall.PeerID)
+	return func() tea.Msg {
+		engine, err := audio.NewEngine(bitrate, jitterMs)
 		if err != nil {
-			debug.Log("[audio] open stream error: %v", err)
-			engine.Stop()
-			return
+			return AudioEngineReadyMsg{Err: fmt.Errorf("engine create: %w", err)}
 		}
-		engine.SetStreams(stream, stream)
-	}
 
-	// Apply audio profiles.
-	profiles := audio.LoadProfiles(m.cfg.ConfigDir())
-	if len(profiles) > 0 {
-		profileName := m.cfg.AudioProfile
-		for _, p := range profiles {
-			if p.Name == profileName || profileName == "" {
-				audio.ApplyToChain(engine.OutgoingEffects(), p.Outgoing)
-				audio.ApplyToChain(engine.IncomingEffects(), p.Incoming)
-				break
+		// Check for a pending incoming stream (callee case).
+		pendingAudioStreamMu.Lock()
+		pending := pendingAudioStreamHolder
+		pendingAudioStreamHolder = nil
+		pendingAudioStreamMu.Unlock()
+
+		if pending != nil {
+			engine.SetStreams(pending, pending)
+		} else if p2p != nil {
+			stream, err := p2p.OpenAudioStream(peerID)
+			if err != nil {
+				engine.Stop()
+				return AudioEngineReadyMsg{Err: fmt.Errorf("open stream: %w", err)}
+			}
+			engine.SetStreams(stream, stream)
+		}
+
+		// Apply profiles.
+		profiles := audio.LoadProfiles(configDir)
+		if len(profiles) > 0 {
+			for _, p := range profiles {
+				if p.Name == profileName || profileName == "" {
+					audio.ApplyToChain(engine.OutgoingEffects(), p.Outgoing)
+					audio.ApplyToChain(engine.IncomingEffects(), p.Incoming)
+					break
+				}
 			}
 		}
+
+		if err := engine.Start(); err != nil {
+			engine.Stop()
+			return AudioEngineReadyMsg{Err: fmt.Errorf("engine start: %w", err)}
+		}
+
+		return AudioEngineReadyMsg{Engine: engine, Profiles: profiles}
 	}
-
-	// Start capture + playback.
-	if err := engine.Start(); err != nil {
-		debug.Log("[audio] engine start error: %v", err)
-		engine.Stop()
-		return
-	}
-	m.audioEngine = engine
-
-	// Pass engine to the call overlay for effects UI.
-	m.audioCallModel.SetEngine(engine)
-	m.audioCallModel.SetConfigDir(m.cfg.ConfigDir())
-	m.audioCallModel.SetProfiles(profiles)
-
-	debug.Log("[audio] engine started for call %s", m.activeCall.CallID)
 }
 
 // multiDeleteCmd returns a tea.Cmd that deletes messages in parallel.

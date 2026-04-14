@@ -102,6 +102,7 @@ var helpLayout = []helpSection{
 			{"workspaces", "Manage workspaces", ""},
 			{"audio_call", "Open active audio call / start call (/call)", ""},
 			{"audio_mute", "Toggle mic mute during call", ""},
+			{"paste_image", "Paste image from clipboard", ""},
 			{"quit", "Quit", ""},
 		},
 	},

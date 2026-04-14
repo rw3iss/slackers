@@ -61,8 +61,12 @@ var ActionDescriptions = map[string]string{
 	"shortcuts_editor":   "Open the keyboard shortcuts editor",
 	"command_list":       "Open the slash-command browser (also: /commands)",
 	"away_status":        "Set your away status and message",
-	"downloads":          "Open the downloads manager",
-	"open_downloads_folder": "Browse the downloads folder",
+	"downloads":            "Open the downloads manager",
+	"open_downloads_folder": "Channel options / downloads folder",
+	"workspaces":           "Manage workspaces",
+	"audio_call":           "Audio call — open active call or start new",
+	"audio_mute":           "Audio call — toggle mic mute",
+	"paste_image":          "Paste image from clipboard into chat",
 }
 
 // ActionOrder defines the display order for the shortcuts editor.
@@ -81,6 +85,7 @@ var ActionOrder = []string{
 	"friend_details", "notifications", "share_my_info",
 	"help", "settings", "shortcuts_editor", "command_list", "away_status",
 	"downloads", "open_downloads_folder",
+	"workspaces", "audio_call", "audio_mute", "paste_image",
 }
 
 // DefaultShortcuts returns the built-in default shortcut mappings.

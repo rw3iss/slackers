@@ -32,12 +32,16 @@ type Engine struct {
 	muted  atomic.Bool
 	seqOut uint16 // outgoing frame sequence counter
 
+	// Volume controls (0.0 = silence, 1.0 = unity, >1.0 = boost).
+	MicVolume     float32 // applied to mic input before effects
+	SpeakerVolume float32 // applied to speaker output after effects
+
 	outStream io.Writer
 	inStream  io.Reader
 
-	// Metering values readable by the UI.
-	OutMeter Meter
-	InMeter  Meter
+	// Metering values readable by the UI. Updated per-frame.
+	MicLevel     float32 // dBFS of raw mic input (before effects/mute)
+	SpeakerLevel float32 // dBFS of speaker output (after effects)
 
 	// Stats tracks packet-level call statistics.
 	Stats CallStats
@@ -74,14 +78,16 @@ func NewEngine(bitrate, jitterDepthMs int) (*Engine, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &Engine{
-		ctx:      ctx,
-		cancel:   cancel,
-		codec:    codec,
-		jitter:   NewJitterBuffer(jitterFrames),
-		outgoing: NewEffectChain(),
-		incoming: NewEffectChain(),
+		ctx:           ctx,
+		cancel:        cancel,
+		codec:         codec,
+		jitter:        NewJitterBuffer(jitterFrames),
+		outgoing:      NewEffectChain(),
+		incoming:      NewEffectChain(),
+		MicVolume:     1.0,
+		SpeakerVolume: 1.0,
 	}
-	e.vad = NewVAD(-40, 300) // -40dBFS threshold, 300ms hold
+	e.vad = NewVAD(-40, 300)
 	return e, nil
 }
 
@@ -228,8 +234,16 @@ func (e *Engine) onCaptureData(outputSamples, inputSamples []byte, frameCount ui
 }
 
 func (e *Engine) processAndSendFrame(pcm []int16) {
-	// Apply outgoing effects.
+	// Convert, apply mic volume, and meter.
 	floats := int16ToFloat32(pcm)
+	if e.MicVolume != 1.0 {
+		for i := range floats {
+			floats[i] *= e.MicVolume
+		}
+	}
+	e.MicLevel = RMSLevel(floats)
+
+	// Apply outgoing effects (runs even when muted so meters stay live).
 	e.outgoing.Process(floats)
 	float32ToInt16(floats, pcm)
 
@@ -240,7 +254,7 @@ func (e *Engine) processAndSendFrame(pcm []int16) {
 		return
 	}
 
-	// Write to stream: [2 byte seq][2 byte len][opus data]
+	// Mute check: skip sending but metering above still ran.
 	e.mu.Lock()
 	out := e.outStream
 	e.mu.Unlock()
@@ -248,7 +262,7 @@ func (e *Engine) processAndSendFrame(pcm []int16) {
 		return
 	}
 
-	// VAD: skip sending silent frames (but don't mute — just suppress).
+	// VAD: skip sending silent frames.
 	if e.vad != nil && !e.vad.IsVoice(floats) {
 		return
 	}
@@ -317,9 +331,15 @@ func (e *Engine) onPlaybackData(outputSamples, inputSamples []byte, frameCount u
 		filled += n
 	}
 
-	// Apply incoming effects.
+	// Apply incoming effects, speaker volume, and meter.
 	floats := int16ToFloat32(pcm[:filled])
 	e.incoming.Process(floats)
+	if e.SpeakerVolume != 1.0 {
+		for i := range floats {
+			floats[i] *= e.SpeakerVolume
+		}
+	}
+	e.SpeakerLevel = RMSLevel(floats)
 	float32ToInt16(floats, pcm[:filled])
 
 	// Write to output buffer.

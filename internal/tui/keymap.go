@@ -55,6 +55,7 @@ type KeyMap struct {
 	Workspaces          key.Binding
 	AudioCall           key.Binding
 	AudioMute           key.Binding
+	PasteImage          key.Binding
 }
 
 // binding creates a key.Binding from a ShortcutMap action name.
@@ -120,6 +121,7 @@ func BuildKeyMap(sm shortcuts.ShortcutMap) KeyMap {
 		Workspaces:          binding(sm, "workspaces", "alt+w", "manage workspaces"),
 		AudioCall:           binding(sm, "audio_call", "alt+p", "open active call"),
 		AudioMute:           binding(sm, "audio_mute", "alt+x", "toggle mute"),
+		PasteImage:          binding(sm, "paste_image", "alt+v", "paste image from clipboard"),
 	}
 }
 

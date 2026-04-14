@@ -22,6 +22,12 @@ type AudioCallAcceptMsg struct{}
 // AudioCallMuteToggleMsg signals the model to send the mute state to the peer.
 type AudioCallMuteToggleMsg struct{ Muted bool }
 
+// AudioCallMeterSettingMsg persists the taskbar meter visibility settings.
+type AudioCallMeterSettingMsg struct {
+	ShowMic  bool
+	ShowPeer bool
+}
+
 // AudioCallTimerTickMsg fires once per second to refresh the call duration.
 type AudioCallTimerTickMsg struct{}
 
@@ -37,6 +43,9 @@ type AudioCallModel struct {
 	effectsTab     int // 0=outgoing, 1=incoming
 	effectsSel     int
 	monitorMode    bool
+	eqEditMode     bool // true when editing an EQ band's gain
+	showMicMeter   bool // show mini mic meter in taskbar
+	showPeerMeter  bool // show mini peer meter in taskbar
 	engine         *audio.Engine
 	eqSelectedBand int
 	profiles       []audio.EffectProfile
@@ -44,15 +53,17 @@ type AudioCallModel struct {
 }
 
 // Effects row indices:
-// 0        = EQ on/off
-// 1-7      = EQ bands 0-6
-// 8        = Comp on/off
-// 9        = Comp threshold
-// 10       = Comp ratio
-// 11       = Comp attack
-// 12       = Comp release
-// 13       = Comp makeup
-const effectsRowCount = 14
+// 0        = Mic volume
+// 1        = Speaker volume
+// 2        = EQ on/off
+// 3-9      = EQ bands 0-6
+// 10       = Comp on/off
+// 11       = Comp threshold
+// 12       = Comp ratio
+// 13       = Comp attack
+// 14       = Comp release
+// 15       = Comp makeup
+const effectsRowCount = 16
 
 // NewAudioCallModel creates a new call overlay bound to the given call.
 func NewAudioCallModel(call *ActiveCall) AudioCallModel {
@@ -72,6 +83,18 @@ func (m *AudioCallModel) SetEngine(e *audio.Engine) { m.engine = e }
 
 // SetConfigDir sets the directory for saving effect profiles.
 func (m *AudioCallModel) SetConfigDir(dir string) { m.configDir = dir }
+
+// SetMeterFlags sets the taskbar meter visibility flags from config.
+func (m *AudioCallModel) SetMeterFlags(showMic, showPeer bool) {
+	m.showMicMeter = showMic
+	m.showPeerMeter = showPeer
+}
+
+// ShowMicMeter returns whether the mic meter should show in the taskbar.
+func (m *AudioCallModel) ShowMicMeter() bool { return m.showMicMeter }
+
+// ShowPeerMeter returns whether the peer meter should show in the taskbar.
+func (m *AudioCallModel) ShowPeerMeter() bool { return m.showPeerMeter }
 
 // SetProfiles sets the available effect profiles.
 func (m *AudioCallModel) SetProfiles(p []audio.EffectProfile) { m.profiles = p }
@@ -142,6 +165,12 @@ func (m AudioCallModel) handleKey(msg tea.KeyMsg) (AudioCallModel, tea.Cmd) {
 				cmd = audioMeterTickCmd()
 			}
 			return m, cmd
+		case "1":
+			m.showMicMeter = !m.showMicMeter
+			return m, func() tea.Msg { return AudioCallMeterSettingMsg{ShowMic: m.showMicMeter, ShowPeer: m.showPeerMeter} }
+		case "2":
+			m.showPeerMeter = !m.showPeerMeter
+			return m, func() tea.Msg { return AudioCallMeterSettingMsg{ShowMic: m.showMicMeter, ShowPeer: m.showPeerMeter} }
 		case "q":
 			return m, func() tea.Msg { return AudioCallEndMsg{} }
 		case "esc":
@@ -157,26 +186,107 @@ func (m AudioCallModel) handleKey(msg tea.KeyMsg) (AudioCallModel, tea.Cmd) {
 func (m AudioCallModel) handleEffectsKey(key string) (AudioCallModel, tea.Cmd) {
 	chain := m.activeChain()
 
+	// Check if we're on an EQ band row (3-9).
+	onEQBand := m.effectsSel >= 3 && m.effectsSel <= 9
+
 	switch key {
 	case "esc":
+		if m.eqEditMode {
+			// First esc exits edit mode.
+			m.eqEditMode = false
+			return m, nil
+		}
 		m.showEffects = false
 		return m, nil
 	case "tab":
+		m.eqEditMode = false
 		m.effectsTab = (m.effectsTab + 1) % 2
 		m.effectsSel = 0
 		return m, nil
 	case "up", "k":
-		if m.effectsSel > 0 {
-			m.effectsSel--
+		if onEQBand && m.eqEditMode && chain != nil {
+			m.adjustParam(chain, m.effectsSel, +1)
+		} else if onEQBand {
+			// Not editing — jump out of EQ bands to row above.
+			m.effectsSel = 2 // EQ on/off
 		} else {
-			m.effectsSel = effectsRowCount - 1
+			if m.effectsSel > 0 {
+				m.effectsSel--
+			} else {
+				m.effectsSel = effectsRowCount - 1
+			}
 		}
 		return m, nil
 	case "down", "j":
-		m.effectsSel++
-		if m.effectsSel >= effectsRowCount {
-			m.effectsSel = 0
+		if onEQBand && m.eqEditMode && chain != nil {
+			m.adjustParam(chain, m.effectsSel, -1)
+		} else if onEQBand {
+			// Not editing — jump out of EQ bands to row below.
+			m.effectsSel = 10 // Compressor on/off
+		} else {
+			m.effectsSel++
+			if m.effectsSel >= effectsRowCount {
+				m.effectsSel = 0
+			}
 		}
+		return m, nil
+	case "left", "h":
+		if onEQBand {
+			if m.eqEditMode {
+				// Edit mode: left decreases gain.
+				if chain != nil {
+					m.adjustParam(chain, m.effectsSel, -1)
+				}
+			} else {
+				// Browse mode: left moves to previous band.
+				if m.effectsSel > 3 {
+					m.effectsSel--
+				} else {
+					// At first band — leave EQ, go to row above.
+					m.effectsSel = 2
+				}
+			}
+		} else if chain != nil {
+			m.adjustParam(chain, m.effectsSel, -1)
+		}
+		return m, nil
+	case "right", "l":
+		if onEQBand {
+			if m.eqEditMode {
+				// Edit mode: right increases gain.
+				if chain != nil {
+					m.adjustParam(chain, m.effectsSel, +1)
+				}
+			} else {
+				// Browse mode: right moves to next band.
+				if m.effectsSel < 9 {
+					m.effectsSel++
+				} else {
+					// At last band — leave EQ, go to compressor.
+					m.effectsSel = 10
+				}
+			}
+		} else if chain != nil {
+			m.adjustParam(chain, m.effectsSel, +1)
+		}
+		return m, nil
+	case "enter", " ":
+		if onEQBand {
+			// Toggle EQ edit mode.
+			m.eqEditMode = !m.eqEditMode
+		} else if m.effectsSel == 2 && chain != nil {
+			chain.EQEnabled = !chain.EQEnabled
+		} else if m.effectsSel == 10 && chain != nil {
+			chain.CompEnabled = !chain.CompEnabled
+		}
+		return m, nil
+	case "pgup":
+		// Jump to volume section.
+		m.effectsSel = 0
+		return m, nil
+	case "pgdown":
+		// Jump to compressor section.
+		m.effectsSel = 10
 		return m, nil
 	case "v":
 		m.monitorMode = !m.monitorMode
@@ -185,18 +295,7 @@ func (m AudioCallModel) handleEffectsKey(key string) (AudioCallModel, tea.Cmd) {
 		}
 		return m, nil
 	case "p":
-		// Save current settings to the active profile.
 		m.saveCurrentProfile()
-		return m, nil
-	case "left", "h":
-		if chain != nil {
-			m.adjustParam(chain, m.effectsSel, -1)
-		}
-		return m, nil
-	case "right", "l":
-		if chain != nil {
-			m.adjustParam(chain, m.effectsSel, +1)
-		}
 		return m, nil
 	}
 	return m, nil
@@ -205,37 +304,59 @@ func (m AudioCallModel) handleEffectsKey(key string) (AudioCallModel, tea.Cmd) {
 func (m *AudioCallModel) adjustParam(chain *audio.EffectChain, row, dir int) {
 	switch {
 	case row == 0:
+		// Mic volume ±5%
+		if m.engine != nil {
+			m.engine.MicVolume += float32(dir) * 0.05
+			if m.engine.MicVolume < 0 {
+				m.engine.MicVolume = 0
+			}
+			if m.engine.MicVolume > 2.0 {
+				m.engine.MicVolume = 2.0
+			}
+		}
+	case row == 1:
+		// Speaker volume ±5%
+		if m.engine != nil {
+			m.engine.SpeakerVolume += float32(dir) * 0.05
+			if m.engine.SpeakerVolume < 0 {
+				m.engine.SpeakerVolume = 0
+			}
+			if m.engine.SpeakerVolume > 2.0 {
+				m.engine.SpeakerVolume = 2.0
+			}
+		}
+	case row == 2:
 		// EQ on/off toggle
 		chain.EQEnabled = !chain.EQEnabled
-	case row >= 1 && row <= 7:
+	case row >= 3 && row <= 9:
 		// EQ band gain ±0.5 dB
-		band := row - 1
+		band := row - 3
 		chain.EQ.Bands[band].SetGain(chain.EQ.Bands[band].Gain + float32(dir)*0.5)
-	case row == 8:
+	case row == 10:
 		// Comp on/off toggle
 		chain.CompEnabled = !chain.CompEnabled
-	case row == 9:
+	case row == 11:
 		// Threshold ±1 dB
 		chain.Comp.Threshold += float32(dir) * 1.0
-	case row == 10:
+	case row == 12:
 		// Ratio ±0.5
 		chain.Comp.Ratio += float32(dir) * 0.5
 		if chain.Comp.Ratio < 1 {
 			chain.Comp.Ratio = 1
 		}
-	case row == 11:
+	case row == 13:
 		// Attack ±5 ms
 		chain.Comp.AttackMs += float32(dir) * 5.0
 		if chain.Comp.AttackMs < 0.1 {
 			chain.Comp.AttackMs = 0.1
 		}
-	case row == 12:
+	case row == 14:
 		// Release ±5 ms
 		chain.Comp.ReleaseMs += float32(dir) * 5.0
 		if chain.Comp.ReleaseMs < 1 {
 			chain.Comp.ReleaseMs = 1
 		}
-	case row == 13:
+	case row == 15:
 		// Makeup ±0.5 dB
 		chain.Comp.MakeupGain += float32(dir) * 0.5
 	}
@@ -308,7 +429,18 @@ func (m AudioCallModel) viewMain() string {
 		b.WriteString("  Mic: " + accentStyle.Render(micStatus) + "\n")
 		b.WriteString("  Peer: " + accentStyle.Render(peerStatus) + "\n\n")
 
-		b.WriteString(dimStyle.Render("  m: mute"+HintSep+"e: effects") + "\n")
+		micMeterLabel := "off"
+		if m.showMicMeter {
+			micMeterLabel = "on"
+		}
+		peerMeterLabel := "off"
+		if m.showPeerMeter {
+			peerMeterLabel = "on"
+		}
+		b.WriteString("  Taskbar mic meter: " + accentStyle.Render(micMeterLabel) + "  (1 to toggle)\n")
+		b.WriteString("  Taskbar peer meter: " + accentStyle.Render(peerMeterLabel) + "  (2 to toggle)\n\n")
+
+		b.WriteString(dimStyle.Render("  m: mute"+HintSep+"e: effects"+HintSep+"1/2: meters") + "\n")
 		b.WriteString(dimStyle.Render("  Enter: chat"+HintSep+"q: end call") + "\n")
 		b.WriteString(dimStyle.Render("  " + FooterHintClose))
 
@@ -355,6 +487,64 @@ func (m AudioCallModel) viewEffects() string {
 	if chain == nil {
 		b.WriteString(dimStyle.Render("  No audio engine active") + "\n")
 	} else {
+		// ── Audio level meters at top ──
+		if m.engine != nil {
+			micLevel := m.engine.MicLevel
+			spkLevel := m.engine.SpeakerLevel
+			muted := m.call != nil && m.call.Muted
+
+			micLabel := "  🎤 Mic     "
+			micBar := audio.MeterBar(micLevel, 35, 60)
+			micVal := fmt.Sprintf("  %5.1f dB", micLevel)
+			if muted {
+				micLabel = "  🔇 Mic     "
+				// Show meter in grey when muted (still live, just not sending).
+				b.WriteString(dimStyle.Render(micLabel) + " " + dimStyle.Render(micBar) + dimStyle.Render(micVal+" (muted)") + "\n")
+			} else {
+				b.WriteString(dimStyle.Render(micLabel) + " " + accentStyle.Render(micBar) + dimStyle.Render(micVal) + "\n")
+			}
+
+			spkBar := audio.MeterBar(spkLevel, 35, 60)
+			spkVal := fmt.Sprintf("  %5.1f dB", spkLevel)
+			b.WriteString(dimStyle.Render("  🔊 Speaker ") + " " + accentStyle.Render(spkBar) + dimStyle.Render(spkVal) + "\n")
+			b.WriteString("\n")
+		}
+
+		// ── Volume controls ──
+		b.WriteString(dimStyle.Render("  ── Volume ──") + "\n\n")
+		if m.engine != nil {
+			// Mic volume slider
+			micVol := m.engine.MicVolume
+			micPct := int(micVol * 100)
+			micBar := renderSlider(micVol, 2.0, 30)
+			cursor := "  "
+			if m.effectsSel == 0 {
+				cursor = selStyle.Render("> ")
+			}
+			micLabel := fmt.Sprintf("🎤 Mic Volume    %s  %3d%%", micBar, micPct)
+			if m.effectsSel == 0 {
+				b.WriteString(cursor + selStyle.Render(micLabel) + "\n")
+			} else {
+				b.WriteString(cursor + accentStyle.Render(micLabel) + "\n")
+			}
+
+			// Speaker volume slider
+			spkVol := m.engine.SpeakerVolume
+			spkPct := int(spkVol * 100)
+			spkBar := renderSlider(spkVol, 2.0, 30)
+			cursor = "  "
+			if m.effectsSel == 1 {
+				cursor = selStyle.Render("> ")
+			}
+			spkLabel := fmt.Sprintf("🔊 Speaker Vol   %s  %3d%%", spkBar, spkPct)
+			if m.effectsSel == 1 {
+				b.WriteString(cursor + selStyle.Render(spkLabel) + "\n")
+			} else {
+				b.WriteString(cursor + accentStyle.Render(spkLabel) + "\n")
+			}
+			b.WriteString("\n")
+		}
+
 		// ── EQ section ──
 		eqStatus := "OFF"
 		eqStatusStyle := errStyle
@@ -363,7 +553,7 @@ func (m AudioCallModel) viewEffects() string {
 			eqStatusStyle = accentStyle
 		}
 		cursor := "  "
-		if m.effectsSel == 0 {
+		if m.effectsSel == 2 {
 			cursor = selStyle.Render("> ")
 		}
 		b.WriteString(cursor + dimStyle.Render("── 7-Band Equalizer ──") + " " + eqStatusStyle.Render("["+eqStatus+"]") + "\n\n")
@@ -372,7 +562,7 @@ func (m AudioCallModel) viewEffects() string {
 		b.WriteString("  ")
 		for i, band := range chain.EQ.Bands {
 			label := fmt.Sprintf("%-7s", band.Label)
-			if m.effectsSel == i+1 {
+			if m.effectsSel == i+3 {
 				b.WriteString(selStyle.Render(label))
 			} else {
 				b.WriteString(dimStyle.Render(label))
@@ -384,7 +574,7 @@ func (m AudioCallModel) viewEffects() string {
 		b.WriteString("  ")
 		for i, band := range chain.EQ.Bands {
 			val := fmt.Sprintf("%+5.1f  ", band.Gain)
-			if m.effectsSel == i+1 {
+			if m.effectsSel == i+3 {
 				b.WriteString(selStyle.Render(val))
 			} else {
 				b.WriteString(accentStyle.Render(val))
@@ -404,7 +594,7 @@ func (m AudioCallModel) viewEffects() string {
 			} else {
 				indicator = "  ●    "
 			}
-			if m.effectsSel == i+1 {
+			if m.effectsSel == i+3 {
 				b.WriteString(selStyle.Render(indicator))
 			} else {
 				b.WriteString(dimStyle.Render(indicator))
@@ -413,9 +603,13 @@ func (m AudioCallModel) viewEffects() string {
 		b.WriteString("\n")
 
 		// Selected band detail
-		if m.effectsSel >= 1 && m.effectsSel <= 7 {
-			band := chain.EQ.Bands[m.effectsSel-1]
-			b.WriteString("\n  " + selStyle.Render(fmt.Sprintf("  %s: %+.1f dB  (←/→ adjust ±0.5 dB)", band.Label, band.Gain)) + "\n")
+		if m.effectsSel >= 3 && m.effectsSel <= 9 {
+			band := chain.EQ.Bands[m.effectsSel-3]
+			if m.eqEditMode {
+				b.WriteString("\n  " + selStyle.Render(fmt.Sprintf("  ✎ %s: %+.1f dB  (↑/↓/←/→ adjust · Enter: done)", band.Label, band.Gain)) + "\n")
+			} else {
+				b.WriteString("\n  " + dimStyle.Render(fmt.Sprintf("    %s: %+.1f dB  (←/→ band · Enter: edit)", band.Label, band.Gain)) + "\n")
+			}
 		}
 		b.WriteString("\n")
 
@@ -427,7 +621,7 @@ func (m AudioCallModel) viewEffects() string {
 			compStatusStyle = accentStyle
 		}
 		cursor = "  "
-		if m.effectsSel == 8 {
+		if m.effectsSel == 10 {
 			cursor = selStyle.Render("> ")
 		}
 		b.WriteString(cursor + dimStyle.Render("── Compressor ──") + " " + compStatusStyle.Render("["+compStatus+"]") + "\n\n")
@@ -439,11 +633,11 @@ func (m AudioCallModel) viewEffects() string {
 			row   int
 		}
 		params := []compParam{
-			{"Threshold", fmt.Sprintf("%.1f dB", chain.Comp.Threshold), 9},
-			{"Ratio", fmt.Sprintf("%.1f:1", chain.Comp.Ratio), 10},
-			{"Attack", fmt.Sprintf("%.1f ms", chain.Comp.AttackMs), 11},
-			{"Release", fmt.Sprintf("%.1f ms", chain.Comp.ReleaseMs), 12},
-			{"Makeup", fmt.Sprintf("%.1f dB", chain.Comp.MakeupGain), 13},
+			{"Threshold", fmt.Sprintf("%.1f dB", chain.Comp.Threshold), 11},
+			{"Ratio", fmt.Sprintf("%.1f:1", chain.Comp.Ratio), 12},
+			{"Attack", fmt.Sprintf("%.1f ms", chain.Comp.AttackMs), 13},
+			{"Release", fmt.Sprintf("%.1f ms", chain.Comp.ReleaseMs), 14},
+			{"Makeup", fmt.Sprintf("%.1f dB", chain.Comp.MakeupGain), 15},
 		}
 
 		// Render in two columns where possible
@@ -500,7 +694,7 @@ func (m AudioCallModel) viewEffects() string {
 		monLabel = "v: meters off"
 	}
 	b.WriteString(dimStyle.Render("  Tab: switch chain" + HintSep + "p: save profile" + HintSep + monLabel) + "\n")
-	b.WriteString(dimStyle.Render("  ←/→: adjust" + HintSep + "↑/↓: select" + HintSep + FooterHintBack + " to call"))
+	b.WriteString(dimStyle.Render("  EQ: ←/→ band, ↑/↓ gain" + HintSep + "Comp: ↑/↓ select, ←/→ adjust" + HintSep + FooterHintBack))
 
 	box := m.renderBox(title, b.String(), 80)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
@@ -540,9 +734,32 @@ func audioCallTimerTickCmd() tea.Cmd {
 	})
 }
 
-// audioMeterTickCmd returns a command that ticks at ~20Hz for meter updates.
+// renderSlider draws a horizontal slider bar for a 0.0–max value.
+func renderSlider(value, max float32, width int) string {
+	if value < 0 {
+		value = 0
+	}
+	if value > max {
+		value = max
+	}
+	filled := int((value / max) * float32(width))
+	if filled > width {
+		filled = width
+	}
+	bar := ""
+	for i := 0; i < width; i++ {
+		if i < filled {
+			bar += "█"
+		} else {
+			bar += "░"
+		}
+	}
+	return bar
+}
+
+// audioMeterTickCmd returns a command that ticks at ~33Hz for meter updates.
 func audioMeterTickCmd() tea.Cmd {
-	return tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
+	return tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
 		return AudioMeterTickMsg{}
 	})
 }
