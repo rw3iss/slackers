@@ -683,12 +683,12 @@ func (m *MessageViewModel) SetItemSpacing(n int) {
 func (m *MessageViewModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	// Viewport height = pane height - 1 header - 2 border/padding.
-	// The pane renders with RoundedBorder (2 rows) + header (1 row)
+	// Viewport height = pane height - 2 header rows (title + blank) - 2 border/padding.
+	// The pane renders with RoundedBorder (2 rows) + header (2 rows)
 	// inside a lipgloss.Height(h) content area. The viewport must
 	// be shorter than h to avoid content extending past the bottom
 	// border.
-	vpH := h - 3
+	vpH := h - 4
 	if vpH < 1 {
 		vpH = 1
 	}
@@ -724,10 +724,10 @@ func (m *MessageViewModel) SetFocused(focused bool) {
 // ReactionAtClick returns the (messageID, emoji) of a reaction badge at the click position, or empty.
 // x and y are relative to the messages pane (0 = pane left edge / top).
 func (m *MessageViewModel) ReactionAtClick(x, y int) (string, string) {
-	// Pane layout: top border (1) + header line (1) + viewport content.
+	// Pane layout: top border (1) + header line (1) + blank line (1) + viewport content.
 	// Left side: border (1) + padding (1) + content.
 	contentX := x - 2
-	absLine := y - 2 + m.viewport.YOffset
+	absLine := y - 3 + m.viewport.YOffset
 	const xBuffer = 2 // extra forgiving cells on each side
 	// Accept clicks on the line above the reaction badge as well, so the
 	// "top half" of wide emoji glyphs (which often render slightly above
@@ -844,8 +844,8 @@ func (m *MessageViewModel) findMessagePreview(messageID string) string {
 // which also covers the extra blank lines added by message item spacing.
 func (m *MessageViewModel) ReplyLineMessageID(y int) string {
 	// Convert viewport y to absolute content line number.
-	// Pane chrome: top border (1) + header line (1) → subtract 2.
-	absLine := y - 2 + m.viewport.YOffset
+	// Pane chrome: top border (1) + header line (1) + blank line (1) → subtract 3.
+	absLine := y - 3 + m.viewport.YOffset
 	for _, off := range []int{0, -1, 1, 2} {
 		if id, ok := m.replyLineMsgID[absLine+off]; ok {
 			return id
@@ -861,8 +861,8 @@ func (m *MessageViewModel) ReplyLineMessageID(y int) string {
 // the clicked line to find the closest preceding message header (parent or reply).
 func (m *MessageViewModel) MessageAtClick(y int) (string, string) {
 	// Same pane chrome as FileAtClick / ReactionAtClick: top border (1)
-	// + header line (1) before the viewport content begins.
-	absLine := y - 2 + m.viewport.YOffset
+	// + header line (1) + blank line (1) before the viewport content begins.
+	absLine := y - 3 + m.viewport.YOffset
 	for i := absLine; i >= 0; i-- {
 		if id, ok := m.lineToMsgID[i]; ok {
 			return id, m.findMessagePreview(id)
@@ -876,9 +876,9 @@ func (m *MessageViewModel) FileAtClick(y int) *types.FileInfo {
 	content := m.viewport.View()
 	lines := strings.Split(content, "\n")
 
-	// y is relative to the message pane. Subtract border (1) + header line (1)
+	// y is relative to the message pane. Subtract border (1) + header line (1) + blank line (1)
 	// to map from screen Y to viewport content row.
-	lineIdx := y - 2
+	lineIdx := y - 3
 	if lineIdx < 0 || lineIdx >= len(lines) {
 		return nil
 	}
@@ -1187,7 +1187,7 @@ func friendCardDisplayName(card friends.ContactCard) string {
 // click before).
 func (m *MessageViewModel) FriendCardAtClick(x, y int) *friends.ContactCard {
 	contentX := x - 2
-	absLine := y - 2 + m.viewport.YOffset
+	absLine := y - 3 + m.viewport.YOffset
 	const xBuffer = 3
 	for _, h := range m.friendCardHits {
 		dy := h.line - absLine
@@ -2629,7 +2629,7 @@ func (m MessageViewModel) View() string {
 		header = headerLeft + strings.Repeat(" ", pad) + rightRendered
 	}
 
-	header += "\n"
+	header += "\n\n"
 	content := header + m.viewport.View()
 
 	style := MessagePaneStyle

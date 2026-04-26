@@ -90,6 +90,7 @@ const (
 	overlayAudioCall
 	overlayIncomingCall
 	overlayNotificationSettings
+	overlayChatOptions
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -237,6 +238,11 @@ type P2PReceivedMsg struct {
 	CallID     string
 	CallerName string
 	CallMuted  bool
+
+	// Profile carries the sender's JSON-encoded ContactCard, included in
+	// friend_request and friend_accept messages so each side can store the
+	// other's display name and email immediately on handshake.
+	Profile string
 }
 
 // SecureSessionReadyMsg signals that a secure session was established with a peer.
@@ -360,6 +366,7 @@ type Model struct {
 	msgOptions       MsgOptionsModel
 	sidebarOptions   SidebarOptionsModel
 	friendCardOpts   FriendCardOptionsModel
+	chatOptions      ChatOptionsModel
 	contactCardView  ContactCardViewModel
 	awayStatus       AwayStatusModel
 	emoteList        EmoteListModel
@@ -675,6 +682,7 @@ func NewModel(wsList []*workspace.Workspace, cfg *config.Config, version string,
 					Text:      "__" + msg.Type + "__",
 					PubKey:    pubKey,
 					Multiaddr: maddr,
+					Profile:   msg.Profile,
 				}
 			case secure.MsgTypeDisconnect:
 				p2pChan <- P2PReceivedMsg{
@@ -1416,7 +1424,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						x := 2
 						y := row + 1 // +1 for border
 						if m.channels.workspaceName != "" {
-							y++
+							y += 2 // workspace name header + blank line
 						}
 						m.sidebarOptions = NewSidebarOptions(ch.ID, ch.UserID, items, x, y)
 						m.sidebarOptions.SetSize(m.width, m.height)
@@ -1875,6 +1883,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.friendCardOpts, cmd = m.friendCardOpts.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayChatOptions {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.chatOptions, cmd = m.chatOptions.Update(msg)
 			return m, cmd
 		}
 		if m.overlay == overlayContactCardView {
@@ -3103,11 +3120,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// also re-run the friend-request handshake so the peer
 			// rebinds to the new identity in their friend store.
 			if msg.AlsoHandshake {
+				profile := m.myProfileJSON()
 				go func(uid string) {
 					req := secure.P2PMessage{
 						Type:     secure.MsgTypeFriendRequest,
 						Text:     m.secureMgr.OwnPublicKeyBase64() + "|" + m.p2pNode.Multiaddr(),
 						SenderID: uid,
+						Profile:  profile,
 					}
 					_ = m.p2pNode.SendMessage(uid, req)
 				}(f.UserID)
@@ -3180,6 +3199,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		uid := msg.UserID
 		multiaddr := msg.Multiaddr
 		name := msg.Name
+		profile := m.myProfileJSON()
 		go func() {
 			// Best-effort connect (may already be connected).
 			_ = m.p2pNode.ConnectToPeer(uid, multiaddr)
@@ -3187,6 +3207,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Type:     secure.MsgTypeFriendRequest,
 				Text:     m.secureMgr.OwnPublicKeyBase64() + "|" + m.p2pNode.Multiaddr(),
 				SenderID: uid,
+				Profile:  profile,
 			}
 			if err := m.p2pNode.SendMessage(uid, req); err == nil {
 				if m.notifStore != nil {
@@ -3557,6 +3578,98 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case ChatOptionsSelectMsg:
+		m.overlay = overlayNone
+		switch msg.Action {
+		case ChatActionViewContact:
+			friendID := msg.UserID
+			if friendID == "" {
+				friendID = strings.TrimPrefix(msg.ChannelID, "friend:")
+			}
+			if friendID == "" {
+				return m, nil
+			}
+			return m, func() tea.Msg {
+				return FriendsConfigOpenMsg{FriendID: friendID}
+			}
+		case ChatActionBrowseShared:
+			friendID := msg.UserID
+			if friendID == "" {
+				friendID = strings.TrimPrefix(msg.ChannelID, "friend:")
+			}
+			if friendID == "" {
+				return m, nil
+			}
+			friendName := friendID
+			if m.friendStore != nil {
+				if f := m.friendStore.Get(friendID); f != nil && f.Name != "" {
+					friendName = f.Name
+				}
+			}
+			return m, func() tea.Msg {
+				return RemoteBrowseOpenMsg{PeerUID: friendID, PeerName: friendName}
+			}
+		case ChatActionViewFiles:
+			chID := ""
+			if m.currentCh != nil {
+				chID = m.currentCh.ID
+			}
+			m.filesList = NewFilesListModel(m.slackSvc, chID, m.resolveChannelDisplay)
+			m.filesList.SetSize(m.width, m.height)
+			m.overlay = overlayFilesList
+			return m, loadFilesCmd(m.slackSvc, chID)
+		case ChatActionSendFile:
+			fbCfg := m.newFileBrowserCfg()
+			m.fileBrowser = NewFileBrowser(fbCfg)
+			m.fileBrowser.SetSize(m.width, m.height)
+			m.fbPurpose = fbPurposeAttach
+			m.overlay = overlayFileBrowser
+			return m, nil
+		case ChatActionAudioCall:
+			if m.activeCall != nil {
+				m.warning = "Already in a call"
+				return m, nil
+			}
+			callID := generateCallID()
+			friendName := ""
+			if m.friendStore != nil {
+				if f := m.friendStore.Get(msg.UserID); f != nil {
+					friendName = f.Name
+				}
+			}
+			if friendName == "" {
+				friendName = msg.UserID
+			}
+			m.activeCall = &ActiveCall{
+				CallID:   callID,
+				PeerID:   msg.UserID,
+				PeerName: friendName,
+				State:    CallStateRinging,
+				Outgoing: true,
+			}
+			m.initAudioCallModel()
+			m.audioCallModel.SetSize(m.width, m.height)
+			m.overlay = overlayAudioCall
+			if m.p2pNode != nil {
+				m.p2pNode.SendCallSignal(msg.UserID, secure.MsgTypeCallRequest, callID, m.cfg.MyName, false)
+			}
+			return m, nil
+		case ChatActionRename:
+			if m.currentCh == nil {
+				return m, nil
+			}
+			chName := m.currentCh.Name
+			currentAlias := ""
+			if m.cfg.ChannelAliases != nil {
+				currentAlias = m.cfg.ChannelAliases[m.currentCh.ID]
+			}
+			m.rename = NewRenameModel(m.currentCh.ID, chName, currentAlias)
+			m.rename.SetSize(m.width, m.height)
+			m.overlay = overlayRename
+			return m, nil
+		}
+		return m, nil
+
 	case FriendCardOptionsSelectMsg:
 		// Right-click → context menu choice on a friend pill.
 		// Always close the popup first; each branch decides where
@@ -3776,7 +3889,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.warning = "Game quit"
 		return m, nil
 
-	case gameTickMsg:
+	case gameTickMsg, gameInputTickMsg:
 		if m.overlay != overlayGame {
 			return m, nil
 		}
@@ -3915,6 +4028,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case AudioCallAcceptMsg:
 		if m.activeCall != nil && !m.activeCall.Outgoing && m.p2pNode != nil {
 			m.p2pNode.SendCallSignal(m.activeCall.PeerID, secure.MsgTypeCallAccept, m.activeCall.CallID, "", false)
+			if m.notifStore != nil {
+				m.notifStore.ClearAudioCall(m.activeCall.PeerID)
+			}
 			m.activeCall.State = CallStateActive
 			m.activeCall.StartTime = time.Now()
 			m.initAudioCallModel()
@@ -5800,17 +5916,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Handle friend request messages.
 		if msg.Text == "__friend_request__" {
+			// effectiveSenderID is the UserID we'll store for this peer.
+			// For brand-new inbound connections handleStream sets SenderID
+			// to "unknown" because the peer isn't in the slackMap yet.
+			// The Profile card carries a SlackerID we can use instead.
+			effectiveSenderID := msg.SenderID
 			senderName := msg.SenderID
-			if u, ok := m.users[msg.SenderID]; ok {
+			senderEmail := ""
+			if u, ok := m.users[msg.SenderID]; ok && u.DisplayName != "" {
 				senderName = u.DisplayName
 			}
+			if msg.Profile != "" {
+				var card friends.ContactCard
+				if err := json.Unmarshal([]byte(msg.Profile), &card); err == nil {
+					if card.Name != "" {
+						senderName = card.Name
+					}
+					senderEmail = card.Email
+					// Derive a stable UserID from the SlackerID when the
+					// transport-level ID is "unknown" (new inbound peer).
+					if (effectiveSenderID == "" || effectiveSenderID == "unknown") && card.SlackerID != "" {
+						effectiveSenderID = "slacker:" + card.SlackerID
+					}
+				}
+			}
+			// Last-resort: show a short hash of the SlackerID rather than
+			// the raw "unknown" string.
+			if senderName == "" || senderName == "unknown" || senderName == effectiveSenderID {
+				if effectiveSenderID != "" && effectiveSenderID != "unknown" {
+					senderName = effectiveSenderID
+				}
+			}
+			_ = senderEmail // used when auto-accepting below
 			// Auto-accept path: silently add the friend, send the
 			// accept response, and surface a status bar message.
 			// No notification is recorded (the connection is done).
 			if m.cfg != nil && m.cfg.AutoAcceptFriendRequests && m.friendStore != nil {
 				f := friends.Friend{
-					UserID:    msg.SenderID,
+					UserID:    effectiveSenderID,
 					Name:      senderName,
+					Email:     senderEmail,
 					PublicKey: msg.PubKey,
 					Multiaddr: msg.Multiaddr,
 					Online:    true,
@@ -5819,14 +5964,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.friendStore.Save()
 				m.channels.SetFriendChannels(m.buildFriendChannels())
 				if m.p2pNode != nil && m.secureMgr != nil {
+					profile := m.myProfileJSON()
 					go func(uid string) {
 						resp := secure.P2PMessage{
 							Type:     secure.MsgTypeFriendAccept,
 							Text:     m.secureMgr.OwnPublicKeyBase64() + "|" + m.p2pNode.Multiaddr(),
 							SenderID: uid,
+							Profile:  profile,
 						}
 						_ = m.p2pNode.SendMessage(uid, resp)
-					}(msg.SenderID)
+					}(effectiveSenderID)
 				}
 				m.warning = "Auto-accepted friend request from " + senderName
 				if m.p2pChan != nil {
@@ -5837,8 +5984,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Manual path: cache as a notification first so the user
 			// can find it later from the notifications view even if
 			// they dismiss the immediate modal.
-			m.recordFriendRequest(msg.SenderID, senderName, msg.PubKey, msg.Multiaddr)
-			m.friendRequest = NewIncomingFriendRequest(msg.SenderID, senderName, msg.PubKey, msg.Multiaddr)
+			m.recordFriendRequest(effectiveSenderID, senderName, msg.PubKey, msg.Multiaddr)
+			m.friendRequest = NewIncomingFriendRequest(effectiveSenderID, senderName, msg.PubKey, msg.Multiaddr)
 			m.friendRequest.SetSize(m.width, m.height)
 			m.overlay = overlayFriendRequest
 			if m.p2pChan != nil {
@@ -5849,13 +5996,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Text == "__friend_accept__" {
 			// Peer accepted our friend request — add them.
 			if m.friendStore != nil {
+				effectiveSenderID := msg.SenderID
 				senderName := msg.SenderID
-				if u, ok := m.users[msg.SenderID]; ok {
-					senderName = u.DisplayName
+				senderEmail := ""
+				// Prefer profile card embedded in the acceptance message.
+				if msg.Profile != "" {
+					var card friends.ContactCard
+					if err := json.Unmarshal([]byte(msg.Profile), &card); err == nil {
+						if card.Name != "" {
+							senderName = card.Name
+						}
+						senderEmail = card.Email
+						if (effectiveSenderID == "" || effectiveSenderID == "unknown") && card.SlackerID != "" {
+							effectiveSenderID = "slacker:" + card.SlackerID
+						}
+					}
+				}
+				// Fall back to Slack users map if card had no name.
+				if senderName == "" || senderName == msg.SenderID || senderName == "unknown" {
+					if u, ok := m.users[effectiveSenderID]; ok && u.DisplayName != "" {
+						senderName = u.DisplayName
+					}
 				}
 				f := friends.Friend{
-					UserID:    msg.SenderID,
+					UserID:    effectiveSenderID,
 					Name:      senderName,
+					Email:     senderEmail,
 					PublicKey: msg.PubKey,
 					Multiaddr: msg.Multiaddr,
 					Online:    true,
@@ -5866,7 +6032,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.warning = senderName + " accepted your friend request!"
 				// Drop any pending friend-request notification.
 				if m.notifStore != nil {
-					if m.notifStore.ClearFriendRequest(msg.SenderID) > 0 {
+					m.notifStore.ClearFriendRequest(effectiveSenderID)
+					if effectiveSenderID != msg.SenderID {
+						m.notifStore.ClearFriendRequest(msg.SenderID)
 					}
 				}
 			}
@@ -6095,11 +6263,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.p2pNode != nil && m.secureMgr != nil {
 			pubKey := m.secureMgr.OwnPublicKeyBase64()
 			multiaddr := m.p2pNode.Multiaddr()
+			profile := m.myProfileJSON()
 			go func() {
 				req := secure.P2PMessage{
 					Type:     secure.MsgTypeFriendRequest,
 					Text:     pubKey + "|" + multiaddr,
 					SenderID: msg.UserID,
+					Profile:  profile,
 				}
 				if err := m.p2pNode.SendMessage(msg.UserID, req); err != nil {
 					// Fallback: send invite via Slack DM.
@@ -6135,13 +6305,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = m.friendStore.Save()
 			m.channels.SetFriendChannels(m.buildFriendChannels())
 			m.warning = msg.Name + " added as friend!"
-			// Send accept response over P2P.
+			// Send accept response over P2P, including our profile so
+			// the requesting peer can learn our display name / email.
 			if m.p2pNode != nil && m.secureMgr != nil {
+				profile := m.myProfileJSON()
 				go func() {
 					resp := secure.P2PMessage{
 						Type:     secure.MsgTypeFriendAccept,
 						Text:     m.secureMgr.OwnPublicKeyBase64() + "|" + m.p2pNode.Multiaddr(),
 						SenderID: msg.UserID,
+						Profile:  profile,
 					}
 					_ = m.p2pNode.SendMessage(msg.UserID, resp)
 				}()
@@ -6369,6 +6542,9 @@ func (m Model) viewInner() string {
 		return m.audioCallModel.View()
 	case overlayNotificationSettings:
 		return m.notifSettings.View()
+	case overlayChatOptions:
+		base := m.renderBaseView()
+		return m.chatOptions.View(base)
 	}
 
 	// Normal view path: delegate to renderBaseView so the
@@ -6899,6 +7075,11 @@ func (m *Model) endCall() {
 		m.audioEngine.Stop()
 		m.audioEngine = nil
 	}
+	// Clear any audio-call notification for this peer — the user has
+	// seen and acted on it (accepted, rejected, or the call ended).
+	if m.notifStore != nil && m.activeCall != nil {
+		m.notifStore.ClearAudioCall(m.activeCall.PeerID)
+	}
 	// Record call in history.
 	if m.activeCall != nil && m.activeCall.State == CallStateActive {
 		dir := "outgoing"
@@ -7087,6 +7268,42 @@ func (m *Model) buildSidebarOptionsItems(ch types.Channel) []sidebarOptionsItem 
 		}
 	}
 	return items
+}
+
+// buildChatOptionsItems assembles the right-click context menu for the
+// chat/messages pane based on the current channel type.
+func (m *Model) buildChatOptionsItems() []chatOptionsItem {
+	if m.currentCh == nil {
+		return nil
+	}
+	ch := *m.currentCh
+	if ch.IsFriend {
+		items := []chatOptionsItem{
+			{"View Contact Info", ChatActionViewContact},
+		}
+		if m.friendStore != nil {
+			if f := m.friendStore.Get(ch.UserID); f != nil && f.HasSharedFolder {
+				items = append(items, chatOptionsItem{"Browse Shared Folder", ChatActionBrowseShared})
+			}
+		}
+		items = append(items,
+			chatOptionsItem{"View Files", ChatActionViewFiles},
+			chatOptionsItem{"Send File", ChatActionSendFile},
+		)
+		// Only offer audio call when the engine is ready and friend is online.
+		if m.activeCall == nil && m.friendStore != nil {
+			if f := m.friendStore.Get(ch.UserID); f != nil && f.Online {
+				items = append(items, chatOptionsItem{"Start Audio Call", ChatActionAudioCall})
+			}
+		}
+		return items
+	}
+	// Regular Slack channel.
+	return []chatOptionsItem{
+		{"Rename Channel", ChatActionRename},
+		{"Send File", ChatActionSendFile},
+		{"View Files", ChatActionViewFiles},
+	}
 }
 
 // friendPingTickCmd schedules the next friend-status ping. The

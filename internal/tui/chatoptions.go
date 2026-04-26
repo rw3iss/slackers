@@ -7,57 +7,53 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// SidebarOptionsAction represents a chosen action from the sidebar
-// channel context menu.
-type SidebarOptionsAction int
+// ChatOptionsAction represents a chosen action from the chat-pane context menu.
+type ChatOptionsAction int
 
 const (
-	SidebarActionNone SidebarOptionsAction = iota
-	SidebarActionHide
-	SidebarActionRename
-	SidebarActionInvite
-	SidebarActionViewContact
-	SidebarActionRemoveFriend
-	SidebarActionBrowseFiles
-	SidebarActionStartAudioCall
+	ChatActionNone ChatOptionsAction = iota
+	ChatActionViewContact
+	ChatActionBrowseShared
+	ChatActionViewFiles
+	ChatActionSendFile
+	ChatActionAudioCall
+	ChatActionRename
 )
 
-// SidebarOptionsSelectMsg signals which option the user chose from
-// the sidebar channel context menu. ChannelID is the sidebar
-// channel id (e.g. "CXXXXXX" for a Slack channel or "friend:slacker:..."
-// for a friend). UserID is filled in for DM / friend entries so the
-// invite / contact-info actions can route to the right person.
-type SidebarOptionsSelectMsg struct {
-	Action    SidebarOptionsAction
+// ChatOptionsSelectMsg is emitted when the user picks an entry from the
+// chat-pane right-click menu.
+type ChatOptionsSelectMsg struct {
+	Action    ChatOptionsAction
 	ChannelID string
 	UserID    string
 }
 
-type sidebarOptionsItem struct {
+type chatOptionsItem struct {
 	label  string
-	action SidebarOptionsAction
+	action ChatOptionsAction
 }
 
-// SidebarOptionsModel is a popup menu rendered next to a right-clicked
-// channel entry in the sidebar.
-type SidebarOptionsModel struct {
+// ChatOptionsModel is the right-click context menu for the chat/messages pane.
+type ChatOptionsModel struct {
 	channelID  string
 	userID     string
-	items      []sidebarOptionsItem
+	items      []chatOptionsItem
 	selected   int
-	x, y       int // anchor position (click coords)
-	finalX     int // computed render position after clamping
+	x, y       int
+	chatLeft   int // left boundary of the chat pane (inclusive)
+	chatRight  int // right boundary of the chat pane (inclusive)
+	chatTop    int
+	chatBottom int
+	finalX     int
 	finalY     int
 	boxW, boxH int
 	width      int
 	height     int
 }
 
-// NewSidebarOptions builds a popup for the given channel. The caller
-// decides which items to include based on channel type and friend
-// status — this function just takes them pre-assembled.
-func NewSidebarOptions(channelID, userID string, items []sidebarOptionsItem, x, y int) SidebarOptionsModel {
-	return SidebarOptionsModel{
+// NewChatOptions builds a context menu anchored at (x, y).
+func NewChatOptions(channelID, userID string, items []chatOptionsItem, x, y int) ChatOptionsModel {
+	return ChatOptionsModel{
 		channelID: channelID,
 		userID:    userID,
 		items:     items,
@@ -66,49 +62,59 @@ func NewSidebarOptions(channelID, userID string, items []sidebarOptionsItem, x, 
 	}
 }
 
-// SetSize measures the rendered popup against the terminal dimensions
-// and clamps its top-left anchor so the box stays fully visible.
-func (m *SidebarOptionsModel) SetSize(w, h int) {
+// SetBounds records the visible chat pane boundaries so SetSize can clamp
+// the popup inside them.
+func (m *ChatOptionsModel) SetBounds(chatLeft, chatTop, chatRight, chatBottom int) {
+	m.chatLeft = chatLeft
+	m.chatTop = chatTop
+	m.chatRight = chatRight
+	m.chatBottom = chatBottom
+}
+
+// SetSize computes the final render position, clamped so the popup never
+// overhangs the chat pane or the terminal edges.
+func (m *ChatOptionsModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
 	sample := m.renderBox()
 	m.boxH = strings.Count(sample, "\n") + 1
 	m.boxW = lipgloss.Width(sample)
 
+	// Horizontal: prefer click position, clamp within chat pane.
 	m.finalX = m.x
-	if m.finalX < 0 {
-		m.finalX = 0
+	if m.finalX < m.chatLeft {
+		m.finalX = m.chatLeft
 	}
-	if m.finalX+m.boxW > m.width {
-		m.finalX = m.width - m.boxW - 1
+	if m.finalX+m.boxW > m.chatRight+1 {
+		m.finalX = m.chatRight + 1 - m.boxW
 	}
-	if m.finalX < 0 {
-		m.finalX = 0
+	if m.finalX < m.chatLeft {
+		m.finalX = m.chatLeft
 	}
 
+	// Vertical: prefer click position, clamp within chat pane.
 	m.finalY = m.y
-	if m.finalY+m.boxH > m.height {
-		m.finalY = m.height - m.boxH - 1
+	if m.finalY+m.boxH > m.chatBottom {
+		m.finalY = m.chatBottom - m.boxH
 	}
-	if m.finalY < 0 {
-		m.finalY = 0
+	if m.finalY < m.chatTop {
+		m.finalY = m.chatTop
 	}
 }
 
-// ClickInside reports whether (x,y) is inside the popup box (with a
-// 1-cell buffer so edge clicks still register as "inside").
-func (m SidebarOptionsModel) ClickInside(x, y int) bool {
+// ClickInside returns true when (x, y) falls within the rendered popup.
+func (m ChatOptionsModel) ClickInside(x, y int) bool {
 	const buffer = 1
 	return x >= m.finalX-buffer && x < m.finalX+m.boxW+buffer &&
 		y >= m.finalY-buffer && y < m.finalY+m.boxH+buffer
 }
 
-func (m SidebarOptionsModel) renderBox() string {
+func (m ChatOptionsModel) renderBox() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Channel"))
+	b.WriteString(titleStyle.Render("Chat"))
 	b.WriteString("\n")
 	for i, item := range m.items {
 		b.WriteString("\n")
@@ -124,8 +130,7 @@ func (m SidebarOptionsModel) renderBox() string {
 	b.WriteString("\n")
 	b.WriteString(dimStyle.Render("↑↓ Enter Esc"))
 
-	// Box wide enough to fit the longest item plus cursor + padding.
-	maxLen := len("Channel")
+	maxLen := len("Chat")
 	for _, it := range m.items {
 		if l := len(it.label) + 2; l > maxLen {
 			maxLen = l
@@ -140,7 +145,7 @@ func (m SidebarOptionsModel) renderBox() string {
 	return boxStyle.Render(b.String())
 }
 
-func (m SidebarOptionsModel) Update(msg tea.Msg) (SidebarOptionsModel, tea.Cmd) {
+func (m ChatOptionsModel) Update(msg tea.Msg) (ChatOptionsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -158,7 +163,7 @@ func (m SidebarOptionsModel) Update(msg tea.Msg) (SidebarOptionsModel, tea.Cmd) 
 			}
 			item := m.items[m.selected]
 			return m, func() tea.Msg {
-				return SidebarOptionsSelectMsg{
+				return ChatOptionsSelectMsg{
 					Action:    item.action,
 					ChannelID: m.channelID,
 					UserID:    m.userID,
@@ -167,17 +172,15 @@ func (m SidebarOptionsModel) Update(msg tea.Msg) (SidebarOptionsModel, tea.Cmd) 
 		}
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-			// Items each span 2 rows (blank line before each). The
-			// -3 offset (vs. -2 in MsgOptionsModel) shifts the hit
-			// area down by 1 row so clicks on an item label land
-			// on that item instead of the one above it.
+			// Each item spans 2 rows (blank line before it). Offset of 3
+			// accounts for: border (1) + title line (1) + blank gap (1).
 			delta := msg.Y - m.finalY - 3
 			row := delta / 2
 			if row >= 0 && row < len(m.items) {
 				m.selected = row
 				item := m.items[row]
 				return m, func() tea.Msg {
-					return SidebarOptionsSelectMsg{
+					return ChatOptionsSelectMsg{
 						Action:    item.action,
 						ChannelID: m.channelID,
 						UserID:    m.userID,
@@ -189,8 +192,9 @@ func (m SidebarOptionsModel) Update(msg tea.Msg) (SidebarOptionsModel, tea.Cmd) 
 	return m, nil
 }
 
-// View overlays the popup onto bgContent at its clamped anchor.
-func (m SidebarOptionsModel) View(bgContent string) string {
+// View overlays the popup onto bgContent at the clamped anchor position,
+// preserving background content to the left and right of the popup.
+func (m ChatOptionsModel) View(bgContent string) string {
 	box := m.renderBox()
 	boxLines := strings.Split(box, "\n")
 	posX := m.finalX

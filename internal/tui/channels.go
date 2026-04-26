@@ -867,7 +867,7 @@ func (m ChannelListModel) View() string {
 	}
 	wsHeaderLines := 0
 	if wsHeader != "" {
-		wsHeaderLines = 1
+		wsHeaderLines = 2
 	}
 
 	// Options hint takes 1 line when a channel (not header) is selected.
@@ -893,7 +893,7 @@ func (m ChannelListModel) View() string {
 	var b strings.Builder
 	if wsHeader != "" {
 		b.WriteString(wsHeader)
-		b.WriteString("\n")
+		b.WriteString("\n\n")
 	}
 	for i := start; i < end; i++ {
 		b.WriteString(lines[i].text)

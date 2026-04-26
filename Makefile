@@ -13,8 +13,11 @@ build:
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME)
 
-install:
-	bash scripts/install.sh
+install: build
+	@mkdir -p ~/.local/bin
+	@cp $(BUILD_DIR)/$(BINARY_NAME) ~/.local/bin/$(BINARY_NAME).new
+	@mv ~/.local/bin/$(BINARY_NAME).new ~/.local/bin/$(BINARY_NAME)
+	@echo "Installed ~/.local/bin/$(BINARY_NAME)"
 
 uninstall:
 	bash scripts/uninstall.sh

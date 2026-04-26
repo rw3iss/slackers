@@ -30,8 +30,14 @@ type GameOverlayCloseMsg struct{}
 // GameOverlayQuitMsg fully quits the game (no background).
 type GameOverlayQuitMsg struct{}
 
-// gameTickMsg drives the game loop.
+// gameTickMsg drives the game loop (gravity, snake movement).
 type gameTickMsg struct{}
+
+// gameInputTickMsg drives the fast input polling loop for tetris.
+// Movement keys are not executed on KeyMsg — they just record the
+// latest key. This tick applies the latest key at a fixed rate,
+// preventing OS key-repeat from building up a queue.
+type gameInputTickMsg struct{}
 
 // GameSettings holds user-configurable game parameters.
 type GameSettings struct {
@@ -67,10 +73,11 @@ type GameOverlayModel struct {
 	width    int
 	height   int
 	settings GameSettings
-	// Input throttle: allow one movement per tick interval.
-	// Immediate execution for responsiveness, but rate-limited
-	// so buffered key repeats can't pile up.
-	lastMoveAt time.Time
+	// Polled input for tetris: KeyMsg just records the latest key;
+	// gameInputTickMsg applies it at a fixed rate (~50ms). This
+	// prevents OS key-repeat from queuing up dozens of moves.
+	heldKey   string    // latest movement key ("left", "right", etc.) or ""
+	heldKeyAt time.Time // when heldKey was last refreshed by a KeyMsg
 	// Settings menu state.
 	showSettings   bool
 	settingSel     int // 0=size, 1=speed, 2=save, 3=cancel
@@ -210,6 +217,30 @@ func (m GameOverlayModel) TickCmd() tea.Cmd {
 	})
 }
 
+// InputTickCmd schedules the next fast input poll for tetris movement.
+func (m GameOverlayModel) InputTickCmd() tea.Cmd {
+	return tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
+		return gameInputTickMsg{}
+	})
+}
+
+// applyHeldKey executes the current held movement key on the tetris game.
+func (m *GameOverlayModel) applyHeldKey() {
+	if m.tetris == nil {
+		return
+	}
+	switch m.heldKey {
+	case "left", "a":
+		m.tetris.MoveLeft()
+	case "right", "d":
+		m.tetris.MoveRight()
+	case "up", "w":
+		m.tetris.Rotate()
+	case "down", "s":
+		m.tetris.Tick()
+	}
+}
+
 func (m GameOverlayModel) isGameOver() bool {
 	if m.snake != nil {
 		return m.snake.IsGameOver()
@@ -242,6 +273,7 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			m.settingSel = 0
 			m.settingEditing = false
 			m.paused = true
+			m.heldKey = ""
 			return m, nil
 		case "esc":
 			// Escape does nothing in game — only closes settings.
@@ -250,6 +282,7 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			// Space and P both toggle pause.
 			if !m.isGameOver() {
 				m.paused = !m.paused
+				m.heldKey = ""
 				if !m.paused {
 					return m, m.TickCmd()
 				}
@@ -278,38 +311,48 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 				}
 			}
 			if m.tetris != nil {
-				// Rate-limit movement to one per 50ms. This is
-				// fast enough to feel responsive when holding a key,
-				// but slow enough that only ~2 extra moves can
-				// buffer after release (cleared within 100ms).
-				now := time.Now()
-				moved := false
-				if now.Sub(m.lastMoveAt) >= 50*time.Millisecond {
-					switch key {
-					case "left", "a":
-						m.tetris.MoveLeft()
-						moved = true
-					case "right", "d":
-						m.tetris.MoveRight()
-						moved = true
-					case "up", "w":
-						m.tetris.Rotate()
-						moved = true
-					case "down", "s":
-						m.tetris.Tick()
-						moved = true
+				// Movement keys are NOT executed here. We just
+				// record the latest key; gameInputTickMsg applies
+				// it at a fixed 50ms rate. This prevents OS
+				// key-repeat events from building a movement queue.
+				switch key {
+				case "left", "a", "right", "d", "up", "w", "down", "s":
+					wasEmpty := m.heldKey == ""
+					m.heldKey = key
+					m.heldKeyAt = time.Now()
+					if wasEmpty {
+						// First press: apply immediately for
+						// responsiveness, then start polling.
+						m.applyHeldKey()
+						return m, m.InputTickCmd()
 					}
-				}
-				if moved {
-					m.lastMoveAt = now
-				}
-				// Hard drop always executes (one-shot).
-				if key == "enter" {
+				case "enter":
+					// Hard drop always executes (one-shot).
 					m.tetris.Drop()
 				}
 			}
 		}
 		return m, nil
+
+	case gameInputTickMsg:
+		// Fast input poll for tetris: apply the held key if it's
+		// still fresh (key repeat events keep refreshing heldKeyAt).
+		// Once the key is released, repeat events stop and the
+		// held key goes stale after ~120ms, ending the poll loop.
+		if m.tetris == nil || m.paused || m.showSettings || m.isGameOver() {
+			m.heldKey = ""
+			return m, nil
+		}
+		if m.heldKey == "" {
+			return m, nil
+		}
+		if time.Since(m.heldKeyAt) > 120*time.Millisecond {
+			// Key was released — stop polling.
+			m.heldKey = ""
+			return m, nil
+		}
+		m.applyHeldKey()
+		return m, m.InputTickCmd()
 
 	case gameTickMsg:
 		if m.paused || m.showSettings {

@@ -136,6 +136,12 @@ type P2PMessage struct {
 	CallID     string `json:"call_id,omitempty"`
 	CallerName string `json:"caller_name,omitempty"`
 	CallMuted  bool   `json:"call_muted,omitempty"`
+
+	// Profile carries the sender's contact card as a JSON-encoded
+	// friends.ContactCard. Included in friend_request and friend_accept
+	// messages so each side learns the other's display name and email
+	// immediately upon the handshake, without waiting for a profile_sync.
+	Profile string `json:"profile,omitempty"`
 }
 
 // P2PNode manages the libp2p host and peer connections.

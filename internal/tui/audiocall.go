@@ -437,8 +437,8 @@ func (m AudioCallModel) viewMain() string {
 		if m.showPeerMeter {
 			peerMeterLabel = "on"
 		}
-		b.WriteString("  Taskbar mic meter: " + accentStyle.Render(micMeterLabel) + "  (1 to toggle)\n")
-		b.WriteString("  Taskbar peer meter: " + accentStyle.Render(peerMeterLabel) + "  (2 to toggle)\n\n")
+		b.WriteString("  Mic meter:  " + accentStyle.Render(micMeterLabel) + "  (press 1 to toggle)\n")
+		b.WriteString("  Peer meter: " + accentStyle.Render(peerMeterLabel) + "  (press 2 to toggle)\n\n")
 
 		b.WriteString(dimStyle.Render("  m: mute"+HintSep+"e: effects"+HintSep+"1/2: meters") + "\n")
 		b.WriteString(dimStyle.Render("  Enter: chat"+HintSep+"q: end call") + "\n")
@@ -449,7 +449,7 @@ func (m AudioCallModel) viewMain() string {
 		b.WriteString(dimStyle.Render("  Ending..."))
 	}
 
-	box := m.renderBox(title, b.String(), 36)
+	box := m.renderBox(title, b.String(), 52)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
@@ -700,28 +700,39 @@ func (m AudioCallModel) viewEffects() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
-func (m AudioCallModel) renderBox(title, content string, width int) string {
+func (m AudioCallModel) renderBox(title, content string, minWidth int) string {
 	titleLine := " " + title + " "
+
+	// Pad each content line to at least minWidth visible cells so the box
+	// expands to the desired width without relying on lipgloss Width() —
+	// which can interact poorly with pre-ANSI-escaped sub-strings and
+	// produce narrower boxes than expected.
+	// Prepend a plain-space line of exactly minWidth cells to guarantee the
+	// box expands to at least that width. No ANSI sequences, no Width() on
+	// the style — lipgloss simply fits the box to its widest content line.
+	padded := strings.Repeat(" ", minWidth-10) + "\n" + content
+
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorderActive).
 		Padding(1, 2).
-		Width(width).
-		Render(content)
+		Render(padded)
 
-	// Replace top border segment with the title.
-	lines := strings.SplitN(box, "\n", 2)
-	if len(lines) == 2 {
-		topBorder := lines[0]
+	// Replace the top border with a title-inlaid version.
+	// We rebuild it from scratch using visual widths so ANSI escape bytes in
+	// the border string never skew the column arithmetic.
+	boxLines := strings.SplitN(box, "\n", 2)
+	if len(boxLines) == 2 {
+		visualWidth := lipgloss.Width(boxLines[0])
 		titleRendered := lipgloss.NewStyle().Bold(true).Foreground(ColorBorderActive).Render(titleLine)
-		if len(topBorder) > 4 {
-			runeTop := []rune(topBorder)
-			prefix := string(runeTop[:2])
-			suffixStart := 2 + len([]rune(titleLine))
-			if suffixStart < len(runeTop) {
-				box = prefix + titleRendered + string(runeTop[suffixStart:]) + "\n" + lines[1]
-			}
+		titleVisualW := lipgloss.Width(titleLine)
+		borderStyle := lipgloss.NewStyle().Foreground(ColorBorderActive)
+		dashCount := visualWidth - 1 - titleVisualW - 1
+		if dashCount < 0 {
+			dashCount = 0
 		}
+		newTop := borderStyle.Render("╭") + titleRendered + borderStyle.Render(strings.Repeat("─", dashCount)+"╮")
+		box = newTop + "\n" + boxLines[1]
 	}
 
 	return box

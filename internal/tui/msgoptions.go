@@ -220,7 +220,8 @@ func (m MsgOptionsModel) View(bgContent string) string {
 		if row >= len(bgLines) {
 			break
 		}
-		bgLines[row] = ansiTruncatePad(bgLines[row], posX) + line
+		lineW := lipgloss.Width(line)
+		bgLines[row] = ansiTruncatePad(bgLines[row], posX) + line + ansiAfterCells(bgLines[row], posX+lineW)
 	}
 
 	return strings.Join(bgLines, "\n")
@@ -289,4 +290,38 @@ func ansiTruncatePad(s string, visualW int) string {
 		visiblePos++
 	}
 	return out.String()
+}
+
+// ansiAfterCells returns the portion of s that starts at visual column
+// startCol, prepended with an ANSI reset so inherited colour from the
+// skipped prefix doesn't leak into the returned segment. Used by popup
+// overlay renderers to restore background content to the right of the
+// popup box.
+func ansiAfterCells(s string, startCol int) string {
+	if startCol <= 0 {
+		return s
+	}
+	visPos := 0
+	inEsc := false
+	for i, r := range s {
+		if r == '\x1b' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		w := runewidth.RuneWidth(r)
+		if w == 0 {
+			continue
+		}
+		if visPos >= startCol {
+			return "\x1b[0m" + s[i:]
+		}
+		visPos += w
+	}
+	return ""
 }

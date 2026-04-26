@@ -119,6 +119,10 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.friendsConfig, cmd = m.friendsConfig.Update(msg)
 		return m, cmd
+	case overlayNotifications:
+		var cmd tea.Cmd
+		m.notifs, cmd = m.notifs.Update(msg)
+		return m, cmd
 	case overlayEmojiPicker:
 		var cmd tea.Cmd
 		m.emojiPicker, cmd = m.emojiPicker.Update(msg)
@@ -157,6 +161,16 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.friendCardOpts, cmd = m.friendCardOpts.Update(msg)
+		return m, cmd
+	case overlayChatOptions:
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if !m.chatOptions.ClickInside(msg.X, msg.Y) {
+				m.overlay = overlayNone
+				return m, nil
+			}
+		}
+		var cmd tea.Cmd
+		m.chatOptions, cmd = m.chatOptions.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -274,6 +288,23 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.overlay = overlayMsgOptions
 					return m, nil
 				}
+
+				// 5. Empty space: chat-pane context menu.
+				if items := m.buildChatOptionsItems(); len(items) > 0 {
+					channelID := ""
+					userID := ""
+					if m.currentCh != nil {
+						channelID = m.currentCh.ID
+						userID = m.currentCh.UserID
+					}
+					chatLeft := m.sidebarWidth + 2
+					chatRight := m.width - 2
+					m.chatOptions = NewChatOptions(channelID, userID, items, x, y)
+					m.chatOptions.SetBounds(chatLeft, 1, chatRight, m.inputTop-1)
+					m.chatOptions.SetSize(m.width, m.height)
+					m.overlay = overlayChatOptions
+					return m, nil
+				}
 			}
 			// Sidebar right-click: identify the row and open the
 			// sidebar context menu. Uses ChannelByRow (non-mutating)
@@ -285,7 +316,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if !m.fullMode && y < m.inputTop && x < m.sidebarWidth+1 {
 				wsOff := 0
 				if m.channels.workspaceName != "" {
-					wsOff = 1
+					wsOff = 2
 				}
 				viewportY := y - 1 - wsOff
 				if viewportY < 0 {
@@ -374,10 +405,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 				// SelectByRow expects a viewport-relative row. The sidebar
 				// has a top border (1 row) before its content, and optionally
-				// a workspace name header (1 row) above the channel list.
+				// a workspace name header (2 rows: name + blank) above the channel list.
 				wsHeaderOffset := 0
 				if m.channels.workspaceName != "" {
-					wsHeaderOffset = 1
+					wsHeaderOffset = 2
 				}
 				viewportY := y - 1 - wsHeaderOffset
 				if viewportY < 0 {

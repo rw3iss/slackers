@@ -460,6 +460,32 @@ func (m *Model) sendRequestPending(peerUID string) {
 // fresh fields into their stored friend record for us without
 // overwriting their locally-chosen display name. Safe to call from
 // any goroutine; a nil/offline node is a silent no-op.
+// myProfileJSON builds a JSON-encoded ContactCard for the local user and
+// returns it as a string. Returns "" if the necessary fields are unavailable.
+// Falls back to the Slack display name when MyName is not explicitly configured.
+func (m *Model) myProfileJSON() string {
+	if m.cfg == nil || m.secureMgr == nil || m.p2pNode == nil {
+		return ""
+	}
+	pub := m.secureMgr.OwnPublicKeyBase64()
+	maddr := m.p2pNode.Multiaddr()
+	if pub == "" || maddr == "" {
+		return ""
+	}
+	name := m.cfg.MyName
+	if name == "" {
+		if u, ok := m.users[m.myUserID]; ok && u.DisplayName != "" {
+			name = u.DisplayName
+		}
+	}
+	card := friends.MyContactCard(m.cfg.SlackerID, name, m.cfg.MyEmail, pub, maddr)
+	raw, err := json.Marshal(card)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
 func (m *Model) sendProfileSync(peerUID string) {
 	if m.p2pNode == nil || m.secureMgr == nil || peerUID == "" {
 		return

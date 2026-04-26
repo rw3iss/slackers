@@ -239,6 +239,28 @@ func (s *Store) ClearChannel(channelID string) int {
 	return removed
 }
 
+// ClearAudioCall removes any pending audio-call notification for the
+// given peer user ID. Called when the user accepts, rejects, or
+// dismisses an incoming call so it doesn't linger in the list.
+func (s *Store) ClearAudioCall(peerUserID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var kept []Notification
+	removed := 0
+	for _, n := range s.items {
+		if n.Type == TypeAudioCall && n.UserID == peerUserID {
+			removed++
+			continue
+		}
+		kept = append(kept, n)
+	}
+	s.items = kept
+	if removed > 0 {
+		s.scheduleSaveLocked()
+	}
+	return removed
+}
+
 // ClearFriendRequest removes any pending friend-request notification
 // for the given peer user ID. Used after the user befriends them
 // (whether through the notification flow or any other path).

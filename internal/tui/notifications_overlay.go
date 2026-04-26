@@ -67,18 +67,19 @@ func (m NotificationsOverlayModel) SelectedNotification() notifications.Notifica
 	return m.items[idx]
 }
 
-// Update handles key events for the overlay.
+// Update handles key and mouse events for the overlay.
 func (m NotificationsOverlayModel) Update(msg tea.Msg) (NotificationsOverlayModel, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
 		// Page size follows the visible row estimate so PgUp/PgDn
 		// jump one visible page at a time.
 		m.list.PageSize = m.visibleEntries()
 		m.list.SetCount(len(m.items))
-		if m.list.HandleKey(keyMsg) {
+		if m.list.HandleKey(msg) {
 			m.ensureVisible()
 			return m, nil
 		}
-		switch keyMsg.String() {
+		switch msg.String() {
 		case "enter":
 			n := m.SelectedNotification()
 			if n.ID == "" {
@@ -95,6 +96,48 @@ func (m NotificationsOverlayModel) Update(msg tea.Msg) (NotificationsOverlayMode
 		case "esc":
 			return m, func() tea.Msg { return NotificationsCloseMsg{} }
 		}
+
+	case tea.MouseMsg:
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			// The box spans the full terminal height (boxHeight = m.height-4,
+			// plus 2 padding rows + 2 border rows = m.height), so boxTop = 0.
+			// Content starts at screen row 2 (1 border + 1 padding).
+			// Within the content: row 0 = title, row 1 = blank, rows 2+ = entries.
+			// Each entry occupies 4 rows: header, body, timestamp, blank separator.
+			const (
+				borderPad  = 2 // 1 border + 1 padding
+				titleLines = 2 // title row + blank row
+				entryRows  = 4 // header + body + timestamp + blank
+			)
+			contentRow := msg.Y - borderPad
+			if contentRow < titleLines {
+				return m, nil // click on title/blank area
+			}
+			vi := (contentRow - titleLines) / entryRows
+			vis := m.visibleEntries()
+			end := m.scrollOff + vis
+			if end > len(m.items) {
+				end = len(m.items)
+			}
+			if vi >= vis {
+				return m, nil
+			}
+			actualIdx := m.scrollOff + vi
+			if actualIdx < 0 || actualIdx >= len(m.items) {
+				return m, nil
+			}
+			n := m.items[actualIdx]
+			// Select the clicked item, then activate it (same as Enter).
+			m.list.SetCount(len(m.items))
+			for m.list.Current() < actualIdx {
+				m.list.HandleKey(tea.KeyMsg{Type: tea.KeyDown})
+			}
+			for m.list.Current() > actualIdx {
+				m.list.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+			}
+			m.ensureVisible()
+			return m, func() tea.Msg { return NotificationActivateMsg{Notif: n} }
+		}
 	}
 	return m, nil
 }
@@ -106,14 +149,14 @@ func (m *NotificationsOverlayModel) SetItems(items []notifications.Notification)
 }
 
 // visibleEntries estimates how many entries fit in the box. Each
-// entry renders as 3 lines (header + body + spacer).
+// entry renders as 4 lines (header + body + timestamp + blank separator).
 func (m NotificationsOverlayModel) visibleEntries() int {
 	overhead := 8 // border + title + footer + padding
 	avail := m.height - overhead
-	if avail < 3 {
+	if avail < 4 {
 		return 1
 	}
-	return avail / 3
+	return avail / 4
 }
 
 func (m *NotificationsOverlayModel) ensureVisible() {
@@ -155,7 +198,7 @@ func (m NotificationsOverlayModel) View() string {
 		sel := m.list.Current()
 		for i := m.scrollOff; i < end; i++ {
 			b.WriteString(m.renderEntry(m.items[i], i == sel))
-			b.WriteString("\n")
+			b.WriteString("\n\n")
 		}
 		if m.scrollOff > 0 {
 			b.WriteString(dimStyle.Render(fmt.Sprintf("  ... %d more above", m.scrollOff)))

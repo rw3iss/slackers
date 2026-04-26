@@ -496,10 +496,7 @@ func (m *Model) activateNotification(n notifications.Notification) tea.Cmd {
 			m.friendRequest.SetSize(m.width, m.height)
 			m.overlay = overlayFriendRequest
 		}
-		// The notification will be cleared when the user accepts /
-		// rejects from the modal (handled in the FriendRequestSentMsg
-		// + friend_accept paths) — we leave it intact for now so it
-		// stays in the list if the user just peeks.
+		m.notifStore.Remove(n.ID)
 		return nil
 
 	case notifications.TypeUnreadMessage, notifications.TypeReaction:
@@ -526,6 +523,9 @@ func (m *Model) activateNotification(n notifications.Notification) tea.Cmd {
 			return nil
 		}
 		return loadHistoryCmd(m.slackSvc, ch.ID)
+
+	default:
+		m.notifStore.Remove(n.ID)
 	}
 	return nil
 }
