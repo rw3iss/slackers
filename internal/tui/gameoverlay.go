@@ -64,6 +64,13 @@ func defaultGameSettings() GameSettings {
 	}
 }
 
+// gameRenderCache holds the last rendered View() output and a dirty
+// flag, behind a pointer so the value-receiver View() can read/write.
+type gameRenderCache struct {
+	view  string
+	dirty bool
+}
+
 // GameOverlayModel manages an active game session.
 type GameOverlayModel struct {
 	gameName string
@@ -73,11 +80,20 @@ type GameOverlayModel struct {
 	width    int
 	height   int
 	settings GameSettings
-	// Polled input for tetris: KeyMsg just records the latest key;
-	// gameInputTickMsg applies it at a fixed rate (~50ms). This
-	// prevents OS key-repeat from queuing up dozens of moves.
-	heldKey   string    // latest movement key ("left", "right", etc.) or ""
-	heldKeyAt time.Time // when heldKey was last refreshed by a KeyMsg
+	// Game-controller input for tetris. Uses flag-based release
+	// detection + a render cache so queued KeyMsg events drain
+	// in microseconds (no expensive re-render per event).
+	heldKey    string    // current movement key, or ""
+	keyAlive   bool      // true = at least one KeyMsg arrived since last poll
+	keyDownAt  time.Time // when this key was FIRST pressed (for repeat delay)
+	lastMoveAt time.Time // when we last applied a move (for repeat rate)
+	// Render cache: View() returns the cached string when viewDirty
+	// is false. Only game-state mutations (moves, ticks) set
+	// viewDirty = true. Queued KeyMsg repeat events do NOT dirty
+	// the cache, so Bubbletea's mandatory View() after each Update()
+	// is a near-instant cache hit — the queue drains in microseconds.
+	// Uses a pointer so the value-receiver View() can read/write it.
+	renderBuf *gameRenderCache
 	// Settings menu state.
 	showSettings   bool
 	settingSel     int // 0=size, 1=speed, 2=save, 3=cancel
@@ -88,10 +104,11 @@ type GameOverlayModel struct {
 // NewGameOverlay creates a game overlay for the given game name.
 func NewGameOverlay(name string, settings GameSettings, w, h int) GameOverlayModel {
 	m := GameOverlayModel{
-		gameName: name,
-		settings: settings,
-		width:    w,
-		height:   h,
+		gameName:  name,
+		settings:  settings,
+		width:     w,
+		height:    h,
+		renderBuf: &gameRenderCache{dirty: true},
 	}
 	m.initGame()
 	return m
@@ -187,6 +204,9 @@ func (m *GameOverlayModel) initGame() {
 func (m *GameOverlayModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
+	if m.renderBuf != nil {
+		m.renderBuf.dirty = true
+	}
 }
 
 func (m GameOverlayModel) baseSpeed() time.Duration {
@@ -217,9 +237,16 @@ func (m GameOverlayModel) TickCmd() tea.Cmd {
 	})
 }
 
+// Input timing constants for the game controller.
+const (
+	inputPollInterval = 8 * time.Millisecond   // how often the poll tick fires
+	inputRepeatDelay  = 100 * time.Millisecond // pause after first press before auto-repeat
+	inputRepeatRate   = 40 * time.Millisecond  // auto-repeat interval (~25 moves/sec)
+)
+
 // InputTickCmd schedules the next fast input poll for tetris movement.
 func (m GameOverlayModel) InputTickCmd() tea.Cmd {
-	return tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
+	return tea.Tick(inputPollInterval, func(time.Time) tea.Msg {
 		return gameInputTickMsg{}
 	})
 }
@@ -274,6 +301,7 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			m.settingEditing = false
 			m.paused = true
 			m.heldKey = ""
+			m.renderBuf.dirty = true
 			return m, nil
 		case "esc":
 			// Escape does nothing in game — only closes settings.
@@ -283,6 +311,7 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			if !m.isGameOver() {
 				m.paused = !m.paused
 				m.heldKey = ""
+				m.renderBuf.dirty = true
 				if !m.paused {
 					return m, m.TickCmd()
 				}
@@ -292,6 +321,7 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 			if m.isGameOver() {
 				m.initGame()
 				m.paused = false
+				m.renderBuf.dirty = true
 				return m, m.TickCmd()
 			}
 		}
@@ -302,43 +332,50 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 				switch key {
 				case "up", "w":
 					m.snake.SetDirection(games.DirUp)
+					m.renderBuf.dirty = true
 				case "down", "s":
 					m.snake.SetDirection(games.DirDown)
+					m.renderBuf.dirty = true
 				case "left", "a":
 					m.snake.SetDirection(games.DirLeft)
+					m.renderBuf.dirty = true
 				case "right", "d":
 					m.snake.SetDirection(games.DirRight)
+					m.renderBuf.dirty = true
 				}
 			}
 			if m.tetris != nil {
-				// Movement keys are NOT executed here. We just
-				// record the latest key; gameInputTickMsg applies
-				// it at a fixed 50ms rate. This prevents OS
-				// key-repeat events from building a movement queue.
 				switch key {
 				case "left", "a", "right", "d", "up", "w", "down", "s":
-					wasEmpty := m.heldKey == ""
-					m.heldKey = key
-					m.heldKeyAt = time.Now()
-					if wasEmpty {
-						// First press: apply immediately for
-						// responsiveness, then start polling.
+					newKey := m.heldKey == "" || m.heldKey != key
+					m.keyAlive = true
+					if newKey {
+						// New key (or first press): apply instantly,
+						// start the polling loop for auto-repeat.
+						now := time.Now()
+						m.heldKey = key
+						m.keyDownAt = now
+						m.lastMoveAt = now
 						m.applyHeldKey()
+						m.renderBuf.dirty = true
 						return m, m.InputTickCmd()
 					}
+					// Same key repeated by OS — just set the flag
+					// so the poll tick knows the key is still held.
 				case "enter":
-					// Hard drop always executes (one-shot).
 					m.tetris.Drop()
+					m.renderBuf.dirty = true
 				}
 			}
 		}
 		return m, nil
 
 	case gameInputTickMsg:
-		// Fast input poll for tetris: apply the held key if it's
-		// still fresh (key repeat events keep refreshing heldKeyAt).
-		// Once the key is released, repeat events stop and the
-		// held key goes stale after ~120ms, ending the poll loop.
+		// Flag-based release detection: if keyAlive is false, no
+		// KeyMsg arrived since the last poll → key was released.
+		// This works even with a backlog of queued KeyMsg events
+		// because they all set keyAlive=true before this tick
+		// runs, but once the queue drains the next tick sees false.
 		if m.tetris == nil || m.paused || m.showSettings || m.isGameOver() {
 			m.heldKey = ""
 			return m, nil
@@ -346,18 +383,31 @@ func (m GameOverlayModel) Update(msg tea.Msg) (GameOverlayModel, tea.Cmd) {
 		if m.heldKey == "" {
 			return m, nil
 		}
-		if time.Since(m.heldKeyAt) > 120*time.Millisecond {
-			// Key was released — stop polling.
+		if !m.keyAlive {
+			// No KeyMsg since last poll → key was released.
 			m.heldKey = ""
 			return m, nil
 		}
-		m.applyHeldKey()
+		// Reset flag — next poll will detect release if no
+		// new KeyMsg arrives before then.
+		m.keyAlive = false
+		// Auto-repeat: only after the initial repeat delay,
+		// then at a fixed rate.
+		now := time.Now()
+		if now.Sub(m.keyDownAt) >= inputRepeatDelay {
+			if now.Sub(m.lastMoveAt) >= inputRepeatRate {
+				m.applyHeldKey()
+				m.lastMoveAt = now
+				m.renderBuf.dirty = true
+			}
+		}
 		return m, m.InputTickCmd()
 
 	case gameTickMsg:
 		if m.paused || m.showSettings {
 			return m, nil
 		}
+		m.renderBuf.dirty = true
 		if m.snake != nil {
 			m.snake.Tick()
 			if m.snake.IsGameOver() {
@@ -425,6 +475,7 @@ func (m GameOverlayModel) buildSettingItems() []settingItem {
 }
 
 func (m GameOverlayModel) updateSettings(key string) (GameOverlayModel, tea.Cmd) {
+	m.renderBuf.dirty = true
 	items := m.buildSettingItems()
 	maxSel := len(items) - 1
 
@@ -636,6 +687,14 @@ func (m GameOverlayModel) Settings() GameSettings {
 }
 
 func (m GameOverlayModel) View() string {
+	// Return cached render when nothing changed. This is critical
+	// for input performance: queued KeyMsg events trigger View()
+	// after each Update(), but since they don't change game state
+	// we skip the expensive re-render and the queue drains fast.
+	if m.renderBuf != nil && !m.renderBuf.dirty && m.renderBuf.view != "" {
+		return m.renderBuf.view
+	}
+
 	dimStyle := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 	scoreStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
 
@@ -705,7 +764,13 @@ func (m GameOverlayModel) View() string {
 		MaxBoxWidth: m.width - 2,
 		BorderColor: ColorPrimary,
 	}
-	return scaffold.Render(b.String())
+	result := scaffold.Render(b.String())
+	// Cache via pointer so the value-receiver can persist it.
+	if m.renderBuf != nil {
+		m.renderBuf.view = result
+		m.renderBuf.dirty = false
+	}
+	return result
 }
 
 func (m GameOverlayModel) renderSettings() string {

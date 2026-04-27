@@ -1341,6 +1341,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// route to the game, including Escape. Only Ctrl+Q quits.
 		// No global shortcuts fire while a game is active.
 		if m.overlay == overlayGame {
+			// Fast path: if tetris is active and this is a repeat
+			// of the currently held movement key, just set the
+			// alive flag directly. Skips the game overlay's full
+			// Update() and keeps View() hitting the render cache,
+			// so queued OS key-repeat events drain in microseconds.
+			if m.gameOverlay.tetris != nil && m.gameOverlay.heldKey != "" {
+				k := msg.String()
+				held := m.gameOverlay.heldKey
+				sameDir := k == held ||
+					(k == "a" && held == "left") || (k == "left" && held == "a") ||
+					(k == "d" && held == "right") || (k == "right" && held == "d") ||
+					(k == "w" && held == "up") || (k == "up" && held == "w") ||
+					(k == "s" && held == "down") || (k == "down" && held == "s")
+				if sameDir {
+					m.gameOverlay.keyAlive = true
+					return m, nil
+				}
+			}
 			var cmd tea.Cmd
 			m.gameOverlay, cmd = m.gameOverlay.Update(msg)
 			return m, cmd

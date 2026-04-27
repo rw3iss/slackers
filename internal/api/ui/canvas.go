@@ -97,14 +97,32 @@ func (c *Canvas) DrawText(x, y int, text string, fg, bg lipgloss.Color) {
 	}
 }
 
-// Render outputs the canvas as a string. Each cell is rendered
-// with its individual fg/bg colors using lipgloss.
+// Render outputs the canvas as a string. Consecutive cells with
+// the same fg/bg colors are batched into a single styled run,
+// drastically reducing lipgloss.Style allocations (from ~1200
+// per frame to ~100-200 for a typical tetris board).
 func (c *Canvas) Render(width, height int) string {
-	var rows []string
+	var b strings.Builder
 	for y := 0; y < c.height; y++ {
-		var row strings.Builder
-		for x := 0; x < c.width; x++ {
+		if y > 0 {
+			b.WriteByte('\n')
+		}
+		x := 0
+		for x < c.width {
 			cell := c.cells[y][x]
+			// Scan for a run of consecutive cells with the same colors.
+			end := x + 1
+			for end < c.width &&
+				c.cells[y][end].FG == cell.FG &&
+				c.cells[y][end].BG == cell.BG {
+				end++
+			}
+			// Build the run text.
+			var run strings.Builder
+			for i := x; i < end; i++ {
+				run.WriteRune(c.cells[y][i].Char)
+			}
+			// Style the entire run with one allocation.
 			s := lipgloss.NewStyle()
 			if cell.FG != "" {
 				s = s.Foreground(cell.FG)
@@ -112,11 +130,11 @@ func (c *Canvas) Render(width, height int) string {
 			if cell.BG != "" {
 				s = s.Background(cell.BG)
 			}
-			row.WriteString(s.Render(string(cell.Char)))
+			b.WriteString(s.Render(run.String()))
+			x = end
 		}
-		rows = append(rows, row.String())
 	}
-	return strings.Join(rows, "\n")
+	return b.String()
 }
 
 // Width returns the canvas width.
