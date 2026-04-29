@@ -2247,12 +2247,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// PgUp / Home always scroll the messages pane regardless of
-		// focus, so the user can load older history from any panel.
-		// Up arrow works when focus is on the messages panel (Tab first).
+		// PgUp / PgDn / Home / End always scroll the messages pane
+		// regardless of focus, so the user can navigate history
+		// from any panel.
 		if m.overlay == overlayNone && !m.outputActive {
 			k := msg.String()
-			if k == "pgup" || k == "home" {
+			if k == "pgup" || k == "pgdown" || k == "home" || k == "end" {
 				var cmd tea.Cmd
 				m.messages, cmd = m.messages.Update(msg)
 				cmds = append(cmds, cmd)

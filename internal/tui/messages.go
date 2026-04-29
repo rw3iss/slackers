@@ -2590,6 +2590,46 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 			}
 		}
 
+		// Home: jump to the top of the current history and select
+		// the first message. End: jump to the bottom and select
+		// the last message. Both enter react mode so subsequent
+		// arrow keys navigate from the anchored position.
+		switch keyMsg.String() {
+		case "home":
+			view := m.viewMessages()
+			if len(view) > 0 {
+				m.reactMode = true
+				m.selectMode = false
+				m.reactIdx = 0
+				m.reactionSelIdx = -1
+				m.replyIdx = -1
+				m.replyReactionSelIdx = -1
+				m.clearMultiSelect()
+				m.rebuildContent()
+				m.viewport.GotoTop()
+			} else {
+				m.viewport.GotoTop()
+			}
+			m.autoScroll = false
+			return m, nil
+		case "end":
+			view := m.viewMessages()
+			if len(view) > 0 {
+				m.reactMode = true
+				m.selectMode = false
+				m.reactIdx = len(view) - 1
+				m.reactionSelIdx = -1
+				m.replyIdx = -1
+				m.replyReactionSelIdx = -1
+				m.clearMultiSelect()
+				m.rebuildContent()
+				m.viewport.GotoBottom()
+			} else {
+				m.viewport.GotoBottom()
+			}
+			m.autoScroll = true
+			return m, nil
+		}
 	}
 
 	var cmd tea.Cmd
