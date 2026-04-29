@@ -96,6 +96,12 @@ Opening and closing overlays (help, settings, search, shortcuts editor, etc.) tr
 
 Returning from away (idle timeout) only refreshes the current channel's history. Previous behavior polled all channels on wake-up, which could hit rate limits in large workspaces.
 
+## Scroll-up history pagination
+
+When a channel is first opened, slackers loads the most recent 50 messages via `conversations.history`. When the user scrolls to the top of the viewport (mouse wheel, up arrow in select mode, or PgUp), a `FetchHistoryBefore` call requests 100 older messages using the Slack API's `latest` timestamp parameter. The response is prepended to the message list and the viewport re-anchors to the previously-topmost message so the scroll position stays stable. This repeats on each scroll-to-top until the API reports no more history (`has_more: false`), at which point a `historyExhausted` flag is set and "No more earlier messages" is shown.
+
+The mouse wheel handler adjusts the viewport offset directly (rather than sending synthetic KeyUp events) to avoid interference with the react-mode handler that normally intercepts the Up key for message selection. PgUp is always routed to the messages pane regardless of which panel has focus, so history loading works even while the input bar is focused.
+
 ## Input handling
 
 ### Multi-line textarea

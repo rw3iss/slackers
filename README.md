@@ -28,6 +28,7 @@ Includes a "Friends" feature for connecting directly with other Slackers users (
 ## Features
 
 - **Real-time messages** -- Socket Mode for instant delivery, with smart polling as a fallback
+- **Infinite scroll history** -- scroll to the top of any Slack channel to automatically load older messages from the API; keeps loading as you scroll, with a status indicator while fetching
 - **Message search** -- search current or all channels, jump to results with context view
 - **File browser** -- upload, download, browse and search files across all channels
 - **Mouse support** -- click channels, scroll panels, drag sidebar resize, click files, right-click for context menus
@@ -40,13 +41,13 @@ Includes a "Friends" feature for connecting directly with other Slackers users (
 - **Reactions on replies, edit / delete own messages, inline reply selection** -- everything Slack does, in a TUI
 - **In-message item navigation** -- in select mode (`Ctrl-J`), arrow keys cycle through every interactive item in a message in priority order: contact-card pills → file rows → code snippets → reactions → reply list. Each selection shows a context-aware hint in the message header (`a`/`v`/`c` for cards, `Enter`/`v`/`c` for files).
 - **File viewer** -- press `v` on any selected file (in file-select mode or message select mode) to download and display its contents in the Output pane. Recognised text files open immediately; unknown/binary types prompt for confirmation. The viewer is scrollable and supports `c` to copy the full contents to the clipboard.
-- **Notifications view** (`Alt-N`) -- a single panel collects unread messages, reactions on your messages, and pending friend requests, each click jumps straight to the source
-- **Right-click context menus** -- right-click a message for React / Reply / Edit / Delete, or a sidebar channel for Hide / Rename / Invite to Slackers / View Contact Info / Remove Friend (friend channels). Right-click a `[FRIEND:...]` pill in chat for Add Friend / View Contact Info / Copy Contact Info, with self/friend/non-friend variants.
+- **Notifications view** (`Alt-N`) -- a single panel collects unread messages, reactions on your messages, and pending friend requests; click or press Enter to jump straight to the source and clear the notification
+- **Right-click context menus** -- right-click a message for React / Reply / Edit / Delete, or a sidebar channel for Hide / Rename / Invite to Slackers / View Contact Info / Remove Friend (friend channels). Right-click empty chat space for channel-specific actions (View Contact, Send File, Audio Call, Rename). Right-click a `[FRIEND:...]` pill in chat for Add Friend / View Contact Info / Copy Contact Info, with self/friend/non-friend variants.
 - **Channel management** -- hide, alias (with a filterable Ctrl-G hidden-channels overlay), collapse groups, sort by type/name/recent
 - **E2E encrypted messaging** -- optional P2P secure mode with X25519 key exchange
 - **Friends list** -- private P2P chat with befriended Slackers users, works without a Slack workspace
 - **Friend contact cards in chat** -- type `[FRIEND:me]` / right-click → "Invite to Slackers" to share a compact hash or full JSON profile that renders as a clickable pill on the receiver's side; click to import, merge, or replace
-- **Automatic profile sync** -- connected peers exchange their latest contact card so stale fields (public key, multiaddr, email) get refreshed in place, without overwriting your chosen display name
+- **Automatic profile sync** -- connected peers exchange their latest contact card so stale fields (public key, multiaddr, email) get refreshed in place, without overwriting your chosen display name. Friend requests and acceptances include the sender's full profile (name, email) so both sides see each other's display name immediately on the handshake
 - **Pending messages** -- messages sent while a friend was offline are flagged ⏳ pending, auto-resent in original order the moment the peer reconnects (via both a local reconnect detector and a `request_pending` pull from either side)
 - **P2P audio calling** (`Alt-P`) -- call any online friend directly over libp2p with Opus-encoded audio, a jitter buffer, and voice activity detection. The call overlay shows ringing/active states, live mic/peer level meters, mute toggle (`Alt-X`), and an effects sub-screen with a 7-band parametric EQ, compressor with live gain-reduction metering, and switchable effect profiles
 - **Multi-workspace support** (`Alt-W`) -- connect multiple Slack teams simultaneously; each workspace gets its own token set, channel list, and last-channel memory stored under `~/.config/slackers/workspaces/`. The sidebar shows the active workspace name, and the workspace overlay lets you add, edit, switch, or remove workspaces
@@ -176,7 +177,7 @@ All shortcuts are fully customizable. Open **Settings** (`Ctrl-S`) > **Keyboard 
 | `Ctrl-A` | Rename/alias channel |
 | `Ctrl-W` | Toggle full screen chat |
 | `Ctrl-R` | Refresh channels |
-| `PgUp` / `PgDn` | Page scroll (messages, overlays) |
+| `PgUp` / `PgDn` | Page scroll (messages, overlays); PgUp at top loads older history |
 | `Home` / `End` | Jump to top / bottom |
 | `Ctrl-\` | Toggle input mode (normal/edit) |
 | `Alt-Enter` | New line (normal) or send (edit) |
