@@ -151,6 +151,18 @@ type MoreContextLoadedMsg struct {
 	Messages []types.Message
 }
 
+// LoadMoreHistoryMsg requests loading older messages for the current channel.
+type LoadMoreHistoryMsg struct {
+	ChannelID string
+	OldestTS  string
+}
+
+// MoreHistoryLoadedMsg carries older messages to prepend to the channel view.
+type MoreHistoryLoadedMsg struct {
+	Messages []types.Message
+	HasMore  bool
+}
+
 // FileDownloadMsg requests downloading a file.
 type FileDownloadMsg struct {
 	File types.FileInfo
@@ -297,6 +309,10 @@ type MessageViewModel struct {
 	// parsing (multiple regex passes) on every render cycle.
 	formattedTextCache map[string]string
 
+	// History pagination — load older messages on scroll-up.
+	historyExhausted bool // true once Slack reports no more older messages
+	loadingHistory   bool // true while a FetchHistoryBefore call is in flight
+
 	// Context mode (search result viewing)
 	contextMode     bool
 	contextMessages []types.Message
@@ -328,6 +344,8 @@ func NewMessageView() MessageViewModel {
 func (m *MessageViewModel) SetMessages(msgs []types.Message) {
 	m.messages = msgs
 	m.contextMode = false
+	m.historyExhausted = false
+	m.loadingHistory = false
 	// Full list replacement — drop the formatted-text cache so
 	// stale entries don't linger indefinitely across channel
 	// switches. Re-populated lazily on the next render.
@@ -402,6 +420,38 @@ func (m *MessageViewModel) PrependContextMessages(msgs []types.Message) {
 	if m.contextTarget >= 0 && m.contextTarget < len(m.contextMessages) {
 		m.ScrollToMessage(m.contextMessages[m.contextTarget].MessageID)
 	}
+}
+
+// PrependMessages adds older messages to the beginning of the normal
+// (non-context) message list and re-anchors the viewport so the
+// previously-topmost message stays at the same screen position.
+func (m *MessageViewModel) PrependMessages(msgs []types.Message) {
+	if len(msgs) == 0 || m.contextMode {
+		return
+	}
+	m.loadingHistory = false
+	// The first message in the OLD list is the anchor — after prepending,
+	// we scroll so this message is still visible near the top of the viewport.
+	anchorID := ""
+	if len(m.messages) > 0 {
+		anchorID = m.messages[0].MessageID
+	}
+	m.messages = append(msgs, m.messages...)
+	m.formattedTextCache = nil
+	m.rebuildContent()
+	if anchorID != "" {
+		m.ScrollToMessage(anchorID)
+	}
+}
+
+// OldestTimestamp returns the Slack-format timestamp of the oldest
+// message in the normal message list, for pagination.
+func (m *MessageViewModel) OldestTimestamp() string {
+	if len(m.messages) == 0 {
+		return ""
+	}
+	ts := m.messages[0].Timestamp
+	return fmt.Sprintf("%d.%06d", ts.Unix(), ts.Nanosecond()/1000)
 }
 
 // ScrollToMessage positions the viewport so the message identified
@@ -2118,6 +2168,21 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 					if m.viewport.YOffset > 0 {
 						m.viewport.LineUp(1)
 					}
+					// At the very top: load older Slack history.
+					if m.viewport.YOffset <= 3 && !m.isFriendCh &&
+						!m.historyExhausted && !m.loadingHistory && len(m.messages) > 0 {
+						oldestTS := m.OldestTimestamp()
+						chID := m.messages[0].ChannelID
+						if chID != "" && oldestTS != "" {
+							m.loadingHistory = true
+							return m, func() tea.Msg {
+								return LoadMoreHistoryMsg{
+									ChannelID: chID,
+									OldestTS:  oldestTS,
+								}
+							}
+						}
+					}
 				}
 				return m, nil
 			case "down":
@@ -2524,6 +2589,7 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 				}
 			}
 		}
+
 	}
 
 	var cmd tea.Cmd
@@ -2539,6 +2605,30 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 			m.contextMode = false
 			m.rebuildContent()
 			m.viewport.GotoBottom()
+		}
+	}
+
+	// After viewport update (covers keyboard AND mouse scroll),
+	// check if we've scrolled near the top and should load older
+	// Slack history. Triggers within 3 lines of the top so the
+	// user doesn't have to hit the exact edge.
+	if m.viewport.YOffset <= 3 {
+		debug.Log("[messages] near top: yOffset=%d context=%v thread=%v friend=%v exhausted=%v loading=%v msgs=%d",
+			m.viewport.YOffset, m.contextMode, m.threadMode, m.isFriendCh, m.historyExhausted, m.loadingHistory, len(m.messages))
+		if !m.contextMode && !m.threadMode && !m.isFriendCh &&
+			!m.historyExhausted && !m.loadingHistory && len(m.messages) > 0 {
+			oldestTS := m.OldestTimestamp()
+			chID := m.messages[0].ChannelID
+			debug.Log("[messages] load-more triggered: channel=%s oldestTS=%s", chID, oldestTS)
+			if chID != "" && oldestTS != "" {
+				m.loadingHistory = true
+				return m, func() tea.Msg {
+					return LoadMoreHistoryMsg{
+						ChannelID: chID,
+						OldestTS:  oldestTS,
+					}
+				}
+			}
 		}
 	}
 

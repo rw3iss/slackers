@@ -111,6 +111,17 @@ func loadMoreContextCmd(svc slackpkg.SlackService, channelID, oldestTS string) t
 	}
 }
 
+// loadMoreHistoryCmd fetches two pages (100 messages) older than beforeTS.
+func loadMoreHistoryCmd(svc slackpkg.SlackService, channelID, beforeTS string) tea.Cmd {
+	return func() tea.Msg {
+		msgs, hasMore, err := svc.FetchHistoryBefore(channelID, beforeTS, 100)
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return MoreHistoryLoadedMsg{Messages: msgs, HasMore: hasMore}
+	}
+}
+
 func silentLoadHistoryCmd(svc slackpkg.SlackService, channelID string) tea.Cmd {
 	return func() tea.Msg {
 		msgs, err := svc.FetchHistory(channelID, 50)

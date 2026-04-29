@@ -2247,6 +2247,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// PgUp / Home always scroll the messages pane regardless of
+		// focus, so the user can load older history from any panel.
+		// Up arrow works when focus is on the messages panel (Tab first).
+		if m.overlay == overlayNone && !m.outputActive {
+			k := msg.String()
+			if k == "pgup" || k == "home" {
+				var cmd tea.Cmd
+				m.messages, cmd = m.messages.Update(msg)
+				cmds = append(cmds, cmd)
+				return m, tea.Batch(cmds...)
+			}
+		}
+
 		// Delegate to focused sub-model
 		switch m.focus {
 		case types.FocusSidebar:
@@ -2437,6 +2450,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MoreContextLoadedMsg:
 		m.messages.PrependContextMessages(msg.Messages)
+		return m, nil
+
+	case LoadMoreHistoryMsg:
+		if m.slackSvc == nil {
+			return m, nil
+		}
+		debug.Log("[model] LoadMoreHistoryMsg: channel=%s oldestTS=%s", msg.ChannelID, msg.OldestTS)
+		m.warning = "Loading older messages..."
+		return m, loadMoreHistoryCmd(m.slackSvc, msg.ChannelID, msg.OldestTS)
+
+	case MoreHistoryLoadedMsg:
+		debug.Log("[model] MoreHistoryLoadedMsg: %d messages, hasMore=%v", len(msg.Messages), msg.HasMore)
+		m.messages.PrependMessages(msg.Messages)
+		if !msg.HasMore {
+			m.messages.historyExhausted = true
+		}
+		if len(msg.Messages) == 0 {
+			m.messages.historyExhausted = true
+			m.warning = "No more earlier messages"
+		} else {
+			m.warning = ""
+		}
 		return m, nil
 
 	case ContextHistoryMsg:

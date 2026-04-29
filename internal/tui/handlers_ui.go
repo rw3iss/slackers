@@ -545,11 +545,36 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.focus = types.FocusMessages
 				m.updateFocus()
-				for i := 0; i < lines; i++ {
-					m.messages, _ = m.messages.Update(tea.KeyMsg{Type: tea.KeyUp})
+				// Scroll the viewport directly instead of sending
+				// synthetic KeyUp events (which get intercepted by
+				// the react-mode handler and never reach the viewport).
+				newOff := m.messages.viewport.YOffset - lines
+				if newOff < 0 {
+					newOff = 0
 				}
+				m.messages.viewport.SetYOffset(newOff)
+				m.messages.autoScroll = false
+				debug.Log("[mouse-wheel-up] after scroll: yOffset=%d", m.messages.viewport.YOffset)
+				// Check if we should load older history.
+				if m.messages.viewport.YOffset <= 3 && !m.messages.contextMode &&
+					!m.messages.threadMode && !m.messages.isFriendCh &&
+					!m.messages.historyExhausted && !m.messages.loadingHistory &&
+					len(m.messages.messages) > 0 {
+					oldestTS := m.messages.OldestTimestamp()
+					chID := m.messages.messages[0].ChannelID
+					if chID != "" && oldestTS != "" {
+						debug.Log("[mouse-wheel-up] load-more triggered: channel=%s", chID)
+						m.messages.loadingHistory = true
+						return m, func() tea.Msg {
+							return LoadMoreHistoryMsg{
+								ChannelID: chID,
+								OldestTS:  oldestTS,
+							}
+						}
+					}
+				}
+				return m, nil
 			}
-			return m, nil
 
 		} else if msg.Button == tea.MouseButtonWheelDown {
 			lines := 3

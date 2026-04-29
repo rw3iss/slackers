@@ -25,6 +25,10 @@ type SlackService interface {
 	ListChannels() ([]types.Channel, error)
 	ListUsers() (map[string]types.User, error)
 	FetchHistory(channelID string, limit int) ([]types.Message, error)
+	// FetchHistoryBefore fetches messages older than the given timestamp.
+	// Returns messages in chronological order (oldest first).
+	// The bool return indicates whether there are more messages available.
+	FetchHistoryBefore(channelID string, beforeTS string, limit int) ([]types.Message, bool, error)
 	SendMessage(channelID, text string) error
 	SendThreadReply(channelID, threadTS, text string) error
 	ResolveUserName(userID string) string
@@ -407,6 +411,54 @@ func (c *slackClient) FetchHistory(channelID string, limit int) ([]types.Message
 	}
 
 	return messages, nil
+}
+
+// FetchHistoryBefore fetches messages older than beforeTS.
+// Returns (messages, hasMore, error). Messages are in chronological order.
+func (c *slackClient) FetchHistoryBefore(channelID string, beforeTS string, limit int) ([]types.Message, bool, error) {
+	debug.Log("[api] FetchHistoryBefore channel=%s before=%s limit=%d", channelID, beforeTS, limit)
+	params := &slack.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Latest:    beforeTS,
+		Limit:     limit,
+		Inclusive: false,
+	}
+
+	var resp *slack.GetConversationHistoryResponse
+	err := c.tryWithFallback("fetch history before", func(api *slack.Client) error {
+		var e error
+		resp, e = api.GetConversationHistory(params)
+		return e
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("slack fetch history before for %s: %w", channelID, err)
+	}
+
+	messages := make([]types.Message, 0, len(resp.Messages))
+	for _, msg := range resp.Messages {
+		m := types.Message{
+			MessageID: msg.Timestamp,
+			UserID:    msg.User,
+			UserName:  c.ResolveUserName(msg.User),
+			Text:      msg.Text,
+			Timestamp: parseSlackTimestamp(msg.Timestamp),
+			ChannelID: channelID,
+			Files:     extractFiles(msg.Files),
+			Reactions: extractReactions(msg.Reactions),
+		}
+		if msg.ReplyCount > 0 && msg.Timestamp != "" {
+			replies := c.fetchReplies(channelID, msg.Timestamp)
+			m.Replies = replies
+		}
+		messages = append(messages, m)
+	}
+
+	// Slack returns newest first; reverse to chronological order.
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return messages, resp.HasMore, nil
 }
 
 // fetchReplies fetches threaded replies for a parent message timestamp.
