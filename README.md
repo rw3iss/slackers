@@ -10,20 +10,27 @@
 Fully-functional, terminal-based Slack client, with extended features: audio calls, file management (drop, share, download, view, copy), plugins, themeing, mouse mode, multi-workspace support, global notifications, and more!
 Includes a "Friends" feature for connecting directly with other Slackers users (outside of Slack), via a P2P connection profile, using end-to-end-encryption.
 
+<details open>
+<summary>Screenshots</summary>
 <table>
   <tr>
-    <td align="center"><a href=".github/screenshot.png"><img src=".github/screenshot.png" width="200"></a><br><sub>Main Window / Channels</sub></td>
-    <td align="center"><a href=".github/screenshot-help.png"><img src=".github/screenshot-help.png" width="200"></a><br><sub>Help Menu</sub></td>
-    <td align="center"><a href=".github/screenshot-settings.png"><img src=".github/screenshot-settings.png" width="200"></a><br><sub>Settings Menu</sub></td>
-    <td align="center"><a href=".github/screenshot-search.png"><img src=".github/screenshot-search.png" width="200"></a><br><sub>Message Search</sub></td>
+    <td align="center" width="33%"><a href=".github/screenshot.png"><img src=".github/screenshot.png" width="100%"></a><br><sub>Main Window / Channels</sub></td>
+    <td align="center" width="33%"><a href=".github/screenshot-help.png"><img src=".github/screenshot-help.png" width="100%"></a><br><sub>Help Menu</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href=".github/screenshot-files.png"><img src=".github/screenshot-files.png" width="200"></a><br><sub>File Browser</sub></td>
-    <td align="center"><a href=".github/screenshot-audio-call.png"><img src=".github/screenshot-audio-call.png" width="200"></a><br><sub>Audio Call + Effects</sub></td>
-    <td align="center"><a href=".github/screenshot-tetris.png"><img src=".github/screenshot-tetris.png" width="200"></a><br><sub>Tetris (Plugins)</sub></td>
-    <td align="center"><a href=".github/screenshot-memory.png"><img src=".github/screenshot-memory.png" width="200"></a><br><sub>Memory Usage</sub></td>
+    <td align="center" width="33%"><a href=".github/screenshot-settings.png"><img src=".github/screenshot-settings.png" width="100%"></a><br><sub>Settings Menu</sub></td>
+    <td align="center" width="33%"><a href=".github/screenshot-search.png"><img src=".github/screenshot-search.png" width="100%"></a><br><sub>Message Search</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="33%"><a href=".github/screenshot-files.png"><img src=".github/screenshot-files.png" width="100%"></a><br><sub>File Browser</sub></td>
+    <td align="center" width="33%"><a href=".github/screenshot-audio-call.png"><img src=".github/screenshot-audio-call.png" width="100%"></a><br><sub>Audio Call + Effects</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="33%"><a href=".github/screenshot-tetris.png"><img src=".github/screenshot-tetris.png" width="100%"></a><br><sub>Tetris (Plugins)</sub></td>
+    <td align="center" width="33%"><a href=".github/screenshot-memory.png"><img src=".github/screenshot-memory.png" width="100%"></a><br><sub>Memory Usage</sub></td>
   </tr>
 </table>
+</details>
 
 ## Features
 

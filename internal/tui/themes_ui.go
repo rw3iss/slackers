@@ -1026,7 +1026,7 @@ func (m ThemeEditorModel) renderKeyLine(key string, itemIdx int, selStyle, textS
 		cellStyle = cellStyle.Italic(true)
 	}
 	if fg == "" && bg == "" {
-		cellStyle = cellStyle.Foreground(lipgloss.Color("252"))
+		cellStyle = cellStyle.Foreground(ColorDescText)
 	}
 	label := padRight(key, 16)
 	labelStr := marker + label

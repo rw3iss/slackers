@@ -554,7 +554,6 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				}
 				m.messages.viewport.SetYOffset(newOff)
 				m.messages.autoScroll = false
-				debug.Log("[mouse-wheel-up] after scroll: yOffset=%d", m.messages.viewport.YOffset)
 				// Check if we should load older history.
 				if m.messages.viewport.YOffset <= 3 && !m.messages.contextMode &&
 					!m.messages.threadMode && !m.messages.isFriendCh &&
@@ -563,7 +562,6 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					oldestTS := m.messages.OldestTimestamp()
 					chID := m.messages.messages[0].ChannelID
 					if chID != "" && oldestTS != "" {
-						debug.Log("[mouse-wheel-up] load-more triggered: channel=%s", chID)
 						m.messages.loadingHistory = true
 						return m, func() tea.Msg {
 							return LoadMoreHistoryMsg{

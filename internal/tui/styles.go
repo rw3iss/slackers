@@ -122,6 +122,14 @@ const (
 	FooterHintCancel = "Esc: cancel"
 )
 
+// Popup menu styles shared by context menus (msgoptions, sidebaroptions,
+// chatoptions, friendcardoptions). Rebuilt by rebuildDerivedStyles so
+// theme changes are picked up.
+var (
+	PopupTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
+	PopupDimStyle   = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+)
+
 // Derived styles — rebuilt by ApplyTheme.
 var (
 	SidebarStyle           lipgloss.Style
@@ -486,6 +494,10 @@ func rebuildDerivedStyles() {
 	EmojiCellStyle = lipgloss.NewStyle()
 	EmojiSelectedCellStyle = lipgloss.NewStyle().Background(ColorSubtleBgHover)
 	EmojiFavCellStyle = lipgloss.NewStyle().Background(ColorSubtleBg)
+
+	// Popup menu styles.
+	PopupTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
+	PopupDimStyle = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 }
 
 // UserColors assigns a consistent color to a username by hashing.

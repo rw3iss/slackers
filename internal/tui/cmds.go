@@ -87,19 +87,12 @@ func waitForSocketEvent(ch chan slackpkg.SocketEvent) tea.Cmd {
 
 func loadMoreContextCmd(svc slackpkg.SlackService, channelID, oldestTS string) tea.Cmd {
 	return func() tea.Msg {
-		params := 25
-		msgs, err := svc.FetchHistory(channelID, params)
-		if err != nil {
-			return ErrMsg{Err: err}
-		}
-		// FetchHistory returns chronological. We need messages BEFORE oldestTS.
 		// Use FetchHistoryAround with the oldest timestamp to get earlier messages.
 		olderMsgs, _, err := svc.FetchHistoryAround(channelID, oldestTS, 50)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}
 		// Filter to only messages older than oldestTS.
-		_ = msgs // unused, we use FetchHistoryAround directly
 		var filtered []types.Message
 		for _, m := range olderMsgs {
 			ts := fmt.Sprintf("%d.%06d", m.Timestamp.Unix(), m.Timestamp.Nanosecond()/1000)

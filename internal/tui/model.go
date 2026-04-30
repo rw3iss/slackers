@@ -2456,12 +2456,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.slackSvc == nil {
 			return m, nil
 		}
-		debug.Log("[model] LoadMoreHistoryMsg: channel=%s oldestTS=%s", msg.ChannelID, msg.OldestTS)
 		m.warning = "Loading older messages..."
 		return m, loadMoreHistoryCmd(m.slackSvc, msg.ChannelID, msg.OldestTS)
 
 	case MoreHistoryLoadedMsg:
-		debug.Log("[model] MoreHistoryLoadedMsg: %d messages, hasMore=%v", len(msg.Messages), msg.HasMore)
 		m.messages.PrependMessages(msg.Messages)
 		if !msg.HasMore {
 			m.messages.historyExhausted = true

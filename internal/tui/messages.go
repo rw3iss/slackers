@@ -2653,13 +2653,10 @@ func (m MessageViewModel) Update(msg tea.Msg) (MessageViewModel, tea.Cmd) {
 	// Slack history. Triggers within 3 lines of the top so the
 	// user doesn't have to hit the exact edge.
 	if m.viewport.YOffset <= 3 {
-		debug.Log("[messages] near top: yOffset=%d context=%v thread=%v friend=%v exhausted=%v loading=%v msgs=%d",
-			m.viewport.YOffset, m.contextMode, m.threadMode, m.isFriendCh, m.historyExhausted, m.loadingHistory, len(m.messages))
 		if !m.contextMode && !m.threadMode && !m.isFriendCh &&
 			!m.historyExhausted && !m.loadingHistory && len(m.messages) > 0 {
 			oldestTS := m.OldestTimestamp()
 			chID := m.messages[0].ChannelID
-			debug.Log("[messages] load-more triggered: channel=%s oldestTS=%s", chID, oldestTS)
 			if chID != "" && oldestTS != "" {
 				m.loadingHistory = true
 				return m, func() tea.Msg {

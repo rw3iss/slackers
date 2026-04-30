@@ -746,7 +746,7 @@ func (m GameOverlayModel) View() string {
 	title := strings.ToUpper(m.gameName[:1]) + m.gameName[1:]
 	var footer string
 	if m.showSettings {
-		footer = "↑↓: select" + HintSep + "Enter: edit/apply" + HintSep + "Esc: cancel"
+		footer = "↑↓: select" + HintSep + "Enter: edit/apply" + HintSep + FooterHintCancel
 	} else if m.gameName == "tetris" {
 		footer = "←→: move" + HintSep + "↑: rotate" + HintSep + "↓: soft drop" + HintSep + "Enter: hard drop" + HintSep + "P: pause" + HintSep + "Ctrl+S: settings" + HintSep + "Ctrl+Q: hide"
 	} else {
