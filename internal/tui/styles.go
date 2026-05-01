@@ -183,6 +183,17 @@ var (
 	EmojiCellStyle         lipgloss.Style // plain grid cell background
 	EmojiSelectedCellStyle lipgloss.Style // grid cell for the hovered/selected emoji
 	EmojiFavCellStyle      lipgloss.Style // grid cell for a favourited emoji
+
+	// Threads sidebar group styles. ThreadSlackChannelRowStyle is
+	// the channel-name row when the thread comes from a Slack
+	// channel; ThreadFriendChannelRowStyle is the visually distinct
+	// variant used for friend-channel threads (rendered in the same
+	// online-friend green so the two transports are immediately
+	// distinguishable). ThreadParticipantsRowStyle is the muted
+	// second row showing the participants' first names.
+	ThreadSlackChannelRowStyle  lipgloss.Style
+	ThreadFriendChannelRowStyle lipgloss.Style
+	ThreadParticipantsRowStyle  lipgloss.Style
 )
 
 // activeTheme tracks the most recently applied theme so the UI can
@@ -498,6 +509,15 @@ func rebuildDerivedStyles() {
 	// Popup menu styles.
 	PopupTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	PopupDimStyle = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+
+	// Threads sidebar group styles. Slack threads use the same hue
+	// as regular channel names; friend threads use the online-friend
+	// green so the two transports are immediately distinguishable
+	// in the mixed group. Participant rows are muted italic so they
+	// read as secondary metadata under the channel-name row.
+	ThreadSlackChannelRowStyle = lipgloss.NewStyle().Foreground(ColorChannelName)
+	ThreadFriendChannelRowStyle = lipgloss.NewStyle().Foreground(ColorFriendOnline)
+	ThreadParticipantsRowStyle = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 }
 
 // UserColors assigns a consistent color to a username by hashing.

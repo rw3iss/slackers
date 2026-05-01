@@ -14,10 +14,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/debug"
+	"github.com/rw3iss/slackers/internal/threads"
 	"github.com/rw3iss/slackers/internal/types"
 )
 
@@ -37,6 +39,13 @@ func (m *Model) applySettings() {
 	m.channels.SetSort(sortBy, sortAsc)
 	m.channels.SetItemSpacing(m.cfg.SidebarItemSpacing)
 	m.messages.SetItemSpacing(m.cfg.MessageItemSpacing)
+	// Re-arm the threads auto-clear scheduler with the new interval.
+	// SetInterval also runs an immediate sweep so a user who lowers
+	// the cutoff sees the change reflected without waiting a tick.
+	if m.threadScheduler != nil {
+		m.threadScheduler.SetInterval(time.Duration(m.cfg.Threads.AutoClearHours) * time.Hour)
+		m.channels.SetThreads(m.threadStore.Active())
+	}
 	m.resizeComponents()
 }
 
@@ -322,6 +331,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				if viewportY < 0 {
 					return m, nil
 				}
+				if t := m.channels.ThreadByRow(viewportY); t != nil {
+					m.threadOptions = NewThreadOptions(t.Ref, x+1, y)
+					m.threadOptions.SetSize(m.width, m.height)
+					m.overlay = overlayThreadOptions
+					return m, nil
+				}
 				ch, isChannel, _ := m.channels.ChannelByRow(viewportY)
 				if isChannel && ch != nil {
 					items := m.buildSidebarOptionsItems(*ch)
@@ -415,6 +430,19 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				ch, isChannel, headerKey := m.channels.SelectByRow(viewportY)
+				// Thread row clicked — SelectByRow advances the
+				// cursor; SelectedThread reads the snapshot at the
+				// new selection. Activation dispatches OpenThreadMsg
+				// to switch channel + auto-open the reply detail
+				// view, mirroring the keyboard Enter activation.
+				if !isChannel && headerKey == "" {
+					if t := m.channels.SelectedThread(); t != nil {
+						ref := t.Ref
+						return m, func() tea.Msg {
+							return threads.OpenThreadMsg{Ref: ref, OpenReplyView: true}
+						}
+					}
+				}
 				if headerKey != "" {
 					// Header clicked — toggle collapse.
 					m.channels.ToggleCollapse(headerKey)
