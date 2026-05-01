@@ -12,7 +12,13 @@ import (
 // their full Replies populated) or the backfill scanner (where
 // replies may be omitted to save API calls).
 //
-// Rules:
+// Hard prerequisite: the parent message MUST have at least one
+// reply. A plain message with no replies isn't a thread no matter
+// who authored it or who's mentioned in it. This matches Slack's
+// own definition — the "Threads" view in Slack only lists messages
+// with thread activity.
+//
+// Rules (evaluated only when len(msg.Replies) > 0):
 //   - Rule 1 (mentioned)      — the parent text contains <@me>.
 //   - Rule 2 (author)         — the parent's UserID equals me.
 //   - Rule 3 (replied)        — any reply's UserID equals me.
@@ -35,7 +41,7 @@ import (
 // rule to match wins. The store doesn't compare reasons, but tests
 // rely on the priority for stability.
 func Detect(msg types.Message, me string, forward bool) (ThreadReason, bool) {
-	if me == "" {
+	if me == "" || len(msg.Replies) == 0 {
 		return "", false
 	}
 
@@ -50,7 +56,7 @@ func Detect(msg types.Message, me string, forward bool) (ThreadReason, bool) {
 		return ReasonMentioned, true
 	}
 
-	// Rules 3 / 4 — walk replies if present.
+	// Rules 3 / 4 — walk replies.
 	for _, r := range msg.Replies {
 		if r.UserID == me {
 			return ReasonReplied, true

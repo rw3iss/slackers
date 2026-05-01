@@ -21,8 +21,21 @@ func msg(uid, text string, replies ...types.Message) types.Message {
 
 // detector ----
 
-func TestDetect_AuthorTakesPriority(t *testing.T) {
+func TestDetect_RequiresReplies(t *testing.T) {
+	// Parent with no replies must NOT be classified as a thread,
+	// even if the local user authored it or is mentioned in it.
 	parent := msg("U1", "hello")
+	if _, ok := Detect(parent, "U1", true); ok {
+		t.Fatalf("author with no replies should not be a thread")
+	}
+	mentioned := msg("U2", "hey <@U1> check this")
+	if _, ok := Detect(mentioned, "U1", true); ok {
+		t.Fatalf("mention with no replies should not be a thread")
+	}
+}
+
+func TestDetect_AuthorTakesPriority(t *testing.T) {
+	parent := msg("U1", "hello", msg("U2", "first reply"))
 	reason, ok := Detect(parent, "U1", true)
 	if !ok || reason != ReasonAuthor {
 		t.Fatalf("want author/true, got %s/%v", reason, ok)
@@ -30,7 +43,7 @@ func TestDetect_AuthorTakesPriority(t *testing.T) {
 }
 
 func TestDetect_Mentioned(t *testing.T) {
-	parent := msg("U2", "hey <@U1> can you check this")
+	parent := msg("U2", "hey <@U1> can you check this", msg("U2", "ping"))
 	reason, ok := Detect(parent, "U1", true)
 	if !ok || reason != ReasonMentioned {
 		t.Fatalf("want mentioned/true, got %s/%v", reason, ok)
@@ -80,7 +93,7 @@ func TestDetect_FriendIDFormat(t *testing.T) {
 	// Friend chats use slacker:<id> in UserID. Mention syntax is N/A
 	// for friends, so only rules 2 and 3 should ever fire.
 	me := "slacker:abc123"
-	parent := msg(me, "i wrote this")
+	parent := msg(me, "i wrote this", msg("slacker:other", "thanks"))
 	if reason, ok := Detect(parent, me, true); !ok || reason != ReasonAuthor {
 		t.Fatalf("friend author: want author/true, got %s/%v", reason, ok)
 	}
@@ -102,8 +115,13 @@ func snap(uid, ts string) ThreadSnapshot {
 			ChannelID: "C" + uid,
 			ParentTS:  ts,
 		},
-		ChannelName:    "channel-" + uid,
-		ParentText:     "preview",
+		ChannelName: "channel-" + uid,
+		ParentText:  "preview",
+		// Two participants — the parent author plus a reply
+		// participant — keeps the snapshot above the load-time
+		// stale-entry filter (which drops Author/Mentioned snapshots
+		// with ≤1 participant).
+		Participants:   []string{"Alice", "Bob"},
 		LastActivityTS: ts,
 		Reason:         ReasonAuthor,
 		AddedAt:        time.Now(),

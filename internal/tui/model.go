@@ -6921,14 +6921,11 @@ func (m *Model) detectThreads(msgs []types.Message, ch *types.Channel) {
 		if msg.ReplyTo != "" {
 			continue
 		}
-		// Cheap short-circuit: a parent that's neither authored by
-		// the user, nor mentions the user, nor has any replies, is
-		// definitely not a thread for this user. Avoid the regex /
-		// reply-walk for the common case.
-		if msg.UserID != me && len(msg.Replies) == 0 {
-			if !strings.Contains(msg.Text, "<@"+me+">") {
-				continue
-			}
+		// Hard prerequisite: a thread requires replies. A plain
+		// authored or @mentioned message with no replies is just a
+		// message — short-circuit before paying for the detector.
+		if len(msg.Replies) == 0 {
+			continue
 		}
 		reason, ok := threads.Detect(msg, me, true)
 		if !ok {

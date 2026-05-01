@@ -48,6 +48,14 @@ func NewStore(path string) *ThreadStore {
 
 // Load reads the threads file from disk. Missing file is OK — the
 // store starts empty.
+//
+// On load, snapshots that are obviously stale (saved by an earlier
+// detector that didn't require replies) are dropped so a fresh
+// session starts clean. The heuristic: a legitimate Author or
+// Mentioned thread must have at least one reply participant, which
+// means the Participants slice has length > 1 (the parent author
+// + at least one replier). Single-participant Author/Mentioned
+// snapshots could only have come from the pre-fix detector.
 func (s *ThreadStore) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -63,9 +71,35 @@ func (s *ThreadStore) Load() error {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return err
 	}
-	s.items = f.Active
+	dirty := false
+	cleaned := f.Active[:0]
+	for _, snap := range f.Active {
+		if isStaleSnapshot(snap) {
+			dirty = true
+			continue
+		}
+		cleaned = append(cleaned, snap)
+	}
+	s.items = cleaned
 	s.lastClearedAt = f.LastClearedAt
+	// Persist the cleaned state right away so the next launch
+	// doesn't repeat the filter pass.
+	if dirty {
+		s.scheduleSaveLocked()
+	}
 	return nil
+}
+
+// isStaleSnapshot returns true when a snapshot exhibits the
+// fingerprint of a no-replies Author/Mentioned entry written by an
+// older detector. Reply-derived reasons (Replied, ReplyMention)
+// always have at least one reply participant in addition to the
+// parent author, so they're never flagged.
+func isStaleSnapshot(snap ThreadSnapshot) bool {
+	if snap.Reason != ReasonAuthor && snap.Reason != ReasonMentioned {
+		return false
+	}
+	return len(snap.Participants) <= 1
 }
 
 // Save persists the current state to disk synchronously. Most
