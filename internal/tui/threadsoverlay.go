@@ -246,18 +246,20 @@ func (m ThreadsOverlayModel) View() string {
 		}
 		b.WriteString("\n")
 	} else {
-		// Each thread occupies 3 lines — channel row, participants
-		// row, blank separator. Reserve overhead for chrome:
+		// Each thread occupies 4 lines — header (time + channel),
+		// participants, parent preview, blank separator. Reserve
+		// overhead for chrome:
 		//   border + padding   ~4
 		//   title + blank      ~2
 		//   filter + blank     ~2
 		//   footer hint        ~2
 		const overhead = 10
+		const rowHeight = 4
 		avail := m.height - overhead
-		if avail < 3 {
-			avail = 3
+		if avail < rowHeight {
+			avail = rowHeight
 		}
-		maxVisible := avail / 3
+		maxVisible := avail / rowHeight
 		if maxVisible < 1 {
 			maxVisible = 1
 		}
@@ -304,10 +306,18 @@ func (m ThreadsOverlayModel) View() string {
 	return scaffold.Render(b.String())
 }
 
-// renderRow builds a 3-line entry: channel name + right-aligned
-// time-since on row 1, participants on row 2, blank spacer on
-// row 3. Mirrors the sidebar's two-row entry visually so a user
-// recognises the same format from both surfaces.
+// renderRow builds a 4-line entry:
+//
+//	▸ 5m  #general
+//	      Alice, Bob
+//	      Hey, can someone review this PR? It's been waiting…
+//	      (blank separator)
+//
+// Row 1 leads with a fixed-width "time since" column (so the
+// channel names tab-align across the list), then the channel
+// label. Rows 2 and 3 indent under the channel name so all the
+// row's content shares one left edge. The trailing blank line
+// gives breathing room between entries.
 func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected bool) string {
 	cursor := "  "
 	if selected {
@@ -321,14 +331,25 @@ func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected boo
 		rowWidth = 30
 	}
 
-	name := threadDisplayName(snap, m.aliases)
 	timeStr := formatRelativeTime(threadActivityTime(snap))
-
-	timeReserve := 0
-	if timeStr != "" {
-		timeReserve = len(timeStr) + 2 // 2-col gap before time
+	if timeStr == "" {
+		timeStr = "—"
 	}
-	nameMax := rowWidth - len(cursor) - timeReserve
+	// Fixed-width time column so channel names line up across rows.
+	// "now" / "1mo" / 4-char widths all fit in 4 cells; pad to 5
+	// for a clean tab.
+	const timeColW = 5
+	timePadded := timeStr
+	if len(timePadded) < timeColW {
+		timePadded += strings.Repeat(" ", timeColW-len(timePadded))
+	}
+	// Indent for rows 2 and 3 — same width as cursor + time col so
+	// the participants list and parent preview align under the
+	// channel name.
+	indent := strings.Repeat(" ", len(cursor)+timeColW)
+
+	name := threadDisplayName(snap, m.aliases)
+	nameMax := rowWidth - len(indent)
 	if nameMax < 1 {
 		nameMax = 1
 	}
@@ -352,18 +373,17 @@ func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected boo
 		nameStyle = ThreadSlackChannelRowStyle
 	}
 
-	row1 := nameStyle.Render(cursor + name)
-	if timeStr != "" {
-		used := len(cursor) + len(name)
-		spacer := rowWidth - used - len(timeStr)
-		if spacer < 1 {
-			spacer = 1
+	timeStyle := ThreadParticipantsRowStyle
+	if selected {
+		timeStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Italic(true)
+		if ColorSelectedChannelBg != "" {
+			timeStyle = timeStyle.Background(ColorSelectedChannelBg)
 		}
-		row1 += strings.Repeat(" ", spacer) + ThreadParticipantsRowStyle.Render(timeStr)
 	}
 
-	// Row 2 — participants list.
-	indent := "    "
+	row1 := cursor + timeStyle.Render(timePadded) + nameStyle.Render(name)
+
+	// Row 2 — participants list, indented under the channel name.
 	partsMax := rowWidth - len(indent)
 	if partsMax < 1 {
 		partsMax = 1
@@ -379,7 +399,33 @@ func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected boo
 			partStyle = partStyle.Background(ColorSelectedChannelBg)
 		}
 	}
-	row2 := partStyle.Render(indent + parts)
+	row2 := indent + partStyle.Render(parts)
 
-	return row1 + "\n" + row2 + "\n"
+	// Row 3 — parent message preview, single line, truncated to
+	// fit the row width.
+	preview := snap.ParentText
+	if preview == "" {
+		preview = "(no preview)"
+	}
+	previewMax := rowWidth - len(indent)
+	if previewMax < 1 {
+		previewMax = 1
+	}
+	if len(preview) > previewMax {
+		clip := previewMax - 1
+		if clip < 1 {
+			clip = 1
+		}
+		preview = preview[:clip] + "…"
+	}
+	previewStyle := ThreadParticipantsRowStyle
+	if selected {
+		previewStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Italic(true)
+		if ColorSelectedChannelBg != "" {
+			previewStyle = previewStyle.Background(ColorSelectedChannelBg)
+		}
+	}
+	row3 := indent + previewStyle.Render(preview)
+
+	return row1 + "\n" + row2 + "\n" + row3 + "\n"
 }
