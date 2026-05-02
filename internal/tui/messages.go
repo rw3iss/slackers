@@ -710,8 +710,13 @@ func (m MessageViewModel) IsFriendChannel() bool {
 	return m.isFriendCh
 }
 
-// FriendCogGlyph is the icon rendered in the upper-right of friend chats.
-const friendCogGlyph = "⚙\ufe0f"
+// friendCogGlyph is the icon rendered in the upper-right of friend
+// chats — clicking it opens the Friend Details panel. ℹ
+// (information) reads more naturally than the old ⚙ since the
+// panel is purely informational. The variable name is kept as-is
+// since the click handler / hit-area helpers reference it across
+// the codebase.
+const friendCogGlyph = "ℹ\ufe0f"
 
 // FriendCogPaneClickArea returns the (startCol, endCol) range, in pane
 // content coordinates (0 = first column inside the border+padding), of
