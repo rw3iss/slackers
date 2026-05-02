@@ -78,6 +78,8 @@ var (
 	ColorUserAwayBg        lipgloss.Color
 	ColorSelectedChannel   lipgloss.Color
 	ColorSelectedChannelBg lipgloss.Color
+	ColorMention           lipgloss.Color
+	ColorMentionBg         lipgloss.Color
 
 	// Shared widget colors — centralised to eliminate inline
 	// magic 256-color indices scattered across overlays. Refreshed
@@ -184,6 +186,13 @@ var (
 	EmojiCellStyle         lipgloss.Style // plain grid cell background
 	EmojiSelectedCellStyle lipgloss.Style // grid cell for the hovered/selected emoji
 	EmojiFavCellStyle      lipgloss.Style // grid cell for a favourited emoji
+
+	// MentionStyle is the in-message styling for @mention pills.
+	// MentionSelectedStyle is the highlighted form when the cursor
+	// is on a mention in select mode (not used yet — reserved for
+	// when in-message mention navigation lands).
+	MentionStyle         lipgloss.Style
+	MentionSelectedStyle lipgloss.Style
 
 	// Threads sidebar group styles. ThreadSlackChannelRowStyle is
 	// the channel-name row when the thread comes from a Slack
@@ -297,6 +306,7 @@ func ApplyTheme(t theme.Theme) {
 	ColorFriendOnline, ColorFriendOnlineBg = applyKey(t, theme.KeyFriendOnline)
 	ColorUserAway, ColorUserAwayBg = applyKey(t, theme.KeyUserAway)
 	ColorSelectedChannel, ColorSelectedChannelBg = applyKey(t, theme.KeySelectedChannel)
+	ColorMention, ColorMentionBg = applyKey(t, theme.KeyMention)
 
 	// Shared widget colors. These are not yet theme keys —
 	// they're fixed 256-color indices chosen to read well on
@@ -511,6 +521,19 @@ func rebuildDerivedStyles() {
 	// Popup menu styles.
 	PopupTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	PopupDimStyle = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+
+	// @mention pill rendered inside chat messages. Bold-themed
+	// foreground so mentions stand out from surrounding text. The
+	// selected variant is reserved for an in-message navigation
+	// cursor mode that may land later.
+	MentionStyle = lipgloss.NewStyle().Foreground(ColorMention).Bold(true)
+	if ColorMentionBg != "" {
+		MentionStyle = MentionStyle.Background(ColorMentionBg)
+	}
+	MentionSelectedStyle = lipgloss.NewStyle().
+		Foreground(ColorInvertedFg).
+		Background(ColorMention).
+		Bold(true)
 
 	// Threads sidebar group styles. Slack threads use the same hue
 	// as regular channel names; friend threads use the online-friend

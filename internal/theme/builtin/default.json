@@ -29,6 +29,7 @@
     "friendOffline": "240",
     "friendOnline": "10",
     "userAway": "214",
-    "selectedChannel": "15"
+    "selectedChannel": "15",
+    "mention": "14"
   }
 }

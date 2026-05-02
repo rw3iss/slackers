@@ -514,6 +514,30 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					return m, func() tea.Msg { return FriendCardClickedMsg{Card: *card} }
 				}
 
+				// Check if an @mention pill was clicked — navigate
+				// to the user's DM (Slack) or friend channel (P2P).
+				if mentionID := m.messages.MentionAtClick(msgPaneX, y); mentionID != "" {
+					if ch := m.findChannelForMention(mentionID); ch != nil {
+						chCopy := *ch
+						m.currentCh = &chCopy
+						m.channels.SelectByID(ch.ID)
+						m.channels.ClearUnread(ch.ID)
+						m.markSlackRead(&chCopy)
+						m.clearChannelNotifs(ch.ID)
+						m.setChannelHeader()
+						m.saveLastChannel(ch.ID)
+						m.focus = types.FocusInput
+						m.updateFocus()
+						if ch.IsFriend {
+							m.loadFriendHistory(ch.UserID)
+							return m, nil
+						}
+						return m, loadHistoryCmd(m.slackSvc, ch.ID)
+					}
+					m.warning = "No channel found for that user"
+					return m, nil
+				}
+
 				// Check if a reaction badge was clicked — toggle the reaction.
 				if reactMsgID, emoji := m.messages.ReactionAtClick(msgPaneX, y); reactMsgID != "" {
 					m.toggleReaction(reactMsgID, emoji)

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -377,6 +378,7 @@ type Model struct {
 	commandList      CommandListModel
 	outputView       OutputViewModel
 	cmdSuggest       CmdSuggestModel
+	mentionSuggest   MentionSuggestModel
 	cmdRegistry      *commands.Registry
 	emoteStore       *emotes.Store
 
@@ -985,7 +987,8 @@ func NewModel(wsList []*workspace.Workspace, cfg *config.Config, version string,
 		eventChan:  make(chan slackpkg.SocketEvent, 100),
 		workspaces: wsMap,
 		activeWsID: activeWsID,
-		cmdSuggest: NewCmdSuggest(),
+		cmdSuggest:     NewCmdSuggest(),
+		mentionSuggest: NewMentionSuggest(),
 	}
 	// Create the download manager.
 	dlPath := cfg.DownloadPath
@@ -2027,6 +2030,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Normal key handling (no overlay)
 		switch {
 		case key.Matches(msg, m.keymap.Tab):
+			// Mention popup gets first shot at Tab — completes the
+			// highlighted user/friend into the input as <@ID>.
+			if m.focus == types.FocusInput && m.mentionSuggest.Visible() {
+				m.completeMentionFromSuggest()
+				return m, nil
+			}
 			// When the command suggestion popup is visible and
 			// focus is on the input, Tab completes the
 			// highlighted suggestion instead of cycling focus.
@@ -2088,6 +2097,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.input.Value() == "" {
 					m.input.ClearEscapeOnce()
 					m.cmdSuggest.Hide()
+					return m, nil
+				}
+				// If the @mention popup is up, Esc dismisses it
+				// without touching the input — same precedence as
+				// the slash-command popup below.
+				if m.mentionSuggest.Visible() {
+					m.mentionSuggest.Hide()
 					return m, nil
 				}
 				// If the slash-command suggestion popup is up,
@@ -2364,6 +2380,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// command. If the suggestion popup is visible, the
 			// arrow keys navigate it; if it's not, they're a
 			// no-op. Either way, swallow the keystroke.
+			// @mention popup gets first crack at Up/Down/Enter
+			// while it's visible, regardless of whether the input
+			// starts with `/`. Tab is already routed earlier in
+			// the global switch. Esc is handled in the Escape
+			// branch above.
+			if m.mentionSuggest.Visible() {
+				switch msg.String() {
+				case "up":
+					m.mentionSuggest.Move(-1)
+					return m, nil
+				case "down":
+					m.mentionSuggest.Move(1)
+					return m, nil
+				case "enter":
+					m.completeMentionFromSuggest()
+					return m, nil
+				}
+			}
 			isSlash := strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/")
 			if isSlash && m.cmdRegistry != nil {
 				switch msg.String() {
@@ -2443,6 +2477,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Refresh / hide the suggestion popup based on the
 			// post-update input value.
 			m.refreshCmdSuggest()
+			m.refreshMentionSuggest()
 		}
 
 		return m, tea.Batch(cmds...)
@@ -5027,6 +5062,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			config.SaveDebounced(m.cfg)
 			m.input.Reset()
 			m.cmdSuggest.Hide()
+			m.mentionSuggest.Hide()
 			m.resizeComponents()
 			res := m.cmdRegistry.Run(text, &m)
 			return m, m.applyCommandResult(res)
@@ -6840,6 +6876,31 @@ func (m Model) renderBaseView() string {
 		base = strings.Join(baseLines, "\n")
 	}
 
+	// @mention popup. Same overlay technique as the slash-command
+	// popup above — sits right above the input bar and covers the
+	// bottom rows of the message pane while visible. The two popups
+	// are mutually exclusive in practice (one starts with `/`, the
+	// other with `@`) so there's no z-order concern.
+	if m.mentionSuggest.Visible() {
+		popupStr := m.mentionSuggest.View()
+		popupLines := strings.Split(popupStr, "\n")
+		baseLines := strings.Split(base, "\n")
+		if len(baseLines) > m.height {
+			baseLines = baseLines[:m.height]
+		}
+		popupStart := m.inputTop - len(popupLines)
+		if popupStart < 0 {
+			popupStart = 0
+		}
+		for i, pline := range popupLines {
+			row := popupStart + i
+			if row >= 0 && row < len(baseLines) {
+				baseLines[row] = pline
+			}
+		}
+		base = strings.Join(baseLines, "\n")
+	}
+
 	// Audio call badge.
 	if x0, _, y, vis := m.audioCallButtonClickArea(); vis {
 		badge := renderAudioCallButton(m.activeCall, m.audioEngine, m.audioCallModel.ShowMicMeter(), m.audioCallModel.ShowPeerMeter())
@@ -6883,6 +6944,145 @@ func (m *Model) activeWs() *workspace.Workspace {
 		return nil
 	}
 	return m.workspaces[m.activeWsID]
+}
+
+// refreshMentionSuggest re-evaluates the @mention popup from the
+// current input value. The popup activates when the user has just
+// typed an `@` that's at the start of the input or preceded by
+// whitespace (so an email like "ryan@example.com" doesn't trigger
+// it), and stays active until they finish the mention with a
+// space, send the message, or press Esc.
+//
+// Resets the popup whenever:
+//   - the input doesn't contain an `@` trigger
+//   - the trigger has been "completed" (whitespace after `@<query>`)
+//   - the user backspaces past the `@`
+//
+// The candidate pool combines Slack workspace users (m.users) and
+// friend contact cards (m.friendStore). Filtering is prefix-match
+// on DisplayName, case-insensitive. Empty queries show the full
+// pool truncated to 8 entries.
+func (m *Model) refreshMentionSuggest() {
+	val := m.input.Value()
+	if val == "" {
+		m.mentionSuggest.Hide()
+		return
+	}
+	// Find the last `@` that could be a trigger. Walk from the
+	// cursor backwards. Since the input doesn't expose its cursor
+	// position cleanly, we treat the end-of-value as the cursor —
+	// a reasonable approximation since users type at the end.
+	end := len(val)
+	at := -1
+	for i := end - 1; i >= 0; i-- {
+		c := val[i]
+		if c == '@' {
+			// `@` is a valid trigger when at the start of input or
+			// preceded by whitespace — otherwise it's part of an
+			// email or unrelated word.
+			if i == 0 {
+				at = i
+				break
+			}
+			prev := val[i-1]
+			if prev == ' ' || prev == '\t' || prev == '\n' {
+				at = i
+				break
+			}
+			// Embedded @ — bail out, no popup.
+			break
+		}
+		if c == ' ' || c == '\t' || c == '\n' {
+			// Hit whitespace before finding `@` — no active trigger.
+			break
+		}
+	}
+	if at < 0 {
+		m.mentionSuggest.Hide()
+		return
+	}
+	query := val[at+1 : end]
+	pool := m.buildMentionPool()
+	matches := rankMentionMatches(query, pool, 8)
+	m.mentionSuggest.SetMatches(matches)
+	m.mentionSuggest.SetTrigger(at, end)
+	m.mentionSuggest.SetWidth(m.width - 2)
+}
+
+// buildMentionPool assembles the candidate list shown in the
+// @mention popup, merging Slack workspace users and friend records.
+// Sorted alphabetically by DisplayName so prefix matching feels
+// stable as the user types.
+func (m *Model) buildMentionPool() []MentionEntry {
+	var pool []MentionEntry
+	seenNames := make(map[string]bool)
+	for id, u := range m.users {
+		name := u.DisplayName
+		if name == "" {
+			name = u.RealName
+		}
+		if name == "" {
+			continue
+		}
+		if seenNames[strings.ToLower(name)] {
+			continue
+		}
+		seenNames[strings.ToLower(name)] = true
+		subtitle := "user"
+		if id == m.myUserID {
+			subtitle = "you"
+		}
+		pool = append(pool, MentionEntry{
+			ID:          id,
+			DisplayName: name,
+			Subtitle:    subtitle,
+			IsFriend:    false,
+		})
+	}
+	if m.friendStore != nil {
+		for _, f := range m.friendStore.All() {
+			name := f.Name
+			if name == "" {
+				continue
+			}
+			if seenNames[strings.ToLower(name)] {
+				continue
+			}
+			seenNames[strings.ToLower(name)] = true
+			pool = append(pool, MentionEntry{
+				ID:          "slacker:" + f.SlackerID,
+				DisplayName: name,
+				Subtitle:    "friend",
+				IsFriend:    true,
+			})
+		}
+	}
+	sort.Slice(pool, func(i, j int) bool {
+		return strings.ToLower(pool[i].DisplayName) < strings.ToLower(pool[j].DisplayName)
+	})
+	return pool
+}
+
+// completeMentionFromSuggest splices the wire-format token for the
+// currently highlighted @mention into the input, replacing the
+// `@<query>` the user was typing. Called from the input keystroke
+// handler when the user presses Tab or Enter while the popup is
+// visible.
+func (m *Model) completeMentionFromSuggest() {
+	sel := m.mentionSuggest.Selected()
+	if sel == nil {
+		return
+	}
+	start := m.mentionSuggest.TriggerStart()
+	end := m.mentionSuggest.TriggerEnd()
+	val := m.input.Value()
+	if start < 0 || end > len(val) || start > end {
+		return
+	}
+	token := "<@" + sel.ID + "> "
+	newVal := val[:start] + token + val[end:]
+	m.input.SetValue(newVal)
+	m.mentionSuggest.Hide()
 }
 
 // detectThreads runs forward-tracking thread detection over the
@@ -7056,6 +7256,40 @@ func previewText(text string, maxRunes int) string {
 		}
 	}
 	return string(out)
+}
+
+// findChannelForMention resolves the channel a clicked @mention
+// pill should switch the user to. Slack ids ("U...") look up the
+// 1:1 DM with that user; friend ids ("slacker:...") look up the
+// matching friend channel.
+//
+// Returns nil when no channel exists for the user (e.g. a workspace
+// member you've never opened a DM with). The caller surfaces this
+// as a warning.
+func (m *Model) findChannelForMention(mentionID string) *types.Channel {
+	if mentionID == "" {
+		return nil
+	}
+	if strings.HasPrefix(mentionID, "slacker:") {
+		// Friend mention. Friend channel ids are "friend:<UserID>"
+		// where UserID is the slacker:<id> form (see handlers_p2p).
+		friendID := mentionID
+		for i := range m.channels.channels {
+			ch := &m.channels.channels[i]
+			if ch.IsFriend && ch.UserID == friendID {
+				return ch
+			}
+		}
+		return nil
+	}
+	// Slack user mention — find the 1:1 DM channel for that user.
+	for i := range m.channels.channels {
+		ch := &m.channels.channels[i]
+		if ch.IsDM && ch.UserID == mentionID {
+			return ch
+		}
+	}
+	return nil
 }
 
 // findChannelByThreadRef resolves the local Channel record for a

@@ -1,6 +1,7 @@
 package format
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -13,7 +14,10 @@ var (
 	reItalic        = regexp.MustCompile(`\b_([^_]+)_\b`)
 	reStrikethrough = regexp.MustCompile(`~([^~]+)~`)
 
-	reUserMention    = regexp.MustCompile(`<@(U[A-Z0-9]+)>`)
+	// reUserMention matches both Slack-style mentions (<@U12345>) and
+	// friend-style mentions (<@slacker:abc123>). The two forms share
+	// one regex so callers don't have to walk twice.
+	reUserMention    = regexp.MustCompile(`<@(U[A-Z0-9]+|slacker:[A-Za-z0-9]+)>`)
 	reChannelMention = regexp.MustCompile(`<#C[A-Z0-9]+\|([^>]+)>`)
 	reLabeledLink    = regexp.MustCompile(`<([^>|]+)\|([^>]+)>`)
 	reBareLink       = regexp.MustCompile(`<([^>|]+)>`)
@@ -21,9 +25,40 @@ var (
 	reBroadcast = regexp.MustCompile(`<!(\w+)>`)
 )
 
+// Mention captures one resolved @mention extracted from a message
+// during formatting. The renderer uses it to swap the inline marker
+// emitted by FormatMessageWithMentions into a styled, clickable pill.
+type Mention struct {
+	// ID is the canonical user identifier — a Slack user id like
+	// "U12345" or a friend id like "slacker:<SlackerID>".
+	ID string
+	// Name is the resolved display name (without the leading "@").
+	Name string
+}
+
 // FormatMessage converts Slack mrkdwn markup to plain terminal text.
-// The users map provides user ID to display name lookups for @mentions.
+// The users map provides user ID to display name lookups for
+// @mentions, including both Slack ids ("U...") and friend ids
+// ("slacker:..."). Equivalent to FormatMessageWithMentions but
+// discards the mention sidecar; kept for callers that don't need
+// the rich form.
 func FormatMessage(text string, users map[string]string) string {
+	out, _ := FormatMessageWithMentions(text, users)
+	return out
+}
+
+// FormatMessageWithMentions formats `text` and returns both the
+// rendered string and a sidecar slice describing each @mention that
+// appeared. Each mention is replaced inline with a short marker:
+//
+//	[MENTION:#m-N]
+//
+// where N is the index into the returned []Mention. The renderer is
+// responsible for swapping the marker for a styled pill at render
+// time (see messages.rewriteMentionPills) — this keeps mention
+// width predictable for word-wrap and lets the renderer record per-
+// line click hit positions.
+func FormatMessageWithMentions(text string, users map[string]string) (string, []Mention) {
 	var codeBlocks []string
 	var inlineCodes []string
 
@@ -43,12 +78,17 @@ func FormatMessage(text string, users map[string]string) string {
 	text = reItalic.ReplaceAllString(text, "$1")
 	text = reStrikethrough.ReplaceAllString(text, "$1")
 
+	var mentions []Mention
 	text = reUserMention.ReplaceAllStringFunc(text, func(match string) string {
 		parts := reUserMention.FindStringSubmatch(match)
-		if name, ok := users[parts[1]]; ok {
-			return "@" + name
+		id := parts[1]
+		name, ok := users[id]
+		if !ok || name == "" {
+			name = "unknown"
 		}
-		return "@unknown"
+		idx := len(mentions)
+		mentions = append(mentions, Mention{ID: id, Name: name})
+		return fmt.Sprintf("[MENTION:#m-%d]", idx)
 	})
 
 	text = reChannelMention.ReplaceAllString(text, "#$1")
@@ -79,8 +119,13 @@ func FormatMessage(text string, users map[string]string) string {
 		text = strings.Replace(text, placeholder("CB", i), codeBlocks[i], 1)
 	}
 
-	return text
+	return text, mentions
 }
+
+// MentionMarkerRE matches the inline marker emitted by
+// FormatMessageWithMentions. Exposed so the renderer can scan each
+// wrapped line for markers and swap them for styled pills.
+var MentionMarkerRE = regexp.MustCompile(`\[MENTION:#m-(\d+)\]`)
 
 func placeholder(kind string, idx int) string {
 	return "\x00" + kind + string(rune(idx)) + "\x00"
