@@ -186,17 +186,24 @@ func (s *ThreadStore) Add(snap ThreadSnapshot) bool {
 	}
 	for i, existing := range s.items {
 		if existing.Ref == snap.Ref {
-			// Refresh denormalized fields but preserve original
-			// AddedAt and Reason — those represent the original
-			// detection event, not the latest activity.
+			// Refresh every denormalized field but preserve the
+			// original AddedAt and Reason — those represent the
+			// initial detection event, not the latest activity.
+			// ReplyCount and LastActivityAt MUST be refreshed so
+			// the (N replies) badge and time-since label stay
+			// current as new replies arrive.
 			updated := existing
 			updated.ChannelName = snap.ChannelName
 			updated.ParentText = snap.ParentText
 			updated.ParentAuthorID = snap.ParentAuthorID
 			updated.ParentAuthorName = snap.ParentAuthorName
 			updated.Participants = snap.Participants
+			updated.ReplyCount = snap.ReplyCount
 			if snap.LastActivityTS > updated.LastActivityTS {
 				updated.LastActivityTS = snap.LastActivityTS
+			}
+			if !snap.LastActivityAt.IsZero() && snap.LastActivityAt.After(updated.LastActivityAt) {
+				updated.LastActivityAt = snap.LastActivityAt
 			}
 			s.items[i] = updated
 			s.scheduleSaveLocked()
