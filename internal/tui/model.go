@@ -7724,9 +7724,9 @@ func (m Model) renderStatusBar() string {
 const settingsCogGlyph = "⚙\ufe0f"
 
 // exitButtonGlyph is the quit-app button shown in the bottom-right
-// corner of the status bar when mouse mode is enabled. ❌ is
-// universally legible as "close" across terminal fonts.
-const exitButtonGlyph = "❌"
+// corner of the status bar when mouse mode is enabled. 🚪 (door)
+// reads as "exit" without the visual heaviness of the red ❌.
+const exitButtonGlyph = "🚪"
 
 // settingsCogClickArea returns the [startX, endX) column range for the
 // settings cog in the status bar. Returns (0, 0) when the cog is not shown.
