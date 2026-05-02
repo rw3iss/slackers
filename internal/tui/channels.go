@@ -1160,20 +1160,46 @@ func wrapAndTruncate(text string, maxWidth, maxLines int) []string {
 // Both columns share the row's selection highlight so the entry
 // reads as a single picker target.
 func (m ChannelListModel) renderThreadItem(snap threads.ThreadSnapshot, rowIdx int, maxLen int, isSecondLine bool) string {
+	// Prefix conventions (matches the regular channel rows so the
+	// thread group's left edge lines up with the rest of the
+	// sidebar):
+	//   selected   line 1 → "> " (cursor in same column as
+	//                              regular channels)
+	//   selected   line 2 → "    " (participants nested 2 cols
+	//                                under the channel name)
+	//   unselected line 1 → "  " (matches regular channel
+	//                              indent — was previously 4
+	//                              cols which pushed the labels
+	//                              too far right)
+	//   unselected line 2 → "    " (same nest as selected)
 	prefix := "  "
-	if rowIdx == m.selected && !isSecondLine {
+	switch {
+	case rowIdx == m.selected && !isSecondLine:
 		prefix = "> "
-	} else if rowIdx == m.selected {
-		// Second line indents under the caret position so the
-		// participants row visually nests under the channel name.
+	case rowIdx == m.selected:
 		prefix = "    "
-	} else {
+	case isSecondLine:
 		prefix = "    "
 	}
 
+	// Inner row width — full sidebar inner area, not just the
+	// name budget the caller passes for renderItem. SidebarStyle
+	// uses asymmetric padding (1 col left, 0 col right) so the
+	// real content area is `m.width - 3` cells. The caller
+	// passes `m.width - 5` (the name budget after a 2-col
+	// prefix), so we add 2 to recover the full row.
+	inner := maxLen + 2
+	if inner < 1 {
+		inner = 1
+	}
+
 	if isSecondLine {
-		// Participants row.
-		text := joinParticipantNames(snap.Participants, maxLen-len(prefix))
+		// Participants row, indented under the channel name.
+		partsMax := inner - len(prefix)
+		if partsMax < 1 {
+			partsMax = 1
+		}
+		text := joinParticipantNames(snap.Participants, partsMax)
 		if text == "" {
 			text = "no other participants"
 		}
@@ -1196,16 +1222,12 @@ func (m ChannelListModel) renderThreadItem(snap threads.ThreadSnapshot, rowIdx i
 		timeStr = formatRelativeTime(snap.AddedAt)
 	}
 
-	// Compute available width for the name column: total inner
-	// width minus prefix minus time-since text (with a 1-col gap
-	// between name and time).
-	inner := maxLen
-	if inner < 1 {
-		inner = 1
-	}
 	timeReserve := 0
 	if timeStr != "" {
-		timeReserve = len(timeStr) + 1 // 1-col gap before time
+		// One col of breathing room before the time string;
+		// time itself ends flush with the right edge of the
+		// inner content area.
+		timeReserve = len(timeStr) + 1
 	}
 	nameMax := inner - len(prefix) - timeReserve
 	if nameMax < 1 {
@@ -1232,14 +1254,12 @@ func (m ChannelListModel) renderThreadItem(snap threads.ThreadSnapshot, rowIdx i
 	}
 
 	leftPart := nameStyle.Render(prefix + name)
-
 	if timeStr == "" {
 		return leftPart
 	}
 
-	// Pad between name and time with regular spaces. Compute the
-	// spacer so the time-since string ends at the right edge of
-	// the inner content area.
+	// Pad between name and time so the time string sits at the
+	// inner right edge — no trailing whitespace before the border.
 	used := len(prefix) + len(name)
 	spacer := inner - used - len(timeStr)
 	if spacer < 1 {
