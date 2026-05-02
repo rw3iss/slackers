@@ -33,6 +33,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rw3iss/slackers/internal/format"
 	"github.com/rw3iss/slackers/internal/threads"
 )
 
@@ -41,8 +42,9 @@ import (
 // reference back to the store. Aliases come along for label
 // resolution (matches the sidebar's threadDisplayName precedence).
 type ThreadsOverlayOpenMsg struct {
-	Active  []threads.ThreadSnapshot
-	Aliases map[string]string
+	Active   []threads.ThreadSnapshot
+	Aliases  map[string]string
+	Resolver map[string]string
 }
 
 // ThreadsOverlayCloseMsg dismisses the overlay without acting on
@@ -57,22 +59,44 @@ type ThreadsOverlayRemoveMsg struct {
 	Ref threads.ThreadRef
 }
 
+// rowHitArea records the absolute Y range a rendered thread row
+// occupies inside the overlay box. Used by the mouse handler to
+// translate a click anywhere on a row's lines into the index of
+// the thread that was clicked.
+type rowHitArea struct {
+	startLine int
+	endLine   int
+}
+
 // ThreadsOverlayModel renders the global Threads list.
 type ThreadsOverlayModel struct {
 	all        []threads.ThreadSnapshot
 	filtered   []threads.ThreadSnapshot
 	aliases    map[string]string
+	resolver   map[string]string
 	filter     textinput.Model
 	list       SelectableList
 	focusInput bool
 	width      int
 	height     int
+	// rowHits is rebuilt every View() — maps each rendered row to
+	// its index inside m.filtered so a click can resolve back to
+	// the right snapshot. Keys are the row's start Y inside the
+	// content area (before lipgloss.Place centres it).
+	rowHits []rowHitArea
+	// contentRowOffset is the Y offset from the box top to the
+	// first row of the list (header + filter + blank lines).
+	// Captured during View() so click hit-test can subtract it.
+	contentRowOffset int
 }
 
 // NewThreadsOverlay constructs the overlay from a snapshot of
 // active threads. Pass a fresh snapshot each open so the list
-// reflects current state.
-func NewThreadsOverlay(active []threads.ThreadSnapshot, aliases map[string]string) ThreadsOverlayModel {
+// reflects current state. `resolver` is the same id→name map
+// FormatMessage consumes — used to render `<@…>` mentions in
+// parent previews as readable names at render time, in case the
+// stored snapshot text predates the build-time mention resolution.
+func NewThreadsOverlay(active []threads.ThreadSnapshot, aliases map[string]string, resolver map[string]string) ThreadsOverlayModel {
 	ti := textinput.New()
 	ti.Placeholder = "Search threads (channel, parent text, participants)..."
 	ti.Prompt = "🔍 "
@@ -83,6 +107,7 @@ func NewThreadsOverlay(active []threads.ThreadSnapshot, aliases map[string]strin
 		all:        active,
 		filtered:   active,
 		aliases:    aliases,
+		resolver:   resolver,
 		filter:     ti,
 		focusInput: true,
 		list: SelectableList{
@@ -217,6 +242,29 @@ func (m ThreadsOverlayModel) Update(msg tea.Msg) (ThreadsOverlayModel, tea.Cmd) 
 			m.list.Navigate(-1)
 		case tea.MouseButtonWheelDown:
 			m.list.Navigate(1)
+		case tea.MouseButtonLeft:
+			if msg.Action != tea.MouseActionPress {
+				return m, nil
+			}
+			idx := m.rowAtScreenY(msg.Y)
+			if idx < 0 || idx >= len(m.filtered) {
+				return m, nil
+			}
+			// Move the cursor to the clicked row, then activate.
+			m.list.SetCount(len(m.filtered))
+			for m.list.Current() < idx {
+				m.list.Navigate(1)
+			}
+			for m.list.Current() > idx {
+				m.list.Navigate(-1)
+			}
+			ref := m.filtered[idx].Ref
+			return m, tea.Batch(
+				func() tea.Msg { return ThreadsOverlayCloseMsg{} },
+				func() tea.Msg {
+					return threads.OpenThreadMsg{Ref: ref, OpenReplyView: true}
+				},
+			)
 		}
 	}
 	return m, nil
@@ -236,6 +284,24 @@ func (m ThreadsOverlayModel) View() string {
 	b.WriteString(m.filter.View())
 	b.WriteString("\n\n")
 
+	// Inner width inside the box — overlay's MaxBoxWidth is 90,
+	// reserve 4 for border (2) + padding (2 cols).
+	boxW := 90
+	if m.width-4 < boxW {
+		boxW = m.width - 4
+	}
+	if boxW < 30 {
+		boxW = 30
+	}
+	innerWidth := boxW - 8 // border 2 + padding 6 (Padding(1, 3))
+
+	// Reset hit tracking — rebuilt this render.
+	m.rowHits = m.rowHits[:0]
+	// contentRowOffset is the line index where the first thread
+	// row starts, relative to the box's top-inside-padding edge.
+	// It accounts for: title row, blank, filter row, blank.
+	m.contentRowOffset = 4
+
 	if len(m.filtered) == 0 {
 		if strings.TrimSpace(m.filter.Value()) != "" {
 			b.WriteString(dimStyle.Render("  No matches."))
@@ -246,20 +312,17 @@ func (m ThreadsOverlayModel) View() string {
 		}
 		b.WriteString("\n")
 	} else {
-		// Each thread occupies 4 lines — header (time + channel),
-		// participants, parent preview, blank separator. Reserve
-		// overhead for chrome:
+		// Reserve overhead for chrome:
 		//   border + padding   ~4
 		//   title + blank      ~2
 		//   filter + blank     ~2
 		//   footer hint        ~2
 		const overhead = 10
-		const rowHeight = 4
 		avail := m.height - overhead
-		if avail < rowHeight {
-			avail = rowHeight
+		if avail < threadRowHeight {
+			avail = threadRowHeight
 		}
-		maxVisible := avail / rowHeight
+		maxVisible := avail / threadRowHeight
 		if maxVisible < 1 {
 			maxVisible = 1
 		}
@@ -277,9 +340,19 @@ func (m ThreadsOverlayModel) View() string {
 			end = len(m.filtered)
 		}
 
+		// Track render-line position so click hit-test maps clicks
+		// back to the right snapshot. line counts from 0 at the
+		// top of the rows area (i.e. m.contentRowOffset lines into
+		// the box's content).
+		line := 0
 		for i := start; i < end; i++ {
-			b.WriteString(m.renderRow(m.filtered[i], i == sel))
+			b.WriteString(m.renderRow(m.filtered[i], i == sel, innerWidth))
 			b.WriteString("\n")
+			m.rowHits = append(m.rowHits, rowHitArea{
+				startLine: line,
+				endLine:   line + threadRowHeight - 1,
+			})
+			line += threadRowHeight
 		}
 		if start > 0 {
 			b.WriteString(dimStyle.Render("  ... more above\n"))
@@ -295,61 +368,156 @@ func (m ThreadsOverlayModel) View() string {
 		"x: close thread" + HintSep +
 		FooterHintClose
 
+	// Pin box height so the click hit-test below has predictable
+	// row geometry. Box is centred via lipgloss.Place so the top
+	// is at (m.height - boxH) / 2.
+	boxH := m.height - 4
+	if boxH < 12 {
+		boxH = 12
+	}
+
 	scaffold := OverlayScaffold{
 		Title:       "",
 		Footer:      footer,
 		Width:       m.width,
 		Height:      m.height,
 		MaxBoxWidth: 90,
+		BoxHeight:   boxH,
 		BorderColor: ColorPrimary,
 	}
 	return scaffold.Render(b.String())
 }
 
+// rowsScreenStart returns the absolute Y coordinate where the
+// first thread row starts on screen. Used by the click handler.
+// Mirrors the layout used by Render: box centred with margin 2,
+// then border (1) + top padding (1) + title (1) + blank (1) +
+// filter (1) + blank (1) = 6 lines before the rows.
+func (m ThreadsOverlayModel) rowsScreenStart() int {
+	boxH := m.height - 4
+	if boxH < 12 {
+		boxH = 12
+	}
+	boxTop := (m.height - boxH) / 2
+	if boxTop < 0 {
+		boxTop = 0
+	}
+	return boxTop + 2 + m.contentRowOffset
+}
+
+// rowAtScreenY returns the index into m.filtered for the row at
+// screen Y, or -1 if the click missed every rendered row.
+func (m ThreadsOverlayModel) rowAtScreenY(y int) int {
+	rowsTop := m.rowsScreenStart()
+	if y < rowsTop {
+		return -1
+	}
+	off := y - rowsTop
+	idx := off / threadRowHeight
+	if idx < 0 || idx >= len(m.rowHits) {
+		return -1
+	}
+	// Map back to filtered index — m.rowHits[i] corresponds to the
+	// i'th rendered row, which is filtered[start+i]. We don't track
+	// `start` here, but List.Current() / scroll start can be
+	// recovered from the hit's startLine. Simpler: rely on the
+	// scroll start the View used. Recompute from list state.
+	sel := m.list.Current()
+	maxVisible := len(m.rowHits)
+	start := 0
+	if sel >= maxVisible {
+		start = sel - maxVisible + 1
+	}
+	end := start + maxVisible
+	if end > len(m.filtered) {
+		end = len(m.filtered)
+	}
+	abs := start + idx
+	if abs < 0 || abs >= len(m.filtered) {
+		return -1
+	}
+	return abs
+}
+
+// rowHeight is the fixed number of visual lines every thread row
+// occupies in the overlay — header (time + channel + members) +
+// up to 2 wrapped message-preview lines + trailing blank. Fixed
+// because the click hit-test needs predictable row geometry.
+const threadRowHeight = 4
+
 // renderRow builds a 4-line entry:
 //
-//	▸ 5m  #general
-//	      Alice, Bob
-//	      Hey, can someone review this PR? It's been waiting…
-//	      (blank separator)
+//	▸ 5m  #general - Alice, Bob
+//	      Hey, can someone review my PR? It's been waiting
+//	      for two days now…
+//	      (blank)
 //
-// Row 1 leads with a fixed-width "time since" column (so the
-// channel names tab-align across the list), then the channel
-// label. Rows 2 and 3 indent under the channel name so all the
-// row's content shares one left edge. The trailing blank line
-// gives breathing room between entries.
-func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected bool) string {
+// Row 1 leads with a fixed-width "time since" column then the
+// channel label, dash, and participants list — sharing one row
+// keeps the list dense. Rows 2-3 indent under the channel name
+// (same column as the time col + cursor padding) so the message
+// text aligns with the channel-name column on the left. Long
+// message previews wrap to a second line and truncate with `…`
+// if they overflow that.
+//
+// Every output line is padded to the overlay's inner width with
+// the theme background colour so wrapped/empty cells don't show
+// the terminal default — same trick the chat pane uses via
+// MessagePaneStyle's Background.
+func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected bool, innerWidth int) string {
 	cursor := "  "
 	if selected {
 		cursor = "> "
-	}
-
-	// Width budget for the row — overlay box width minus border +
-	// padding allowance.
-	rowWidth := m.width - 12
-	if rowWidth < 30 {
-		rowWidth = 30
 	}
 
 	timeStr := formatRelativeTime(threadActivityTime(snap))
 	if timeStr == "" {
 		timeStr = "—"
 	}
-	// Fixed-width time column so channel names line up across rows.
-	// "now" / "1mo" / 4-char widths all fit in 4 cells; pad to 5
-	// for a clean tab.
 	const timeColW = 5
 	timePadded := timeStr
 	if len(timePadded) < timeColW {
 		timePadded += strings.Repeat(" ", timeColW-len(timePadded))
 	}
-	// Indent for rows 2 and 3 — same width as cursor + time col so
-	// the participants list and parent preview align under the
-	// channel name.
 	indent := strings.Repeat(" ", len(cursor)+timeColW)
 
+	// Styles keyed off selection and source.
+	var nameStyle lipgloss.Style
+	if selected {
+		nameStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Bold(true)
+	} else if snap.Ref.Source == threads.SourceFriend {
+		nameStyle = ThreadFriendChannelRowStyle
+	} else {
+		nameStyle = ThreadSlackChannelRowStyle
+	}
+	dimStyle := ThreadParticipantsRowStyle
+	if selected {
+		dimStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Italic(true)
+	}
+	// Parent message preview is regular grey, distinct from the
+	// dim/italic participants colour — matches the chat-pane
+	// muted text colour for body content.
+	previewStyle := lipgloss.NewStyle().Foreground(ColorMuted)
+	if selected {
+		previewStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel)
+	}
+
+	// --- Row 1: time + channel + " - " + members ----------------
 	name := threadDisplayName(snap, m.aliases)
-	nameMax := rowWidth - len(indent)
+	parts := joinParticipantNames(snap.Participants, max1(innerWidth/2))
+
+	// Width math for row 1 — figure out how much the channel name
+	// can use after reserving for cursor, time col, " - ", and
+	// participants.
+	row1Avail := innerWidth - len(cursor) - timeColW
+	if row1Avail < 1 {
+		row1Avail = 1
+	}
+	sep := ""
+	if parts != "" {
+		sep = " - "
+	}
+	nameMax := row1Avail - len(sep) - len(parts)
 	if nameMax < 1 {
 		nameMax = 1
 	}
@@ -360,72 +528,77 @@ func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected boo
 		}
 		name = name[:clip] + "~"
 	}
-
-	var nameStyle lipgloss.Style
-	if selected {
-		nameStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Bold(true)
-		if ColorSelectedChannelBg != "" {
-			nameStyle = nameStyle.Background(ColorSelectedChannelBg)
-		}
-	} else if snap.Ref.Source == threads.SourceFriend {
-		nameStyle = ThreadFriendChannelRowStyle
-	} else {
-		nameStyle = ThreadSlackChannelRowStyle
+	row1Body := cursor + dimStyle.Render(timePadded) + nameStyle.Render(name)
+	if parts != "" {
+		row1Body += dimStyle.Render(sep + parts)
 	}
+	row1 := bgPad(row1Body, innerWidth)
 
-	timeStyle := ThreadParticipantsRowStyle
-	if selected {
-		timeStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Italic(true)
-		if ColorSelectedChannelBg != "" {
-			timeStyle = timeStyle.Background(ColorSelectedChannelBg)
-		}
-	}
-
-	row1 := cursor + timeStyle.Render(timePadded) + nameStyle.Render(name)
-
-	// Row 2 — participants list, indented under the channel name.
-	partsMax := rowWidth - len(indent)
-	if partsMax < 1 {
-		partsMax = 1
-	}
-	parts := joinParticipantNames(snap.Participants, partsMax)
-	if parts == "" {
-		parts = "no other participants"
-	}
-	partStyle := ThreadParticipantsRowStyle
-	if selected {
-		partStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Italic(true)
-		if ColorSelectedChannelBg != "" {
-			partStyle = partStyle.Background(ColorSelectedChannelBg)
-		}
-	}
-	row2 := indent + partStyle.Render(parts)
-
-	// Row 3 — parent message preview, single line, truncated to
-	// fit the row width.
+	// --- Row 2 / 3: parent message preview, wrapped --------------
 	preview := snap.ParentText
+	// Resolve any leftover <@U…> / <@slacker:…> markers using
+	// the live resolver — covers snapshots that predate the
+	// build-time resolution in buildThreadSnapshot.
+	if strings.Contains(preview, "<@") && len(m.resolver) > 0 {
+		preview = format.FormatMessage(preview, m.resolver)
+	}
 	if preview == "" {
 		preview = "(no preview)"
 	}
-	previewMax := rowWidth - len(indent)
+
+	previewMax := innerWidth - len(indent)
 	if previewMax < 1 {
 		previewMax = 1
 	}
-	if len(preview) > previewMax {
-		clip := previewMax - 1
-		if clip < 1 {
-			clip = 1
+	wrappedLines := strings.Split(wordWrap(preview, previewMax), "\n")
+	// Cap at 2 wrapped lines; truncate the second line with `…`
+	// if the body extends further.
+	if len(wrappedLines) > 2 {
+		second := wrappedLines[1]
+		if len(second) > previewMax-1 {
+			second = second[:previewMax-1] + "…"
+		} else {
+			second += "…"
 		}
-		preview = preview[:clip] + "…"
+		wrappedLines = []string{wrappedLines[0], second}
 	}
-	previewStyle := ThreadParticipantsRowStyle
-	if selected {
-		previewStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Italic(true)
-		if ColorSelectedChannelBg != "" {
-			previewStyle = previewStyle.Background(ColorSelectedChannelBg)
-		}
+	for len(wrappedLines) < 2 {
+		wrappedLines = append(wrappedLines, "")
 	}
-	row3 := indent + previewStyle.Render(preview)
 
-	return row1 + "\n" + row2 + "\n" + row3 + "\n"
+	row2 := bgPad(indent+previewStyle.Render(wrappedLines[0]), innerWidth)
+	row3 := bgPad(indent+previewStyle.Render(wrappedLines[1]), innerWidth)
+
+	// Row 4 — blank separator, but still bg-padded so the box
+	// background is consistent.
+	row4 := bgPad("", innerWidth)
+
+	return row1 + "\n" + row2 + "\n" + row3 + "\n" + row4
+}
+
+// bgPad pads `text` with theme-background-coloured spaces out to
+// `width` cells so wrapped / short content lines render with a
+// consistent background instead of falling through to the
+// terminal default. Mirrors the trick MessagePaneStyle uses in
+// the main chat pane.
+func bgPad(text string, width int) string {
+	used := lipgloss.Width(text)
+	if used >= width {
+		return text
+	}
+	pad := strings.Repeat(" ", width-used)
+	style := lipgloss.NewStyle()
+	if ColorBackgroundBg != "" {
+		style = style.Background(ColorBackgroundBg)
+	}
+	return text + style.Render(pad)
+}
+
+// max1 returns x or 1, whichever is larger. Used to keep width
+// budgets non-negative without dragging in stdlib max generics.
+func max1(x int) int {
+	if x < 1 {
+		return 1
+	}
+	return x
 }

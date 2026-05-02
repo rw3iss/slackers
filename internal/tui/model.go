@@ -27,6 +27,7 @@ import (
 	"github.com/rw3iss/slackers/internal/debug"
 	"github.com/rw3iss/slackers/internal/downloads"
 	"github.com/rw3iss/slackers/internal/emotes"
+	"github.com/rw3iss/slackers/internal/format"
 	"github.com/rw3iss/slackers/internal/friends"
 	"github.com/rw3iss/slackers/internal/notifications"
 	"github.com/rw3iss/slackers/internal/plugins"
@@ -3944,8 +3945,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case threads.OpenThreadsViewMsg:
 		// Opens the global Threads overlay. Snapshots the current
-		// active set + alias map so the overlay can render and
-		// filter without holding store references.
+		// active set + alias map + user resolver so the overlay
+		// can render and filter without holding store references.
 		if m.threadStore == nil {
 			return m, nil
 		}
@@ -3953,7 +3954,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cfg != nil && m.cfg.ChannelAliases != nil {
 			aliases = m.cfg.ChannelAliases
 		}
-		m.threadsOverlay = NewThreadsOverlay(m.threadStore.Active(), aliases)
+		m.threadsOverlay = NewThreadsOverlay(m.threadStore.Active(), aliases, m.buildResolverMap())
 		m.threadsOverlay.SetSize(m.width, m.height)
 		m.overlay = overlayThreadsView
 		return m, nil
@@ -7272,6 +7273,15 @@ func (m *Model) completeMentionFromSuggest() {
 // formatted text uses up-to-date names. SetUsers invalidates the
 // formatted-text and mention sidecar caches automatically.
 func (m *Model) refreshUserMap() {
+	m.messages.SetUsers(m.buildResolverMap())
+}
+
+// buildResolverMap returns the (id → display name) map used by
+// FormatMessage to resolve `<@...>` mention markers. Same content
+// refreshUserMap pushes to MessageViewModel, but exposed as a pure
+// builder so other code paths (e.g. thread-snapshot construction)
+// can call it directly without round-tripping through SetUsers.
+func (m *Model) buildResolverMap() map[string]string {
 	userMap := make(map[string]string, len(m.users)+8)
 	dmAliasByUser := m.dmAliasByUser()
 	for id, u := range m.users {
@@ -7286,7 +7296,7 @@ func (m *Model) refreshUserMap() {
 			userMap["slacker:"+f.SlackerID] = name
 		}
 	}
-	m.messages.SetUsers(userMap)
+	return userMap
 }
 
 // notifyFriendsChanged is the canonical "friends mutated" hook —
@@ -7456,7 +7466,7 @@ func (m *Model) buildThreadSnapshot(parent types.Message, ch *types.Channel, sou
 			ParentTS:  parent.MessageID,
 		},
 		ChannelName:      chanName,
-		ParentText:       previewText(parent.Text, 120),
+		ParentText:       previewText(format.FormatMessage(parent.Text, m.buildResolverMap()), 120),
 		ParentAuthorID:   parent.UserID,
 		ParentAuthorName: authorName,
 		Participants:     participants,
