@@ -52,6 +52,12 @@ type Message struct {
 	Files       []FileInfo `json:"files,omitempty"`
 	Reactions   []Reaction `json:"reactions,omitempty"`
 	Replies     []Message  `json:"replies,omitempty"`  // child messages (replies)
+	// ReplyCount is the authoritative count of replies on a parent
+	// message, populated from Slack's `reply_count` history field
+	// when available. Use this instead of len(Replies) — fetching
+	// the full reply list (fetchReplies) can fail or be skipped,
+	// leaving Replies empty even when Slack knows the real count.
+	ReplyCount  int        `json:"reply_count,omitempty"`
 	ReplyTo     string     `json:"reply_to,omitempty"` // parent message ID if this is a reply
 	IsEncrypted bool       `json:"is_encrypted,omitempty"`
 	// Pending marks a friend (P2P) message that could not be

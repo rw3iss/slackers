@@ -41,7 +41,14 @@ import (
 // rule to match wins. The store doesn't compare reasons, but tests
 // rely on the priority for stability.
 func Detect(msg types.Message, me string, forward bool) (ThreadReason, bool) {
-	if me == "" || len(msg.Replies) == 0 {
+	if me == "" {
+		return "", false
+	}
+	// Hard prerequisite: the parent must have at least one reply.
+	// Trust either the populated reply slice or the authoritative
+	// ReplyCount field — fetchReplies can fail or be skipped,
+	// leaving Replies empty even when Slack reports a real count.
+	if len(msg.Replies) == 0 && msg.ReplyCount == 0 {
 		return "", false
 	}
 

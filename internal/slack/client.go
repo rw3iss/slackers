@@ -388,14 +388,15 @@ func (c *slackClient) FetchHistory(channelID string, limit int) ([]types.Message
 	messages := make([]types.Message, 0, len(resp.Messages))
 	for _, msg := range resp.Messages {
 		m := types.Message{
-			MessageID: msg.Timestamp,
-			UserID:    msg.User,
-			UserName:  c.ResolveUserName(msg.User),
-			Text:      msg.Text,
-			Timestamp: parseSlackTimestamp(msg.Timestamp),
-			ChannelID: channelID,
-			Files:     extractFiles(msg.Files),
-			Reactions: extractReactions(msg.Reactions),
+			MessageID:  msg.Timestamp,
+			UserID:     msg.User,
+			UserName:   c.ResolveUserName(msg.User),
+			Text:       msg.Text,
+			Timestamp:  parseSlackTimestamp(msg.Timestamp),
+			ChannelID:  channelID,
+			Files:      extractFiles(msg.Files),
+			Reactions:  extractReactions(msg.Reactions),
+			ReplyCount: msg.ReplyCount,
 		}
 		// Fetch threaded replies if any.
 		if msg.ReplyCount > 0 && msg.Timestamp != "" {
@@ -437,14 +438,15 @@ func (c *slackClient) FetchHistoryBefore(channelID string, beforeTS string, limi
 	messages := make([]types.Message, 0, len(resp.Messages))
 	for _, msg := range resp.Messages {
 		m := types.Message{
-			MessageID: msg.Timestamp,
-			UserID:    msg.User,
-			UserName:  c.ResolveUserName(msg.User),
-			Text:      msg.Text,
-			Timestamp: parseSlackTimestamp(msg.Timestamp),
-			ChannelID: channelID,
-			Files:     extractFiles(msg.Files),
-			Reactions: extractReactions(msg.Reactions),
+			MessageID:  msg.Timestamp,
+			UserID:     msg.User,
+			UserName:   c.ResolveUserName(msg.User),
+			Text:       msg.Text,
+			Timestamp:  parseSlackTimestamp(msg.Timestamp),
+			ChannelID:  channelID,
+			Files:      extractFiles(msg.Files),
+			Reactions:  extractReactions(msg.Reactions),
+			ReplyCount: msg.ReplyCount,
 		}
 		if msg.ReplyCount > 0 && msg.Timestamp != "" {
 			replies := c.fetchReplies(channelID, msg.Timestamp)

@@ -7375,10 +7375,12 @@ func (m *Model) detectThreads(msgs []types.Message, ch *types.Channel) {
 		if msg.ReplyTo != "" {
 			continue
 		}
-		// Hard prerequisite: a thread requires replies. A plain
-		// authored or @mentioned message with no replies is just a
-		// message — short-circuit before paying for the detector.
-		if len(msg.Replies) == 0 {
+		// Hard prerequisite: a thread requires replies. Trust either
+		// the per-fetch reply slice OR the authoritative ReplyCount
+		// pulled straight from Slack's history response — fetchReplies
+		// can fail or be skipped, leaving Replies empty even when
+		// the parent really does have replies.
+		if len(msg.Replies) == 0 && msg.ReplyCount == 0 {
 			continue
 		}
 		reason, ok := threads.Detect(msg, me, true)
@@ -7395,7 +7397,17 @@ func (m *Model) detectThreads(msgs []types.Message, ch *types.Channel) {
 		}
 	}
 	if changed {
-		m.channels.SetThreads(m.threadStore.Active())
+		active := m.threadStore.Active()
+		m.channels.SetThreads(active)
+		// Keep the global Threads overlay in sync if it's the
+		// current overlay — store mutations from detection are
+		// synchronous in the model loop, but the overlay holds
+		// its own snapshot list and needs an explicit nudge to
+		// re-render with refreshed reply counts / time-since
+		// values.
+		if m.overlay == overlayThreadsView {
+			m.threadsOverlay.SetActive(active)
+		}
 	}
 }
 
@@ -7462,7 +7474,7 @@ func (m *Model) buildThreadSnapshot(parent types.Message, ch *types.Channel, sou
 		},
 		ChannelName:      chanName,
 		ParentText:       previewText(format.FormatMessage(parent.Text, m.buildResolverMap()), 120),
-		ReplyCount:       len(parent.Replies),
+		ReplyCount:       max(parent.ReplyCount, len(parent.Replies)),
 		ParentAuthorID:   parent.UserID,
 		ParentAuthorName: authorName,
 		Participants:     participants,
