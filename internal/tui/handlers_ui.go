@@ -485,11 +485,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.clearChannelNotifs(ch.ID)
 					m.setChannelHeader()
 					m.saveLastChannel(ch.ID)
-					// Move focus to the input so the user can
-					// start typing immediately after picking a
-					// channel via mouse.
-					m.focus = types.FocusInput
-					m.updateFocus()
+					// Focus stays on the sidebar — the user clicked
+					// here, the user keeps that focus. The earlier
+					// `m.focus = FocusSidebar` (top of this branch)
+					// already covers it; do not reassign to input.
 					if ch.IsFriend {
 						m.loadFriendHistory(ch.UserID)
 						return m, nil

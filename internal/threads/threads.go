@@ -116,9 +116,13 @@ type ThreadSnapshot struct {
 	// friend MessageID is a random UUID with no embedded time)
 	// and the sidebar needs a real time value to compute "time
 	// since" labels.
-	LastActivityAt time.Time    `json:"last_activity_at,omitzero"`
-	Reason         ThreadReason `json:"reason"`
-	AddedAt        time.Time    `json:"added_at"`
+	LastActivityAt time.Time `json:"last_activity_at,omitzero"`
+	// ReplyCount is the number of replies on the parent message at
+	// the time the snapshot was last refreshed. Surfaced as
+	// "(N replies)" on the global Threads view; 0 hides the badge.
+	ReplyCount int          `json:"reply_count,omitempty"`
+	Reason     ThreadReason `json:"reason"`
+	AddedAt    time.Time    `json:"added_at"`
 }
 
 // ThreadsChangedMsg is dispatched on the Bubbletea channel whenever

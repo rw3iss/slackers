@@ -40,15 +40,28 @@ type Mention struct {
 	Name string
 }
 
-// FormatMessage converts Slack mrkdwn markup to plain terminal text.
-// The users map provides user ID to display name lookups for
-// @mentions, including both Slack ids ("U...") and friend ids
-// ("slacker:..."). Equivalent to FormatMessageWithMentions but
-// discards the mention sidecar; kept for callers that don't need
-// the rich form.
+// FormatMessage converts Slack mrkdwn markup to plain terminal text
+// with `@name` substitutions inlined directly (no marker sidecar).
+// Suitable for callers that just want a readable string — chat
+// search previews, thread snapshots, command output, etc. The
+// richer FormatMessageWithMentions stays available for renderers
+// that need to track per-mention click hits.
 func FormatMessage(text string, users map[string]string) string {
-	out, _ := FormatMessageWithMentions(text, users)
-	return out
+	out, mentions := FormatMessageWithMentions(text, users)
+	if len(mentions) == 0 {
+		return out
+	}
+	return MentionMarkerRE.ReplaceAllStringFunc(out, func(match string) string {
+		sub := MentionMarkerRE.FindStringSubmatch(match)
+		if len(sub) < 2 {
+			return match
+		}
+		var n int
+		if _, err := fmt.Sscanf(sub[1], "%d", &n); err != nil || n < 0 || n >= len(mentions) {
+			return match
+		}
+		return "@" + mentions[n].Name
+	})
 }
 
 // FormatMessageWithMentions formats `text` and returns both the

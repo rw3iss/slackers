@@ -28,6 +28,7 @@ package tui
 //   - Esc dismisses.
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -494,21 +495,36 @@ func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected boo
 	if selected {
 		dimStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Italic(true)
 	}
-	// Parent message preview is regular grey, distinct from the
-	// dim/italic participants colour — matches the chat-pane
-	// muted text colour for body content.
-	previewStyle := lipgloss.NewStyle().Foreground(ColorMuted)
+	// Parent message preview is rendered in the regular message-
+	// text colour so it reads as a quoted excerpt, distinct from
+	// the dim italic colour used for participant names.
+	previewStyle := lipgloss.NewStyle().Foreground(ColorMessageText)
 	if selected {
 		previewStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel)
 	}
+	// "(N replies)" badge — uses the chat pane's reply-label
+	// palette key so it visually matches the inline "X replies"
+	// hint shown under thread parents in the messages pane.
+	repliesStyle := lipgloss.NewStyle().Foreground(ColorReplyLabel)
+	if selected {
+		repliesStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Bold(true)
+	}
 
-	// --- Row 1: time + channel + " - " + members ----------------
+	// --- Row 1: time + channel + " - " + members + (N replies) --
 	name := threadDisplayName(snap, m.aliases)
 	parts := joinParticipantNames(snap.Participants, max1(innerWidth/2))
 
-	// Width math for row 1 — figure out how much the channel name
-	// can use after reserving for cursor, time col, " - ", and
-	// participants.
+	repliesText := ""
+	if snap.ReplyCount > 0 {
+		noun := "replies"
+		if snap.ReplyCount == 1 {
+			noun = "reply"
+		}
+		repliesText = fmt.Sprintf("(%d %s)", snap.ReplyCount, noun)
+	}
+
+	// Width math for row 1 — reserve space for cursor, time col,
+	// " - ", participants, and the right-aligned (N replies) badge.
 	row1Avail := innerWidth - len(cursor) - timeColW
 	if row1Avail < 1 {
 		row1Avail = 1
@@ -517,7 +533,11 @@ func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected boo
 	if parts != "" {
 		sep = " - "
 	}
-	nameMax := row1Avail - len(sep) - len(parts)
+	repliesReserve := 0
+	if repliesText != "" {
+		repliesReserve = len(repliesText) + 2 // 2-col gap before badge
+	}
+	nameMax := row1Avail - len(sep) - len(parts) - repliesReserve
 	if nameMax < 1 {
 		nameMax = 1
 	}
@@ -532,6 +552,16 @@ func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected boo
 	if parts != "" {
 		row1Body += dimStyle.Render(sep + parts)
 	}
+	if repliesText != "" {
+		// Pad between the participants list and the replies badge
+		// so the badge sits flush against the inner right edge.
+		used := lipgloss.Width(row1Body)
+		spacer := innerWidth - used - len(repliesText)
+		if spacer < 1 {
+			spacer = 1
+		}
+		row1Body += strings.Repeat(" ", spacer) + repliesStyle.Render(repliesText)
+	}
 	row1 := bgPad(row1Body, innerWidth)
 
 	// --- Row 2 / 3: parent message preview, wrapped --------------
@@ -541,6 +571,13 @@ func (m ThreadsOverlayModel) renderRow(snap threads.ThreadSnapshot, selected boo
 	// build-time resolution in buildThreadSnapshot.
 	if strings.Contains(preview, "<@") && len(m.resolver) > 0 {
 		preview = format.FormatMessage(preview, m.resolver)
+	}
+	// Older snapshots may have been saved with raw [MENTION:#m-N]
+	// markers (from a build that emitted them via FormatMessage).
+	// Strip those to a placeholder so the preview reads cleanly
+	// until the snapshot regenerates from the next reply.
+	if strings.Contains(preview, "[MENTION:#m-") {
+		preview = format.MentionMarkerRE.ReplaceAllString(preview, "@?")
 	}
 	if preview == "" {
 		preview = "(no preview)"

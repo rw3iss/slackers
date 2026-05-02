@@ -2318,11 +2318,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.clearChannelNotifs(ch.ID)
 					m.setChannelHeader()
 					m.saveLastChannel(ch.ID)
-					// Move focus to the input so the user can
-					// start typing immediately after picking a
-					// channel.
-					m.focus = types.FocusInput
-					m.updateFocus()
+					// Focus stays on the sidebar — Enter/select on a
+					// sidebar row should not silently jump the user
+					// into the input bar. They Tab when ready to
+					// type.
 
 					// Friend channel — load local P2P message history.
 					if ch.IsFriend {
@@ -2795,8 +2794,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for i, mm := range m.messages.messages {
 				if mm.MessageID == ts {
 					m.messages.EnterThreadMode(i)
-					m.focus = types.FocusMessages
-					m.updateFocus()
 					break
 				}
 			}
@@ -3861,14 +3858,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// If we're already in this channel, jump straight to thread
-		// mode without re-fetching history.
+		// mode without re-fetching history. Focus is left wherever
+		// the user had it — opening a thread shouldn't yank them
+		// out of whichever pane they were navigating in.
 		if m.currentCh != nil && m.currentCh.ID == ch.ID {
 			if msg.OpenReplyView {
 				for i, mm := range m.messages.messages {
 					if mm.MessageID == ref.ParentTS {
 						m.messages.EnterThreadMode(i)
-						m.focus = types.FocusMessages
-						m.updateFocus()
 						break
 					}
 				}
@@ -3906,8 +3903,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			m.focus = types.FocusMessages
-			m.updateFocus()
 			return m, nil
 		}
 		return m, loadHistoryCmd(m.slackSvc, ch.ID)
@@ -7467,6 +7462,7 @@ func (m *Model) buildThreadSnapshot(parent types.Message, ch *types.Channel, sou
 		},
 		ChannelName:      chanName,
 		ParentText:       previewText(format.FormatMessage(parent.Text, m.buildResolverMap()), 120),
+		ReplyCount:       len(parent.Replies),
 		ParentAuthorID:   parent.UserID,
 		ParentAuthorName: authorName,
 		Participants:     participants,

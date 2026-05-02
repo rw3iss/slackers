@@ -1177,9 +1177,13 @@ func (m ChannelListModel) renderThreadItem(snap threads.ThreadSnapshot, rowIdx i
 	case rowIdx == m.selected && !isSecondLine:
 		prefix = "> "
 	case rowIdx == m.selected:
-		prefix = "    "
+		// Selected line 2 — participants nest 1 col under the
+		// channel name (3 cols total, just past the "> " caret).
+		prefix = "   "
 	case isSecondLine:
-		prefix = "    "
+		// Non-selected line 2 — participants nest 1 col under the
+		// channel name (3 cols total, just past the "  " indent).
+		prefix = "   "
 	}
 
 	// Inner row width — full sidebar inner area, not just the
