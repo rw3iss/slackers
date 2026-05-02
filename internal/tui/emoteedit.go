@@ -249,7 +249,7 @@ func (m EmoteEditModel) View() string {
 
 	scaffold := OverlayScaffold{
 		Title:       title,
-		Footer:      "Tab: navigate · Enter: confirm · Esc: cancel",
+		Footer:      "Tab: navigate" + HintSep + "Enter: confirm" + HintSep + FooterHintCancel,
 		Width:       m.width,
 		Height:      m.height,
 		MaxBoxWidth: 70,

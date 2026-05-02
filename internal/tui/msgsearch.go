@@ -441,7 +441,7 @@ func (m MsgSearchModel) View() string {
 		}
 	}
 
-	b.WriteString(dimStyle.Render("  Enter: go to message | Tab: toggle scope | Esc: close"))
+	b.WriteString(dimStyle.Render("  Enter: go to message" + HintSep + "Tab: toggle scope" + HintSep + FooterHintClose))
 
 	content := b.String()
 

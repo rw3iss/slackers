@@ -67,6 +67,7 @@ const (
 	KeyFriendOnline    = "friendOnline"
 	KeyUserAway        = "userAway"
 	KeySelectedChannel = "selectedChannel"
+	KeyMention         = "mention"
 )
 
 // AllKeys is the canonical ordered list of theme color keys.
@@ -77,7 +78,7 @@ var AllKeys = []string{
 	KeyFileButton, KeyReplyLabel, KeySelection, KeyMenuItem,
 	KeyBorderDefault, KeyBorderActive, KeyEmote, KeyCodeSnippet, KeySelectionBg,
 	KeyChannelName, KeyFriendOffline, KeyFriendOnline, KeyUserAway,
-	KeySelectedChannel,
+	KeySelectedChannel, KeyMention,
 }
 
 // KeyGroup describes a logical group of theme color keys for the editor UI.
@@ -94,7 +95,7 @@ var AllKeyGroups = []KeyGroup{
 	}},
 	{Label: "Messages", Keys: []string{
 		KeyMessageText, KeyInfoText, KeyDayLabel, KeyTimestamp, KeyStatusMessage,
-		KeyReplyLabel, KeyEmote, KeyCodeSnippet,
+		KeyReplyLabel, KeyEmote, KeyCodeSnippet, KeyMention,
 	}},
 	{Label: "Sidebar", Keys: []string{
 		KeyChannelName, KeySelectedChannel, KeyGroupHeader, KeyFriendOnline,
@@ -165,6 +166,8 @@ func KeyDescription(key string) string {
 		return "Away/inactive user name color"
 	case KeySelectedChannel:
 		return "Active/selected channel name in sidebar"
+	case KeyMention:
+		return "@mention pills inside chat messages"
 	}
 	return ""
 }
@@ -198,6 +201,7 @@ func Default() Theme {
 				KeyMenuItem:      "252",
 				KeyBorderDefault: "243",
 				KeyBorderActive:  "12",
+				KeyMention:       "14",
 			},
 		}
 	}

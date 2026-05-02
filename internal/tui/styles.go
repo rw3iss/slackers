@@ -78,13 +78,16 @@ var (
 	ColorUserAwayBg        lipgloss.Color
 	ColorSelectedChannel   lipgloss.Color
 	ColorSelectedChannelBg lipgloss.Color
+	ColorMention           lipgloss.Color
+	ColorMentionBg         lipgloss.Color
 
 	// Shared widget colors — centralised to eliminate inline
 	// magic 256-color indices scattered across overlays. Refreshed
 	// by rebuildDerivedStyles so theme changes pick them up.
-	ColorKeyBindText lipgloss.Color // 229 — keybind text in help / shortcut editor
-	ColorDescText    lipgloss.Color // 252 — secondary description text / metadata
-	ColorStatusOn    lipgloss.Color // #00ff00 — online / secure / "on" indicator
+	ColorKeyBindText  lipgloss.Color // 229 — keybind text in help / shortcut editor
+	ColorDescText     lipgloss.Color // 252 — secondary description text / metadata
+	ColorStatusOn     lipgloss.Color // #00ff00 — online / secure / "on" indicator
+	ColorSplashBanner lipgloss.Color // 15 — bright white splash banner glyphs
 
 	// IsDarkTheme is true when the active theme self-identifies as dark.
 	IsDarkTheme = true
@@ -183,6 +186,24 @@ var (
 	EmojiCellStyle         lipgloss.Style // plain grid cell background
 	EmojiSelectedCellStyle lipgloss.Style // grid cell for the hovered/selected emoji
 	EmojiFavCellStyle      lipgloss.Style // grid cell for a favourited emoji
+
+	// MentionStyle is the in-message styling for @mention pills.
+	// MentionSelectedStyle is the highlighted form when the cursor
+	// is on a mention in select mode (not used yet — reserved for
+	// when in-message mention navigation lands).
+	MentionStyle         lipgloss.Style
+	MentionSelectedStyle lipgloss.Style
+
+	// Threads sidebar group styles. ThreadSlackChannelRowStyle is
+	// the channel-name row when the thread comes from a Slack
+	// channel; ThreadFriendChannelRowStyle is the visually distinct
+	// variant used for friend-channel threads (rendered in the same
+	// online-friend green so the two transports are immediately
+	// distinguishable). ThreadParticipantsRowStyle is the muted
+	// second row showing the participants' first names.
+	ThreadSlackChannelRowStyle  lipgloss.Style
+	ThreadFriendChannelRowStyle lipgloss.Style
+	ThreadParticipantsRowStyle  lipgloss.Style
 )
 
 // activeTheme tracks the most recently applied theme so the UI can
@@ -285,6 +306,7 @@ func ApplyTheme(t theme.Theme) {
 	ColorFriendOnline, ColorFriendOnlineBg = applyKey(t, theme.KeyFriendOnline)
 	ColorUserAway, ColorUserAwayBg = applyKey(t, theme.KeyUserAway)
 	ColorSelectedChannel, ColorSelectedChannelBg = applyKey(t, theme.KeySelectedChannel)
+	ColorMention, ColorMentionBg = applyKey(t, theme.KeyMention)
 
 	// Shared widget colors. These are not yet theme keys —
 	// they're fixed 256-color indices chosen to read well on
@@ -294,6 +316,7 @@ func ApplyTheme(t theme.Theme) {
 	ColorKeyBindText = lipgloss.Color("229")
 	ColorDescText = lipgloss.Color("252")
 	ColorStatusOn = lipgloss.Color("#00ff00")
+	ColorSplashBanner = lipgloss.Color("15")
 
 	IsDarkTheme = t.IsDark()
 
@@ -360,16 +383,21 @@ func ApplyTheme(t theme.Theme) {
 // ApplyTheme() with the same effect. Empty bg colors are no-ops in
 // lipgloss so we can safely call .Background() unconditionally.
 func rebuildDerivedStyles() {
+	// Asymmetric padding: 1 col on the left for breathing room
+	// between the border and the content, 0 cols on the right so
+	// channel/thread row text reaches almost to the right border.
+	// The visible "right gap" is then just the 1-col border —
+	// matches the audit's "1 col gap" requirement.
 	SidebarStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorderDefault).
 		Background(ColorBackgroundBg).
-		Padding(0, 1)
+		Padding(0, 0, 0, 1)
 	SidebarActiveStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorderActive).
 		Background(ColorBackgroundBg).
-		Padding(0, 1)
+		Padding(0, 0, 0, 1)
 
 	ChannelItemStyle = styleFromKey(theme.KeyMessageText)
 	ChannelSelectedStyle = styleFromKey(theme.KeySelection).Bold(true)
@@ -498,6 +526,28 @@ func rebuildDerivedStyles() {
 	// Popup menu styles.
 	PopupTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	PopupDimStyle = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
+
+	// @mention pill rendered inside chat messages. Bold-themed
+	// foreground so mentions stand out from surrounding text. The
+	// selected variant is reserved for an in-message navigation
+	// cursor mode that may land later.
+	MentionStyle = lipgloss.NewStyle().Foreground(ColorMention).Bold(true)
+	if ColorMentionBg != "" {
+		MentionStyle = MentionStyle.Background(ColorMentionBg)
+	}
+	MentionSelectedStyle = lipgloss.NewStyle().
+		Foreground(ColorInvertedFg).
+		Background(ColorMention).
+		Bold(true)
+
+	// Threads sidebar group styles. Slack threads use the same hue
+	// as regular channel names; friend threads use the online-friend
+	// green so the two transports are immediately distinguishable
+	// in the mixed group. Participant rows are muted italic so they
+	// read as secondary metadata under the channel-name row.
+	ThreadSlackChannelRowStyle = lipgloss.NewStyle().Foreground(ColorChannelName)
+	ThreadFriendChannelRowStyle = lipgloss.NewStyle().Foreground(ColorFriendOnline)
+	ThreadParticipantsRowStyle = lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
 }
 
 // UserColors assigns a consistent color to a username by hashing.

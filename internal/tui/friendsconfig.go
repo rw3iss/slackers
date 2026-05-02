@@ -1808,12 +1808,12 @@ func (m FriendsConfigModel) View() string {
 		return m.viewList()
 	case fcPageEditMyInfo:
 		return m.viewEditFields("Edit My Info", m.myFields, m.mySelected, m.myEditing,
-			"Enter: edit | Esc: back")
+			"Enter: edit"+HintSep+FooterHintBack)
 	case fcPageShareInfo:
 		return m.viewShareInfo()
 	case fcPageAddFriend:
 		return m.viewEditFields("Add a Friend", m.editFields, m.editSelected, m.editing,
-			"Enter: edit field | Ctrl-J: paste JSON | Ctrl-S: save | Esc: back")
+			"Enter: edit field"+HintSep+"Ctrl-J: paste JSON"+HintSep+"Ctrl-S: save"+HintSep+FooterHintBack)
 	case fcPageAddFriendJSON:
 		return m.viewAddFriendJSON()
 	case fcPageImport:
@@ -1862,7 +1862,7 @@ func (m FriendsConfigModel) viewMenu() string {
 		b.WriteString("\n\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  Enter: select | Esc: close"))
+	b.WriteString(dimStyle.Render("  Enter: select" + HintSep + FooterHintClose))
 	b.WriteString("\n\n")
 	b.WriteString(dimStyle.Render("  Friends enable private P2P chat outside Slack."))
 	b.WriteString("\n")
@@ -1934,7 +1934,7 @@ func (m FriendsConfigModel) viewList() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.message))
 		b.WriteString("\n\n")
 	}
-	b.WriteString(dimStyle.Render("  Enter: edit | d: remove | Esc: back"))
+	b.WriteString(dimStyle.Render("  Enter: edit" + HintSep + "d: remove" + HintSep + FooterHintBack))
 
 	return m.renderBox(b.String())
 }
@@ -2110,9 +2110,9 @@ func (m FriendsConfigModel) viewEditFriendStandalone(title string) string {
 		b.WriteString("\n\n")
 	}
 	if m.editFriendStandalone {
-		b.WriteString(dimStyle.Render("  Enter: edit/select | Ctrl-J: paste-merge | Ctrl-S: save | Esc: close"))
+		b.WriteString(dimStyle.Render("  Enter: edit/select" + HintSep + "Ctrl-J: paste-merge" + HintSep + "Ctrl-S: save" + HintSep + FooterHintClose))
 	} else {
-		b.WriteString(dimStyle.Render("  Enter: edit/select | Ctrl-J: paste-merge | Ctrl-S: save | Esc: back"))
+		b.WriteString(dimStyle.Render("  Enter: edit/select" + HintSep + "Ctrl-J: paste-merge" + HintSep + "Ctrl-S: save" + HintSep + FooterHintBack))
 	}
 
 	return m.renderBox(b.String())
@@ -2177,7 +2177,7 @@ func (m FriendsConfigModel) viewShareInfo() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.message))
 		b.WriteString("\n\n")
 	}
-	b.WriteString(dimStyle.Render("  ↑/↓ navigate · Enter: copy or export · Esc: back"))
+	b.WriteString(dimStyle.Render("  ↑/↓ navigate" + HintSep + "Enter: copy or export" + HintSep + FooterHintBack))
 
 	return m.renderBox(b.String())
 }
@@ -2196,7 +2196,7 @@ func (m FriendsConfigModel) viewAddFriendJSON() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorHighlight).Render("  " + m.message))
 		b.WriteString("\n\n")
 	}
-	b.WriteString(dimStyle.Render("  Enter: parse | Esc: back"))
+	b.WriteString(dimStyle.Render("  Enter: parse" + HintSep + FooterHintBack))
 
 	return m.renderBox(b.String())
 }

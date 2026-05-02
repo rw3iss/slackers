@@ -286,9 +286,9 @@ func (m FilesListModel) View() string {
 
 	b.WriteString("\n")
 	if m.channelID != "" {
-		b.WriteString(dimStyle.Render("  Enter: download | Tab: toggle scope | Esc: close"))
+		b.WriteString(dimStyle.Render("  Enter: download" + HintSep + "Tab: toggle scope" + HintSep + FooterHintClose))
 	} else {
-		b.WriteString(dimStyle.Render("  Enter: download | Esc: close"))
+		b.WriteString(dimStyle.Render("  Enter: download" + HintSep + FooterHintClose))
 	}
 
 	content := b.String()

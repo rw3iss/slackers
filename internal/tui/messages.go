@@ -224,6 +224,18 @@ type reactionHit struct {
 	endCol    int // visible column where the badge ends
 }
 
+// mentionHit tracks a clickable @mention pill rendered inside a
+// chat message body. id is the canonical user identifier — Slack
+// "U..." or friend "slacker:..." — so the click handler can route
+// to the right DM / friend channel without re-parsing the marker.
+type mentionHit struct {
+	id       string
+	name     string
+	line     int
+	startCol int
+	endCol   int
+}
+
 // MessageViewModel displays messages in a scrollable viewport.
 type MessageViewModel struct {
 	viewport          viewport.Model
@@ -308,6 +320,18 @@ type MessageViewModel struct {
 	// Without this cache every message re-runs Slack mrkdwn
 	// parsing (multiple regex passes) on every render cycle.
 	formattedTextCache map[string]string
+
+	// mentionsByMsgID records the resolved (id, name) tuples for
+	// every @mention in a formatted message, indexed by the marker
+	// number embedded in [MENTION:#m-N] tokens. Populated alongside
+	// formattedTextCache and consumed by rewriteMentionPills to
+	// render the inline pill and record its click hit.
+	mentionsByMsgID map[string][]format.Mention
+
+	// mentionHits captures every rendered @mention pill so the
+	// click handler can map (x, y) → user id → DM/friend channel.
+	// Rebuilt per render alongside friendCardHits and reactionHits.
+	mentionHits []mentionHit
 
 	// History pagination — load older messages on scroll-up.
 	historyExhausted bool // true once Slack reports no more older messages
@@ -530,6 +554,7 @@ func (m *MessageViewModel) SetUsers(users map[string]string) {
 	// User display-name changes can affect @mentions inside
 	// cached formatted text; invalidate so everything re-parses.
 	m.formattedTextCache = nil
+	m.mentionsByMsgID = nil
 }
 
 // formatText returns the user-visible rendered form of a message body,
@@ -542,14 +567,20 @@ func (m *MessageViewModel) formatText(messageID, raw string) string {
 	if m.formattedTextCache == nil {
 		m.formattedTextCache = make(map[string]string)
 	}
+	if m.mentionsByMsgID == nil {
+		m.mentionsByMsgID = make(map[string][]format.Mention)
+	}
 	if messageID != "" {
 		if cached, ok := m.formattedTextCache[messageID]; ok {
 			return cached
 		}
 	}
-	out := format.FormatMessage(raw, m.users)
+	out, mentions := format.FormatMessageWithMentions(raw, m.users)
 	if messageID != "" {
 		m.formattedTextCache[messageID] = out
+		if len(mentions) > 0 {
+			m.mentionsByMsgID[messageID] = mentions
+		}
 	}
 	return out
 }
@@ -679,8 +710,13 @@ func (m MessageViewModel) IsFriendChannel() bool {
 	return m.isFriendCh
 }
 
-// FriendCogGlyph is the icon rendered in the upper-right of friend chats.
-const friendCogGlyph = "⚙\ufe0f"
+// friendCogGlyph is the icon rendered in the upper-right of friend
+// chats — clicking it opens the Friend Details panel. ℹ
+// (information) reads more naturally than the old ⚙ since the
+// panel is purely informational. The variable name is kept as-is
+// since the click handler / hit-area helpers reference it across
+// the codebase.
+const friendCogGlyph = "ℹ\ufe0f"
 
 // FriendCogPaneClickArea returns the (startCol, endCol) range, in pane
 // content coordinates (0 = first column inside the border+padding), of
@@ -1199,6 +1235,83 @@ func (m *MessageViewModel) rewriteFriendCards(line string, lineIdx int) string {
 }
 
 
+
+// rewriteMentionPills walks `line` and replaces every
+// [MENTION:#m-N] marker with a styled "@Name" pill, recording a
+// click hit so the caller can route a click on the pill back to
+// the user's DM / friend channel. The msgID parameter selects the
+// per-message [Mention] sidecar populated by formatText() so the
+// N index resolves to the right (id, name) pair.
+//
+// Lines without a marker (or whose msgID has no recorded mentions)
+// are returned untouched.
+func (m *MessageViewModel) rewriteMentionPills(line, msgID string, lineIdx int) string {
+	if !strings.Contains(line, "[MENTION:#m-") {
+		return line
+	}
+	mentions := m.mentionsByMsgID[msgID]
+	if len(mentions) == 0 {
+		return line
+	}
+	style := MentionStyle
+	out := line
+	idx := 0
+	for {
+		match := format.MentionMarkerRE.FindStringIndex(out[idx:])
+		if match == nil {
+			break
+		}
+		matchStart := idx + match[0]
+		matchEnd := idx + match[1]
+		// Resolve the marker's index back to the sidecar entry.
+		raw := out[matchStart:matchEnd]
+		sub := format.MentionMarkerRE.FindStringSubmatch(raw)
+		if len(sub) < 2 {
+			idx = matchEnd
+			continue
+		}
+		var n int
+		_, err := fmt.Sscanf(sub[1], "%d", &n)
+		if err != nil || n < 0 || n >= len(mentions) {
+			idx = matchEnd
+			continue
+		}
+		entry := mentions[n]
+		pillText := "@" + entry.Name
+		pillRendered := style.Render(pillText)
+
+		preWidth := lipgloss.Width(out[:matchStart])
+		pillWidth := lipgloss.Width(pillRendered)
+		m.mentionHits = append(m.mentionHits, mentionHit{
+			id:       entry.ID,
+			name:     entry.Name,
+			line:     lineIdx,
+			startCol: preWidth,
+			endCol:   preWidth + pillWidth,
+		})
+		out = out[:matchStart] + pillRendered + out[matchEnd:]
+		idx = matchStart + len(pillRendered)
+	}
+	return out
+}
+
+// MentionAtClick returns the user identifier (Slack U... or
+// "slacker:...") of the @mention pill at (paneX, paneY) in the
+// messages pane, or "" when the click missed every pill. paneX is
+// the pane-relative column after the caller has stripped the
+// sidebar offset; paneY is the pane row matching m.lineToMsgID.
+func (m *MessageViewModel) MentionAtClick(x, y int) string {
+	if len(m.mentionHits) == 0 {
+		return ""
+	}
+	absLine := y - 1 + m.viewport.YOffset
+	for _, h := range m.mentionHits {
+		if h.line == absLine && x >= h.startCol && x < h.endCol {
+			return h.id
+		}
+	}
+	return ""
+}
 
 // friendCardDisplayName returns the best short label for a friend
 // card pill. Order of preference:
@@ -2915,6 +3028,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 	m.replyLineMsgID = make(map[int]string)
 	m.reactionHits = nil
 	m.friendCardHits = nil
+	m.mentionHits = nil
 	m.friendCards = make(map[string]friends.ContactCard)
 	m.codeSnippetHits = nil
 
@@ -3095,6 +3209,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			for _, tl := range textLines {
 				rendered := highlightBg.Render("  " + bodyTextStyle.Render(tl))
 				rendered = m.rewriteFriendCards(rendered, len(lines))
+				rendered = m.rewriteMentionPills(rendered, msg.MessageID, len(lines))
 				lines = append(lines, rendered)
 			}
 			if m.itemSpacing >= 2 && len(textLines) > 0 {
@@ -3109,6 +3224,7 @@ func (m *MessageViewModel) renderMessageList(msgs []types.Message, highlightIdx 
 			for _, tl := range textLines {
 				rendered := "  " + bodyTextStyle.Render(tl)
 				rendered = m.rewriteFriendCards(rendered, len(lines))
+				rendered = m.rewriteMentionPills(rendered, msg.MessageID, len(lines))
 				lines = append(lines, rendered)
 			}
 			if m.itemSpacing >= 2 && len(textLines) > 0 {

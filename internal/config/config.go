@@ -136,7 +136,29 @@ type Config struct {
 	AudioShowMicMeter  bool  `json:"audio_show_mic_meter,omitempty"`
 	AudioShowPeerMeter bool  `json:"audio_show_peer_meter,omitempty"`
 
+	// Threads feature settings. ScanScope controls how aggressively the
+	// global Threads view searches history for older threads (Plan B).
+	// AutoClearHours is the inactive-thread cleanup interval in hours;
+	// 0 disables auto-clear. ThreadsGroupExpanded persists the
+	// sidebar Threads group's expand/collapse state.
+	Threads ThreadsConfig `json:"threads,omitempty"`
+
 	ConfigPath string `json:"-"`
+}
+
+// ThreadsConfig groups per-feature settings for the Threads system.
+// All fields are optional (zero values map to sensible defaults).
+type ThreadsConfig struct {
+	// ScanScope is one of: "" / "disabled" / "local" / "subscribed" /
+	// "all_public". Empty means use the default ("local"). The
+	// threads.ScanScope constants document each value.
+	ScanScope string `json:"scan_scope,omitempty"`
+	// AutoClearHours is the inactive-thread cutoff in hours.
+	// 0 disables the sweep entirely.
+	AutoClearHours int `json:"auto_clear_hours,omitempty"`
+	// GroupExpanded persists whether the sidebar Threads group is
+	// shown expanded. Defaults to true.
+	GroupExpanded *bool `json:"group_expanded,omitempty"`
 }
 
 // ConfigDir returns the directory containing config.json.
@@ -203,7 +225,11 @@ func defaults() *Config {
 		// configs that omit the field continue to honour their saved
 		// value (an empty string falls through to the same default).
 		ShareMyInfoFormat: "json",
-		ConfigPath:        DefaultConfigPath(),
+		Threads: ThreadsConfig{
+			ScanScope:      "local",
+			AutoClearHours: 0, // disabled by default; user opts in via settings
+		},
+		ConfigPath: DefaultConfigPath(),
 		NotifPrefs: NotificationPrefs{
 			NewMessages:    true,
 			Reactions:      true,

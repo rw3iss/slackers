@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rw3iss/slackers/internal/threads"
 	"github.com/rw3iss/slackers/internal/types"
 )
 
@@ -18,12 +20,21 @@ const (
 	SortByRecent = "recent" // most recent message first (falls back to type)
 )
 
-// sidebarRow represents either a section header or a channel in the sidebar.
+// sidebarRow represents one logical entry in the sidebar — a section
+// header, a channel, or a Threads-group thread item. Thread items
+// occupy two visual lines (channel name on top, participants below);
+// see displayLineMap and View() for how the dual-row rendering keeps
+// the click hit-test in lock-step with the rendered output.
 type sidebarRow struct {
 	isHeader    bool
-	headerKey   string // "channels", "private", "dm", "group"
+	headerKey   string // "channels", "private", "dm", "group", "threads"
 	headerLabel string
 	channel     *types.Channel
+	// isThread marks a row that displays a tracked thread. When set,
+	// `thread` carries the snapshot and the row renders as two
+	// visual lines instead of one.
+	isThread bool
+	thread   *threads.ThreadSnapshot
 }
 
 // ChannelListModel represents the sidebar channel list.
@@ -67,6 +78,13 @@ type ChannelListModel struct {
 	// multipleWorkspaces is true when more than one workspace is
 	// signed in; causes a ⇅ indicator to appear next to the name.
 	multipleWorkspaces bool
+
+	// activeThreads is the latest set of tracked threads — pushed
+	// into the sidebar by the model whenever the threads.Store
+	// reports a change. The "Threads" sidebar group materialises
+	// from this slice on each buildRows; an empty slice hides the
+	// group entirely.
+	activeThreads []threads.ThreadSnapshot
 }
 
 // FriendDisplayStatus tracks a friend's online/away state for
@@ -400,6 +418,10 @@ func (m *ChannelListModel) visibleChannels() []types.Channel {
 // A value of -1 means the line is a blank spacer (the gap before a non-first
 // header). View() and SelectByRow() both consume this so the visible layout
 // and the click hit-test stay in lock-step.
+//
+// Thread rows occupy two visual lines (channel name + participants);
+// both lines map back to the same row index so a click on either
+// row activates the same thread.
 func (m *ChannelListModel) displayLineMap() []int {
 	var lines []int
 	for i, row := range m.rows {
@@ -407,6 +429,11 @@ func (m *ChannelListModel) displayLineMap() []int {
 			lines = append(lines, -1) // blank spacer before non-first headers
 		}
 		lines = append(lines, i)
+		if row.isThread {
+			// Second visual line for the participants row, also
+			// pointing back to this thread row.
+			lines = append(lines, i)
+		}
 		// User-configured trailing blank lines after every row.
 		for k := 0; k < m.itemSpacing; k++ {
 			lines = append(lines, -1)
@@ -490,6 +517,8 @@ func sectionKey(ch types.Channel) string {
 
 func sectionLabel(key string) string {
 	switch key {
+	case "threads":
+		return "Threads"
 	case "friends":
 		return "Friends"
 	case "channels":
@@ -506,7 +535,11 @@ func sectionLabel(key string) string {
 
 // buildRows constructs the interleaved list of headers and channels
 // and refreshes the rowIndexByID fast-lookup map so SelectByID /
-// NextUnreadChannel / click hit-tests can land in O(1).
+// NextUnreadChannel / click hit-tests can land in O(1). When the
+// Threads store has at least one active snapshot, a "Threads" group
+// is emitted at the very top of the sidebar — above all other
+// groups — and the rows for that group occupy two visual lines
+// each (handled by displayLineMap and View()).
 func (m *ChannelListModel) buildRows() {
 	visible := m.visibleChannels()
 	m.rows = nil
@@ -519,6 +552,27 @@ func (m *ChannelListModel) buildRows() {
 	} else {
 		for k := range m.rowIndexByID {
 			delete(m.rowIndexByID, k)
+		}
+	}
+
+	// Threads group: emitted at the top of the sidebar when at least
+	// one active thread is tracked. Hidden completely when zero,
+	// matching the spec — the user only sees the group when it
+	// would carry content.
+	if len(m.activeThreads) > 0 {
+		m.rows = append(m.rows, sidebarRow{
+			isHeader:    true,
+			headerKey:   "threads",
+			headerLabel: sectionLabel("threads"),
+		})
+		if !m.collapsed["threads"] {
+			for i := range m.activeThreads {
+				snap := m.activeThreads[i]
+				m.rows = append(m.rows, sidebarRow{
+					isThread: true,
+					thread:   &snap,
+				})
+			}
 		}
 	}
 
@@ -550,6 +604,51 @@ func (m *ChannelListModel) buildRows() {
 	if m.selected < 0 {
 		m.selected = 0
 	}
+}
+
+// SetThreads replaces the active-threads slice and rebuilds the
+// sidebar rows. Called by the model whenever the threads.Store
+// reports a change. Pass an empty slice to hide the Threads group.
+func (m *ChannelListModel) SetThreads(active []threads.ThreadSnapshot) {
+	m.activeThreads = active
+	m.rebuild()
+}
+
+// SelectedThread returns the snapshot at the cursor when a thread
+// row is selected, or nil otherwise.
+func (m *ChannelListModel) SelectedThread() *threads.ThreadSnapshot {
+	if m.selected < 0 || m.selected >= len(m.rows) {
+		return nil
+	}
+	row := m.rows[m.selected]
+	if !row.isThread {
+		return nil
+	}
+	return row.thread
+}
+
+// ThreadByRow returns the thread snapshot at the given Y position
+// in the sidebar viewport, without mutating the cursor. Used by
+// right-click handling so popping the thread context menu doesn't
+// shift the highlight off the user's currently active channel.
+func (m *ChannelListModel) ThreadByRow(y int) *threads.ThreadSnapshot {
+	if y < 0 {
+		return nil
+	}
+	targetLine := m.scrollOff + y
+	lines := m.displayLineMap()
+	if targetLine < 0 || targetLine >= len(lines) {
+		return nil
+	}
+	rowIdx := lines[targetLine]
+	if rowIdx < 0 {
+		return nil
+	}
+	row := m.rows[rowIdx]
+	if !row.isThread {
+		return nil
+	}
+	return row.thread
 }
 
 // SelectedChannel returns the channel at the current selection, or nil if a header is selected.
@@ -772,16 +871,27 @@ func (m *ChannelListModel) ensureVisible() {
 
 // View renders the channel list.
 func (m ChannelListModel) View() string {
-	maxNameLen := m.width - 6
+	// SidebarStyle now uses asymmetric padding (1 left, 0 right) so
+	// the inner content area is m.width - 3 cells. With a 2-cell
+	// row prefix that leaves m.width - 5 cells for the channel /
+	// thread name itself.
+	maxNameLen := m.width - 5
 
 	// Build display lines from the shared map so click hit-test stays in sync.
 	type displayLine struct {
 		text string
 	}
 	var lines []displayLine
+	// prevRowIdx tracks the row emitted on the previous loop step so
+	// thread rows (which produce two visual lines from the same row
+	// index) can render line 1 (channel name) on first encounter and
+	// line 2 (participants) on the second. Initialised to -1 so the
+	// first iteration is always treated as a fresh row.
+	prevRowIdx := -1
 	for _, rowIdx := range m.displayLineMap() {
 		if rowIdx < 0 {
 			lines = append(lines, displayLine{text: ""})
+			prevRowIdx = -1
 			continue
 		}
 		row := m.rows[rowIdx]
@@ -805,11 +915,17 @@ func (m ChannelListModel) View() string {
 			} else {
 				lines = append(lines, displayLine{text: SectionHeaderStyle.Render(label)})
 			}
+		} else if row.isThread && row.thread != nil {
+			isSecondLine := prevRowIdx == rowIdx
+			lines = append(lines, displayLine{
+				text: m.renderThreadItem(*row.thread, rowIdx, maxNameLen, isSecondLine),
+			})
 		} else if row.channel != nil {
 			ch := *row.channel
 			isHidden := m.hidden[ch.ID]
 			lines = append(lines, displayLine{text: m.renderItem(ch, rowIdx, maxNameLen, isHidden)})
 		}
+		prevRowIdx = rowIdx
 	}
 
 	// Build an optional away-status footer for the selected friend.
@@ -1029,6 +1145,217 @@ func wrapAndTruncate(text string, maxWidth, maxLines int) []string {
 		}
 	}
 	return lines
+}
+
+// renderThreadItem renders one of the two visual lines of a Threads-
+// group entry. Row 1 shows the channel alias (or "#channel-name" /
+// "@friend-name" when no alias is set) on the left and a muted,
+// right-aligned "time since last activity" badge on the right.
+// Row 2 shows the participants list in muted italic.
+//
+// The two-column row 1 layout:
+//
+//	"  Alias            1h"
+//	 prefix  name      time
+//
+// Both columns share the row's selection highlight so the entry
+// reads as a single picker target.
+func (m ChannelListModel) renderThreadItem(snap threads.ThreadSnapshot, rowIdx int, maxLen int, isSecondLine bool) string {
+	prefix := "  "
+	if rowIdx == m.selected && !isSecondLine {
+		prefix = "> "
+	} else if rowIdx == m.selected {
+		// Second line indents under the caret position so the
+		// participants row visually nests under the channel name.
+		prefix = "    "
+	} else {
+		prefix = "    "
+	}
+
+	if isSecondLine {
+		// Participants row.
+		text := joinParticipantNames(snap.Participants, maxLen-len(prefix))
+		if text == "" {
+			text = "no other participants"
+		}
+		style := ThreadParticipantsRowStyle
+		if rowIdx == m.selected {
+			style = lipgloss.NewStyle().
+				Foreground(ColorSelectedChannel).
+				Italic(true)
+			if ColorSelectedChannelBg != "" {
+				style = style.Background(ColorSelectedChannelBg)
+			}
+		}
+		return style.Render(prefix + text)
+	}
+
+	// Row 1 — name + right-aligned time-since.
+	name := m.threadDisplayName(snap)
+	timeStr := formatRelativeTime(snap.LastActivityAt)
+	if timeStr == "" && !snap.AddedAt.IsZero() {
+		timeStr = formatRelativeTime(snap.AddedAt)
+	}
+
+	// Compute available width for the name column: total inner
+	// width minus prefix minus time-since text (with a 1-col gap
+	// between name and time).
+	inner := maxLen
+	if inner < 1 {
+		inner = 1
+	}
+	timeReserve := 0
+	if timeStr != "" {
+		timeReserve = len(timeStr) + 1 // 1-col gap before time
+	}
+	nameMax := inner - len(prefix) - timeReserve
+	if nameMax < 1 {
+		nameMax = 1
+	}
+	if len(name) > nameMax {
+		clip := nameMax - 1
+		if clip < 1 {
+			clip = 1
+		}
+		name = name[:clip] + "~"
+	}
+
+	var nameStyle lipgloss.Style
+	if rowIdx == m.selected {
+		nameStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Bold(true)
+		if ColorSelectedChannelBg != "" {
+			nameStyle = nameStyle.Background(ColorSelectedChannelBg)
+		}
+	} else if snap.Ref.Source == threads.SourceFriend {
+		nameStyle = ThreadFriendChannelRowStyle
+	} else {
+		nameStyle = ThreadSlackChannelRowStyle
+	}
+
+	leftPart := nameStyle.Render(prefix + name)
+
+	if timeStr == "" {
+		return leftPart
+	}
+
+	// Pad between name and time with regular spaces. Compute the
+	// spacer so the time-since string ends at the right edge of
+	// the inner content area.
+	used := len(prefix) + len(name)
+	spacer := inner - used - len(timeStr)
+	if spacer < 1 {
+		spacer = 1
+	}
+
+	timeStyle := ThreadParticipantsRowStyle
+	if rowIdx == m.selected && ColorSelectedChannelBg != "" {
+		timeStyle = lipgloss.NewStyle().
+			Foreground(ColorMuted).
+			Background(ColorSelectedChannelBg).
+			Italic(true)
+	}
+	return leftPart + strings.Repeat(" ", spacer) + timeStyle.Render(timeStr)
+}
+
+// threadDisplayName returns the row-1 label for a thread item:
+// the channel alias (when one is configured), otherwise the
+// transport-prefixed channel name ("#general" for Slack, "@Brian"
+// for friend chats). Friend channels never gain a "#" prefix and
+// Slack channels never gain an "@" prefix.
+func (m ChannelListModel) threadDisplayName(snap threads.ThreadSnapshot) string {
+	if alias, ok := m.aliases[snap.Ref.ChannelID]; ok && alias != "" {
+		return alias
+	}
+	name := snap.ChannelName
+	if name == "" {
+		name = snap.Ref.ChannelID
+	}
+	switch snap.Ref.Source {
+	case threads.SourceSlack:
+		if !strings.HasPrefix(name, "#") {
+			name = "#" + name
+		}
+	case threads.SourceFriend:
+		if !strings.HasPrefix(name, "@") {
+			name = "@" + name
+		}
+	}
+	return name
+}
+
+// formatRelativeTime renders a time as a compact "time since" badge
+// (e.g. "now", "5m", "3h", "2d", "1w", "4mo", "1y"). Returns ""
+// for the zero time so the renderer can omit the badge entirely.
+func formatRelativeTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dw", int(d.Hours()/(24*7)))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo", int(d.Hours()/(24*30)))
+	default:
+		return fmt.Sprintf("%dy", int(d.Hours()/(24*365)))
+	}
+}
+
+// joinParticipantNames returns a comma-joined truncated list of
+// participant first names. When the list is too long for the
+// available width, the tail is replaced with "+N" so the cell still
+// reads as a list. Empty input returns "".
+func joinParticipantNames(names []string, maxWidth int) string {
+	if len(names) == 0 || maxWidth <= 0 {
+		return ""
+	}
+	// Reduce each entry to its first whitespace-separated token so
+	// "Brian Molidor" → "Brian" — matching the spec's "abbreviated
+	// to ie. just their first names" rule.
+	firsts := make([]string, 0, len(names))
+	for _, n := range names {
+		if n == "" {
+			continue
+		}
+		if i := strings.IndexAny(n, " \t"); i > 0 {
+			firsts = append(firsts, n[:i])
+		} else {
+			firsts = append(firsts, n)
+		}
+	}
+	if len(firsts) == 0 {
+		return ""
+	}
+	// Greedily concatenate, then if the result is too long, truncate
+	// to a "Brian, Maria, +N" suffix.
+	full := strings.Join(firsts, ", ")
+	if len(full) <= maxWidth {
+		return full
+	}
+	for take := len(firsts) - 1; take >= 1; take-- {
+		head := strings.Join(firsts[:take], ", ")
+		extra := len(firsts) - take
+		candidate := fmt.Sprintf("%s, +%d", head, extra)
+		if len(candidate) <= maxWidth {
+			return candidate
+		}
+	}
+	// Last fallback — clip the first name itself.
+	if len(firsts[0]) > maxWidth-1 {
+		return firsts[0][:maxWidth-1] + "…"
+	}
+	return firsts[0]
 }
 
 func (m ChannelListModel) renderItem(ch types.Channel, rowIdx int, maxLen int, isHidden bool) string {

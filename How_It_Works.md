@@ -96,6 +96,18 @@ Opening and closing overlays (help, settings, search, shortcuts editor, etc.) tr
 
 Returning from away (idle timeout) only refreshes the current channel's history. Previous behavior polled all channels on wake-up, which could hit rate limits in large workspaces.
 
+## Threads
+
+Slackers tracks Slack-style threads across both Slack channels and friend (P2P) chats. The `internal/threads` package owns the data model: a `ThreadStore` (debounced JSON persistence at `~/.config/slackers/threads.json`), a pure `Detect` function that classifies a parent message against four rules, and a `Scheduler` that auto-clears inactive threads on a user-configurable interval.
+
+**Detection rules.** A parent message becomes a thread when (1) the local user is `@mentioned` in its text, (2) the local user is its author, (3) the local user appears in the parent's reply list, or (4) the local user is mentioned in any reply. Forward-tracking applies all four; the (planned) backfill scanner skips rule 4 to avoid extra `conversations.replies` calls. Forward-tracking runs in-line at zero API cost — every message ingested by `SetMessages` / `AppendMessage` is fed through the detector synchronously, and the message's already-loaded `Replies` slice covers rules 3 and 4 for free.
+
+**Sidebar group.** Active threads surface as a `Threads` group at the top of the sidebar. Each entry takes two visual lines: the parent channel name (Slack `#channels` rendered in the channel-name color, friend `@chats` rendered in the online-friend green) and a comma-joined list of participant first names below. Click or Enter switches to the parent's channel and auto-enters the existing reply detail view ("inside" mode) — replies are fetched on demand by the existing path. Right-click pops a `ThreadOptionsModel` (built on the shared `PopupMenu`) with *Go to Channel* and *Close Thread*. Closing a thread removes it from the active list; if the user is later mentioned again, detection re-adds it automatically.
+
+**Auto-clear scheduler.** A user-configurable interval (Settings → Threads → Auto-Clear Inactive) runs an in-process timer that removes any thread whose `LastActivityTS` is older than the cutoff. The store persists `last_cleared_at`; on app start the scheduler runs an immediate sweep when the persisted value is older than the interval, so a long-offline gap doesn't accumulate stale entries. Changing the interval in Settings stops the timer, runs an immediate sweep with the new cutoff, and re-arms.
+
+**Backfill scope.** A separate setting (Settings → Threads → Backfill Scope) controls how a future *global Threads view* searches history for older threads — *disabled* / *local* / *subscribed* / *all_public*. Plan A persists this setting; the global view and the `BackfillScanner` that consumes it are Plan B work.
+
 ## Scroll-up history pagination
 
 When a channel is first opened, slackers loads the most recent 50 messages via `conversations.history`. When the user scrolls to the top of the viewport (mouse wheel, up arrow in select mode, or PgUp), a `FetchHistoryBefore` call requests 100 older messages using the Slack API's `latest` timestamp parameter. The response is prepended to the message list and the viewport re-anchors to the previously-topmost message so the scroll position stays stable. This repeats on each scroll-to-top until the API reports no more history (`has_more: false`), at which point a `historyExhausted` flag is set and "No more earlier messages" is shown.

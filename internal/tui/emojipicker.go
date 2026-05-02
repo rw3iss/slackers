@@ -821,9 +821,9 @@ func (m *EmojiPickerModel) View() string {
 	b.WriteString("\n\n")
 	isFavTab := m.activeTab < len(m.categories) && m.categories[m.activeTab].name == "Favorites"
 	if isFavTab {
-		b.WriteString(dimStyle.Render("  Arrows: move | Enter: select | f: unfav | Ctrl+Arrows: reorder"))
+		b.WriteString(dimStyle.Render("  Arrows: move" + HintSep + "Enter: select" + HintSep + "f: unfav" + HintSep + "Ctrl+Arrows: reorder"))
 	} else {
-		b.WriteString(dimStyle.Render("  Arrows: move | Tab: next cat | Enter: select | f: fav | Esc: close"))
+		b.WriteString(dimStyle.Render("  Arrows: move" + HintSep + "Tab: next cat" + HintSep + "Enter: select" + HintSep + "f: fav" + HintSep + FooterHintClose))
 	}
 	if m.mouseEnabled {
 		b.WriteString("\n")

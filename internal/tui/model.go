@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,7 @@ import (
 	"github.com/rw3iss/slackers/internal/shortcuts"
 	slackpkg "github.com/rw3iss/slackers/internal/slack"
 	"github.com/rw3iss/slackers/internal/theme"
+	"github.com/rw3iss/slackers/internal/threads"
 	"github.com/rw3iss/slackers/internal/types"
 	"github.com/rw3iss/slackers/internal/workspace"
 )
@@ -91,6 +93,7 @@ const (
 	overlayIncomingCall
 	overlayNotificationSettings
 	overlayChatOptions
+	overlayThreadOptions
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -375,6 +378,7 @@ type Model struct {
 	commandList      CommandListModel
 	outputView       OutputViewModel
 	cmdSuggest       CmdSuggestModel
+	mentionSuggest   MentionSuggestModel
 	cmdRegistry      *commands.Registry
 	emoteStore       *emotes.Store
 
@@ -445,6 +449,19 @@ type Model struct {
 	notifStore   *notifications.Store
 	notifs       NotificationsOverlayModel
 	notifSettings NotificationSettingsModel
+
+	// Threads
+	threadStore     *threads.ThreadStore
+	threadScheduler *threads.Scheduler
+	// threadOptions is the right-click context menu rendered next to
+	// a Threads-group sidebar item or (Plan B) a row in the global
+	// Threads overlay.
+	threadOptions ThreadOptionsModel
+	// pendingThreadOpenTS holds the parent_ts to auto-enter via
+	// EnterThreadMode after the next channel-switch + history load
+	// completes. Cleared in the HistoryLoadedMsg handler once the
+	// auto-enter fires (or when the parent isn't found).
+	pendingThreadOpenTS string
 
 	// friendActivity tracks the last time a friend chat was
 	// touched (opened, focused, typed in). Connections that go
@@ -960,12 +977,18 @@ func NewModel(wsList []*workspace.Workspace, cfg *config.Config, version string,
 			_ = ns.Load()
 			return ns
 		}(),
+		threadStore: func() *threads.ThreadStore {
+			ts := threads.NewStore(threads.DefaultPath())
+			_ = ts.Load()
+			return ts
+		}(),
 		slackSvc:   slackSvc,
 		socketSvc:  socketSvc,
 		eventChan:  make(chan slackpkg.SocketEvent, 100),
 		workspaces: wsMap,
 		activeWsID: activeWsID,
-		cmdSuggest: NewCmdSuggest(),
+		cmdSuggest:     NewCmdSuggest(),
+		mentionSuggest: NewMentionSuggest(),
 	}
 	// Create the download manager.
 	dlPath := cfg.DownloadPath
@@ -1004,6 +1027,22 @@ func NewModel(wsList []*workspace.Workspace, cfg *config.Config, version string,
 			}
 		}
 	}
+
+	// Threads — wire the auto-clear scheduler and seed the sidebar
+	// from any persisted active threads. The scheduler's catch-up
+	// sweep runs synchronously inside Start when last_cleared_at is
+	// older than the configured interval, so the sidebar is
+	// guaranteed to reflect the post-sweep state on first render.
+	autoClear := time.Duration(cfg.Threads.AutoClearHours) * time.Hour
+	m.threadScheduler = threads.NewScheduler(m.threadStore, autoClear)
+	m.threadScheduler.Start()
+	m.channels.SetThreads(m.threadStore.Active())
+
+	// Push the initial user/friend resolver map into the message
+	// view so friend mentions resolve correctly even before any
+	// UsersLoadedMsg arrives — friends-only mode never fires that
+	// message and would otherwise leave friend mentions unresolved.
+	m.refreshUserMap()
 
 	return m
 }
@@ -1177,6 +1216,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the last change.
 			if m.notifStore != nil {
 				m.notifStore.FlushPending()
+			}
+			// Same flush for the threads store — debounced saves
+			// from forward-tracking detection or the auto-clear
+			// scheduler need to land before the process exits.
+			if m.threadStore != nil {
+				m.threadStore.FlushPending()
+			}
+			if m.threadScheduler != nil {
+				m.threadScheduler.Stop()
 			}
 			if m.p2pNode != nil {
 				_ = m.p2pNode.Close()
@@ -1912,6 +1960,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatOptions, cmd = m.chatOptions.Update(msg)
 			return m, cmd
 		}
+		if m.overlay == overlayThreadOptions {
+			if msg.String() == "esc" {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.threadOptions, cmd = m.threadOptions.Update(msg)
+			return m, cmd
+		}
 		if m.overlay == overlayContactCardView {
 			var cmd tea.Cmd
 			m.contactCardView, cmd = m.contactCardView.Update(msg)
@@ -1979,6 +2036,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Normal key handling (no overlay)
 		switch {
 		case key.Matches(msg, m.keymap.Tab):
+			// Mention popup gets first shot at Tab — completes the
+			// highlighted user/friend into the input as <@ID>.
+			if m.focus == types.FocusInput && m.mentionSuggest.Visible() {
+				m.completeMentionFromSuggest()
+				return m, nil
+			}
 			// When the command suggestion popup is visible and
 			// focus is on the input, Tab completes the
 			// highlighted suggestion instead of cycling focus.
@@ -2040,6 +2103,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.input.Value() == "" {
 					m.input.ClearEscapeOnce()
 					m.cmdSuggest.Hide()
+					return m, nil
+				}
+				// If the @mention popup is up, Esc dismisses it
+				// without touching the input — same precedence as
+				// the slash-command popup below.
+				if m.mentionSuggest.Visible() {
+					m.mentionSuggest.Hide()
 					return m, nil
 				}
 				// If the slash-command suggestion popup is up,
@@ -2207,6 +2277,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keymap.Enter):
 			if m.focus == types.FocusSidebar {
+				// Thread row selected — dispatch the activation
+				// message so the standard handler switches the
+				// channel and auto-opens the reply detail view.
+				if t := m.channels.SelectedThread(); t != nil {
+					ref := t.Ref
+					return m, func() tea.Msg {
+						return threads.OpenThreadMsg{Ref: ref, OpenReplyView: true}
+					}
+				}
 				ch := m.channels.SelectedChannel()
 				if ch != nil {
 					if m.messages.InThreadMode() {
@@ -2307,6 +2386,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// command. If the suggestion popup is visible, the
 			// arrow keys navigate it; if it's not, they're a
 			// no-op. Either way, swallow the keystroke.
+			// @mention popup gets first crack at Up/Down/Enter
+			// while it's visible, regardless of whether the input
+			// starts with `/`. Tab is already routed earlier in
+			// the global switch. Esc is handled in the Escape
+			// branch above.
+			if m.mentionSuggest.Visible() {
+				switch msg.String() {
+				case "up":
+					m.mentionSuggest.Move(-1)
+					return m, nil
+				case "down":
+					m.mentionSuggest.Move(1)
+					return m, nil
+				case "enter":
+					m.completeMentionFromSuggest()
+					return m, nil
+				}
+			}
 			isSlash := strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/")
 			if isSlash && m.cmdRegistry != nil {
 				switch msg.String() {
@@ -2386,6 +2483,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Refresh / hide the suggestion popup based on the
 			// post-update input value.
 			m.refreshCmdSuggest()
+			m.refreshMentionSuggest()
 		}
 
 		return m, tea.Batch(cmds...)
@@ -2572,7 +2670,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.channels.SetChannels(msg.Channels)
 		// Re-apply friend channels — SetChannels above replaces the entire
 		// channel slice and would otherwise wipe the friends loaded earlier.
-		m.channels.SetFriendChannels(m.buildFriendChannels())
+		m.notifyFriendsChanged()
 		m.channels.SetHiddenChannels(m.cfg.HiddenChannels)
 		m.channels.SetAliases(m.cfg.ChannelAliases)
 		m.channels.SetCollapsedGroups(m.cfg.CollapsedGroups)
@@ -2643,6 +2741,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Messages != nil {
 			msg.Messages = m.decryptMessages(msg.Messages)
 			m.messages.SetMessages(msg.Messages)
+			// Forward-tracking thread detection over the freshly
+			// loaded history. Cheap — only walks parents (replies
+			// are skipped via the ReplyTo filter inside).
+			m.detectThreads(msg.Messages, m.currentCh)
 		} else {
 			m.messages.SetMessages(nil)
 		}
@@ -2662,6 +2764,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateFocus()
 		}
 		drainWarnings(&m)
+		// Auto-enter reply-detail mode if the channel switch came
+		// from an OpenThreadMsg activation. Look up the parent by
+		// MessageID and enter thread mode; the existing reply-fetch
+		// path in messages.go will populate replies on demand.
+		if m.pendingThreadOpenTS != "" {
+			ts := m.pendingThreadOpenTS
+			m.pendingThreadOpenTS = ""
+			for i, mm := range m.messages.messages {
+				if mm.MessageID == ts {
+					m.messages.EnterThreadMode(i)
+					m.focus = types.FocusMessages
+					m.updateFocus()
+					break
+				}
+			}
+		}
 		// Show error if history fetch failed, but channel is still open.
 		if msg.Err != nil {
 			return m, setError(&m, msg.Err)
@@ -2670,15 +2788,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case UsersLoadedMsg:
 		m.users = msg.Users
-		userMap := make(map[string]string, len(msg.Users))
-		for id, u := range msg.Users {
-			name := u.DisplayName
-			if name == "" {
-				name = u.RealName
-			}
-			userMap[id] = name
-		}
-		m.messages.SetUsers(userMap)
+		m.refreshUserMap()
 		// Cache the local Slack user ID for reaction matching.
 		if m.slackSvc != nil {
 			if uid := m.slackSvc.MyUserID(); uid != "" {
@@ -2705,15 +2815,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ws.Users = msg.Users
 			if msg.TeamID == m.activeWsID {
 				m.users = msg.Users
-				userMap := make(map[string]string, len(msg.Users))
-				for id, u := range msg.Users {
-					name := u.DisplayName
-					if name == "" {
-						name = u.RealName
-					}
-					userMap[id] = name
-				}
-				m.messages.SetUsers(userMap)
+				m.refreshUserMap()
 				if ws.MyUserID != "" {
 					m.myUserID = ws.MyUserID
 				}
@@ -2823,6 +2925,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Dedupe: remove any optimistic "pending-" copy of this message.
 				m.messages.RemovePendingMatching(evMsg.Text)
 				m.messages.AppendMessage(evMsg)
+				// Forward-tracking detection on the new message
+				// (covers rule 1, 2 hits; rule 3/4 typically fire
+				// when a reply later arrives in this same path).
+				m.detectThreads([]types.Message{evMsg}, m.currentCh)
 			} else {
 				debug.Log("[notif] socket event: unread msg in channel=%s from=%s text=%q",
 					evMsg.ChannelID, evMsg.UserID, truncateStr(evMsg.Text, 50))
@@ -3164,7 +3270,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.friendStore.SetOnline(f.UserID, online)
 		if online {
 			m.friendStore.UpdateLastOnline(f.UserID)
-			m.channels.SetFriendChannels(m.buildFriendChannels())
+			m.notifyFriendsChanged()
 			m.setChannelHeader()
 			setBoth("✓ Connected to " + f.Name + " (online)")
 			// On a save where the public key or multiaddr changed,
@@ -3306,7 +3412,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FriendsConfigCloseMsg:
 		m.overlay = overlayNone
 		// Refresh friend channels in sidebar after config changes.
-		m.channels.SetFriendChannels(m.buildFriendChannels())
+		m.notifyFriendsChanged()
 		return m, nil
 
 	case FriendImportBrowseMsg:
@@ -3719,6 +3825,97 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overlay = overlayRename
 			return m, nil
 		}
+		return m, nil
+
+	case threads.OpenThreadMsg:
+		// Activation request from the sidebar Threads group, the
+		// global Threads overlay (Plan B), or the /threads slash
+		// command. Switches to the parent's channel and (optionally)
+		// auto-opens the reply-detail view via pendingThreadOpenTS,
+		// which the HistoryLoadedMsg handler consumes.
+		ref := msg.Ref
+		ch := m.findChannelByThreadRef(ref)
+		if ch == nil {
+			m.warning = "Channel not found for thread"
+			return m, nil
+		}
+		// If we're already in this channel, jump straight to thread
+		// mode without re-fetching history.
+		if m.currentCh != nil && m.currentCh.ID == ch.ID {
+			if msg.OpenReplyView {
+				for i, mm := range m.messages.messages {
+					if mm.MessageID == ref.ParentTS {
+						m.messages.EnterThreadMode(i)
+						m.focus = types.FocusMessages
+						m.updateFocus()
+						break
+					}
+				}
+			}
+			return m, nil
+		}
+		// Channel switch path — mirror the standard sidebar Enter
+		// handler so the rest of the app (unread, last-channel,
+		// header, focus) updates consistently.
+		if m.messages.InThreadMode() {
+			m.messages.ExitThreadMode()
+		}
+		chCopy := *ch
+		m.currentCh = &chCopy
+		m.channels.SelectByID(ch.ID)
+		m.channels.ClearUnread(ch.ID)
+		m.markSlackRead(&chCopy)
+		m.clearChannelNotifs(ch.ID)
+		m.setChannelHeader()
+		m.saveLastChannel(ch.ID)
+		if msg.OpenReplyView {
+			m.pendingThreadOpenTS = ref.ParentTS
+		}
+		if ch.IsFriend {
+			m.loadFriendHistory(ch.UserID)
+			// loadFriendHistory is synchronous — auto-enter thread
+			// mode here since no HistoryLoadedMsg will follow.
+			if m.pendingThreadOpenTS != "" {
+				ts := m.pendingThreadOpenTS
+				m.pendingThreadOpenTS = ""
+				for i, mm := range m.messages.messages {
+					if mm.MessageID == ts {
+						m.messages.EnterThreadMode(i)
+						break
+					}
+				}
+			}
+			m.focus = types.FocusMessages
+			m.updateFocus()
+			return m, nil
+		}
+		return m, loadHistoryCmd(m.slackSvc, ch.ID)
+
+	case ThreadOptionsSelectMsg:
+		// Right-click → context menu choice on a Threads-group item.
+		m.overlay = overlayNone
+		ref := msg.Ref
+		switch msg.Action {
+		case ThreadActionClose:
+			if m.threadStore != nil && m.threadStore.Remove(ref) {
+				m.channels.SetThreads(m.threadStore.Active())
+			}
+			return m, nil
+		case ThreadActionGoToChannel:
+			return m, func() tea.Msg {
+				return threads.OpenThreadMsg{Ref: ref, OpenReplyView: false}
+			}
+		}
+		return m, nil
+
+	case threads.ThreadsChangedMsg:
+		// Asynchronous push from the threads.Store ChangedSub
+		// goroutine (e.g. scheduler sweep). Plan A doesn't actively
+		// emit these — synchronous mutation paths call
+		// m.channels.SetThreads directly — but accepting the message
+		// here keeps the event-loop wiring complete and ready for
+		// Plan B when the BackfillScanner starts emitting them.
+		m.channels.SetThreads(msg.Active)
 		return m, nil
 
 	case FriendCardOptionsSelectMsg:
@@ -4855,6 +5052,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			config.SaveDebounced(m.cfg)
 			m.input.Reset()
 			m.cmdSuggest.Hide()
+			m.mentionSuggest.Hide()
 			m.resizeComponents()
 			res := m.cmdRegistry.Run(text, &m)
 			return m, m.applyCommandResult(res)
@@ -4876,6 +5074,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// view grows to fill the freed space and the input stays pinned
 			// to the bottom of the terminal.
 			m.resizeComponents()
+
+			// Resolve readable @mentions ("@Ryan Weiss") to wire-
+			// format tokens (<@U12345> / <@slacker:abc>) using the
+			// same pool the autocomplete drew from. Tokens that
+			// don't match the pool (@everyone, free-typed @handles)
+			// are left alone.
+			text = m.resolveMentionsForSend(text)
 
 			// Expand any [FRIEND:me] / [FRIEND:<id>] markers to a
 			// full SLF2 hash so the recipient can decode them.
@@ -5333,7 +5538,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.friendStore.UpdateLastOnline(msg.SenderID)
 				if !wasOnline {
 					// State flip — refresh sidebar + header.
-					m.channels.SetFriendChannels(m.buildFriendChannels())
+					m.notifyFriendsChanged()
 					m.updateFriendStatusDisplay()
 					if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
 						m.setChannelHeader()
@@ -5378,7 +5583,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.friendStore.SetStatus(msg.SenderID, "offline", "")
 				m.friendStore.UpdateLastOnline(msg.SenderID)
 				m.channels.ClearUnread("friend:" + msg.SenderID)
-				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.notifyFriendsChanged()
 				m.updateFriendStatusDisplay()
 				if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
 					m.setChannelHeader()
@@ -5402,7 +5607,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.friendStore.SetStatus(msg.SenderID, statusType, statusMsg)
 				m.friendStore.SetSharedFolder(msg.SenderID, msg.SharedFolder)
-				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.notifyFriendsChanged()
 				m.updateFriendStatusDisplay()
 				if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
 					m.setChannelHeader()
@@ -6013,7 +6218,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				_ = m.friendStore.Add(f)
 				_ = m.friendStore.Save()
-				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.notifyFriendsChanged()
 				if m.p2pNode != nil && m.secureMgr != nil {
 					profile := m.myProfileJSON()
 					go func(uid string) {
@@ -6079,7 +6284,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				_ = m.friendStore.Add(f)
 				_ = m.friendStore.Save()
-				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.notifyFriendsChanged()
 				m.warning = senderName + " accepted your friend request!"
 				// Drop any pending friend-request notification.
 				if m.notifStore != nil {
@@ -6219,6 +6424,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Viewing this friend's channel — append directly.
 			m.messages.AppendMessage(p2pMsg)
 			m.appendFriendMessage(msg.SenderID, p2pMsg)
+			// Forward-tracking detection for the friend channel.
+			m.detectThreads([]types.Message{p2pMsg}, m.currentCh)
 		} else if m.currentCh != nil && m.currentCh.IsDM && m.currentCh.UserID == msg.SenderID {
 			// Viewing this user's Slack DM — show as encrypted.
 			p2pMsg.Text = "🔒 " + p2pMsg.Text
@@ -6354,7 +6561,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			_ = m.friendStore.Add(f)
 			_ = m.friendStore.Save()
-			m.channels.SetFriendChannels(m.buildFriendChannels())
+			m.notifyFriendsChanged()
 			m.warning = msg.Name + " added as friend!"
 			// Send accept response over P2P, including our profile so
 			// the requesting peer can learn our display name / email.
@@ -6462,7 +6669,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if anyStateChanged {
-			m.channels.SetFriendChannels(m.buildFriendChannels())
+			m.notifyFriendsChanged()
 			m.updateFriendStatusDisplay()
 		}
 		if currentFriendFlipped {
@@ -6596,6 +6803,9 @@ func (m Model) viewInner() string {
 	case overlayChatOptions:
 		base := m.renderBaseView()
 		return m.chatOptions.View(base)
+	case overlayThreadOptions:
+		base := m.renderBaseView()
+		return m.threadOptions.View(base)
 	}
 
 	// Normal view path: delegate to renderBaseView so the
@@ -6663,6 +6873,31 @@ func (m Model) renderBaseView() string {
 		base = strings.Join(baseLines, "\n")
 	}
 
+	// @mention popup. Same overlay technique as the slash-command
+	// popup above — sits right above the input bar and covers the
+	// bottom rows of the message pane while visible. The two popups
+	// are mutually exclusive in practice (one starts with `/`, the
+	// other with `@`) so there's no z-order concern.
+	if m.mentionSuggest.Visible() {
+		popupStr := m.mentionSuggest.View()
+		popupLines := strings.Split(popupStr, "\n")
+		baseLines := strings.Split(base, "\n")
+		if len(baseLines) > m.height {
+			baseLines = baseLines[:m.height]
+		}
+		popupStart := m.inputTop - len(popupLines)
+		if popupStart < 0 {
+			popupStart = 0
+		}
+		for i, pline := range popupLines {
+			row := popupStart + i
+			if row >= 0 && row < len(baseLines) {
+				baseLines[row] = pline
+			}
+		}
+		base = strings.Join(baseLines, "\n")
+	}
+
 	// Audio call badge.
 	if x0, _, y, vis := m.audioCallButtonClickArea(); vis {
 		badge := renderAudioCallButton(m.activeCall, m.audioEngine, m.audioCallModel.ShowMicMeter(), m.audioCallModel.ShowPeerMeter())
@@ -6706,6 +6941,564 @@ func (m *Model) activeWs() *workspace.Workspace {
 		return nil
 	}
 	return m.workspaces[m.activeWsID]
+}
+
+// refreshMentionSuggest re-evaluates the @mention popup from the
+// current input value. The popup activates when the user has just
+// typed an `@` that's at the start of the input or preceded by
+// whitespace (so an email like "ryan@example.com" doesn't trigger
+// it), and stays active until they finish the mention with a
+// space, send the message, or press Esc.
+//
+// Resets the popup whenever:
+//   - the input doesn't contain an `@` trigger
+//   - the trigger has been "completed" (whitespace after `@<query>`)
+//   - the user backspaces past the `@`
+//
+// The candidate pool combines Slack workspace users (m.users) and
+// friend contact cards (m.friendStore). Filtering is prefix-match
+// on DisplayName, case-insensitive. Empty queries show the full
+// pool truncated to 8 entries.
+func (m *Model) refreshMentionSuggest() {
+	val := m.input.Value()
+	if val == "" {
+		m.mentionSuggest.Hide()
+		return
+	}
+	// Find the last `@` that could be a trigger. Walk from the
+	// cursor backwards. Since the input doesn't expose its cursor
+	// position cleanly, we treat the end-of-value as the cursor —
+	// a reasonable approximation since users type at the end.
+	end := len(val)
+	at := -1
+	for i := end - 1; i >= 0; i-- {
+		c := val[i]
+		if c == '@' {
+			// `@` is a valid trigger when at the start of input or
+			// preceded by whitespace — otherwise it's part of an
+			// email or unrelated word.
+			if i == 0 {
+				at = i
+				break
+			}
+			prev := val[i-1]
+			if prev == ' ' || prev == '\t' || prev == '\n' {
+				at = i
+				break
+			}
+			// Embedded @ — bail out, no popup.
+			break
+		}
+		if c == ' ' || c == '\t' || c == '\n' {
+			// Hit whitespace before finding `@` — no active trigger.
+			break
+		}
+	}
+	if at < 0 {
+		m.mentionSuggest.Hide()
+		return
+	}
+	query := val[at+1 : end]
+	pool := m.buildMentionPool()
+	matches := rankMentionMatches(query, pool, 8)
+	m.mentionSuggest.SetMatches(matches)
+	m.mentionSuggest.SetTrigger(at, end)
+	m.mentionSuggest.SetWidth(m.width - 2)
+}
+
+// buildMentionPool assembles the candidate list shown in the
+// @mention popup, merging Slack workspace users and friend records.
+// Each entry's DisplayName is guaranteed unique across the pool so
+// it can serve as a lookup key during send-time mention resolution
+// — duplicates get a "-2", "-3", … suffix in the order encountered.
+// Sorted alphabetically afterwards so the popup feels stable as the
+// user types.
+func (m *Model) buildMentionPool() []MentionEntry {
+	var pool []MentionEntry
+	dmAliasByUser := m.dmAliasByUser()
+	for id, u := range m.users {
+		name := m.bestSlackUserName(id, u, dmAliasByUser)
+		if name == "" || name == id {
+			continue
+		}
+		subtitle := "user"
+		if id == m.myUserID {
+			subtitle = "you"
+		}
+		pool = append(pool, MentionEntry{
+			ID:          id,
+			DisplayName: name,
+			Subtitle:    subtitle,
+			IsFriend:    false,
+		})
+	}
+	if m.friendStore != nil {
+		for _, f := range m.friendStore.All() {
+			name := f.Name
+			if name == "" {
+				continue
+			}
+			pool = append(pool, MentionEntry{
+				ID:          "slacker:" + f.SlackerID,
+				DisplayName: name,
+				Subtitle:    "friend",
+				IsFriend:    true,
+			})
+		}
+	}
+	disambiguateMentionPool(pool)
+	sort.Slice(pool, func(i, j int) bool {
+		return strings.ToLower(pool[i].DisplayName) < strings.ToLower(pool[j].DisplayName)
+	})
+	return pool
+}
+
+// disambiguateMentionPool walks `pool` in encounter order and
+// suffixes any duplicate DisplayName with "-2", "-3", … so each
+// entry has a unique name. Mutates in place. Comparison is
+// case-insensitive so "Ryan" and "ryan" count as the same name.
+func disambiguateMentionPool(pool []MentionEntry) {
+	counts := make(map[string]int, len(pool))
+	for i := range pool {
+		key := strings.ToLower(pool[i].DisplayName)
+		counts[key]++
+		if counts[key] > 1 {
+			pool[i].DisplayName = fmt.Sprintf("%s-%d", pool[i].DisplayName, counts[key])
+		}
+	}
+}
+
+// resolveMentionsForSend rewrites every readable `@<name>` token
+// in `text` into Slack/friend wire format (`<@U...>` /
+// `<@slacker:...>`) by looking the name up in the mention pool.
+// Used before the chat send path so the input stays readable
+// ("@Ryan Weiss") while the wire still carries proper mention
+// semantics that Slack will notify on.
+//
+// Matching is longest-first (so "Ryan Weiss" wins over "Ryan"
+// when both are in the pool) and requires a word-boundary after
+// the matched name — whitespace, end of input, or one of the
+// common closing punctuation marks. Tokens that don't match a
+// pool entry are left untouched, which leaves @everyone / @here
+// / @channel broadcasts and unrelated email-style "@" alone.
+func (m *Model) resolveMentionsForSend(text string) string {
+	if !strings.Contains(text, "@") {
+		return text
+	}
+	pool := m.buildMentionPool()
+	if len(pool) == 0 {
+		return text
+	}
+	// Sort by name length descending so longer names match first.
+	byLen := make([]MentionEntry, len(pool))
+	copy(byLen, pool)
+	sort.Slice(byLen, func(i, j int) bool {
+		return len(byLen[i].DisplayName) > len(byLen[j].DisplayName)
+	})
+	out := text
+	idx := 0
+	for idx < len(out) {
+		at := strings.IndexByte(out[idx:], '@')
+		if at < 0 {
+			break
+		}
+		at += idx
+		// Validate `@` boundary — must be at start or after a non-name char.
+		if at > 0 {
+			prev := out[at-1]
+			if !isMentionLeftBoundary(prev) {
+				idx = at + 1
+				continue
+			}
+		}
+		matched := false
+		for _, e := range byLen {
+			name := e.DisplayName
+			tokenLen := 1 + len(name) // include `@`
+			if at+tokenLen > len(out) {
+				continue
+			}
+			if !strings.EqualFold(out[at+1:at+tokenLen], name) {
+				continue
+			}
+			// Trailing boundary check.
+			if at+tokenLen < len(out) {
+				next := out[at+tokenLen]
+				if !isMentionRightBoundary(next) {
+					continue
+				}
+			}
+			wire := "<@" + e.ID + ">"
+			out = out[:at] + wire + out[at+tokenLen:]
+			idx = at + len(wire)
+			matched = true
+			break
+		}
+		if !matched {
+			idx = at + 1
+		}
+	}
+	return out
+}
+
+// isMentionLeftBoundary reports whether the byte immediately
+// before an `@` permits the `@` to start a mention. Inside a word
+// (e.g. an email address) the `@` is not a mention start.
+func isMentionLeftBoundary(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '(', '[', '{', '"', '\'':
+		return true
+	}
+	return false
+}
+
+// isMentionRightBoundary reports whether the byte immediately
+// after a name match permits the match to be treated as a
+// complete mention rather than a prefix of a longer word.
+func isMentionRightBoundary(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '.', ',', '!', '?', ';', ':', ')', ']', '}', '"', '\'':
+		return true
+	}
+	return false
+}
+
+// completeMentionFromSuggest splices the readable display name for
+// the currently highlighted @mention into the input, replacing the
+// `@<query>` the user was typing. The wire-format conversion to
+// `<@U...>` happens later in resolveMentionsForSend so the input
+// stays human-readable while the user is composing.
+//
+// The pool's DisplayName is unique (disambiguateMentionPool ensures
+// that), so the same string round-trips back to the right user id
+// at send time.
+func (m *Model) completeMentionFromSuggest() {
+	sel := m.mentionSuggest.Selected()
+	if sel == nil {
+		return
+	}
+	start := m.mentionSuggest.TriggerStart()
+	end := m.mentionSuggest.TriggerEnd()
+	val := m.input.Value()
+	if start < 0 || end > len(val) || start > end {
+		return
+	}
+	token := "@" + sel.DisplayName + " "
+	newVal := val[:start] + token + val[end:]
+	m.input.SetValue(newVal)
+	m.mentionSuggest.Hide()
+}
+
+// refreshUserMap rebuilds the (id → display name) map used by
+// FormatMessage to resolve `<@...>` mention markers, and pushes
+// it to the message view. Combines Slack workspace users (keyed
+// by U-id) with friends (keyed by "slacker:<SlackerID>") so both
+// transports' mentions resolve to the user-visible name they were
+// composed with.
+//
+// Name precedence (highest first), per the user-facing rule
+// "alias first, then any other name, then the unique id":
+//
+//  1. Channel alias from cfg.ChannelAliases — only meaningful
+//     for Slack users when a DM channel with them has been
+//     aliased; the lookup is keyed by the DM channel id.
+//  2. Slack DisplayName (the @-handle the user picked) for
+//     workspace users; friend Name for P2P friends.
+//  3. Slack RealName (the full real name) for workspace users.
+//  4. Bare id ("U..." / "slacker:...") if absolutely nothing
+//     else is set.
+//
+// Call from any path that mutates the underlying user/friend sets
+// — workspace user load, friend add/remove/rename — so cached
+// formatted text uses up-to-date names. SetUsers invalidates the
+// formatted-text and mention sidecar caches automatically.
+func (m *Model) refreshUserMap() {
+	userMap := make(map[string]string, len(m.users)+8)
+	dmAliasByUser := m.dmAliasByUser()
+	for id, u := range m.users {
+		userMap[id] = m.bestSlackUserName(id, u, dmAliasByUser)
+	}
+	if m.friendStore != nil {
+		for _, f := range m.friendStore.All() {
+			name := f.Name
+			if name == "" {
+				name = "slacker:" + f.SlackerID
+			}
+			userMap["slacker:"+f.SlackerID] = name
+		}
+	}
+	m.messages.SetUsers(userMap)
+}
+
+// notifyFriendsChanged is the canonical "friends mutated" hook —
+// rebuilds the friend channel list and refreshes the message-view
+// resolver so any future @mentions of friends render with their
+// current display name. Call from every path that adds, removes,
+// renames, or otherwise edits the friend store.
+func (m *Model) notifyFriendsChanged() {
+	m.channels.SetFriendChannels(m.buildFriendChannels())
+	m.refreshUserMap()
+}
+
+// dmAliasByUser builds a (Slack U-id → channel alias) map from the
+// DM channel aliases configured in cfg.ChannelAliases. Used so
+// mention rendering and the autocomplete pool can both honour
+// channel aliases as the highest-priority display name.
+func (m *Model) dmAliasByUser() map[string]string {
+	if m.cfg == nil || len(m.cfg.ChannelAliases) == 0 {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, ch := range m.channels.channels {
+		if !ch.IsDM || ch.UserID == "" {
+			continue
+		}
+		if alias, ok := m.cfg.ChannelAliases[ch.ID]; ok && alias != "" {
+			out[ch.UserID] = alias
+		}
+	}
+	return out
+}
+
+// bestSlackUserName returns the highest-priority display name for
+// a Slack workspace user — alias > DisplayName > RealName > id.
+func (m *Model) bestSlackUserName(id string, u types.User, dmAliasByUser map[string]string) string {
+	if alias, ok := dmAliasByUser[id]; ok && alias != "" {
+		return alias
+	}
+	if u.DisplayName != "" {
+		return u.DisplayName
+	}
+	if u.RealName != "" {
+		return u.RealName
+	}
+	return id
+}
+
+// detectThreads runs forward-tracking thread detection over the
+// given slice of messages for the given channel. Snapshots are
+// added or refreshed in m.threadStore; if anything changes the
+// sidebar is refreshed once at the end. Safe to call with a nil
+// channel (no-op) or a nil store (no-op).
+//
+// Forward-tracking applies all four rules — the messages here have
+// their .Replies populated from the same fetch that produced them
+// (Slack: client.go fetchReplies; Friend: P2P inbox), so rule 4
+// (mentioned in a reply) costs nothing extra to evaluate.
+func (m *Model) detectThreads(msgs []types.Message, ch *types.Channel) {
+	if m.threadStore == nil || ch == nil || len(msgs) == 0 {
+		return
+	}
+	me := m.detectionIdentityFor(ch)
+	if me == "" {
+		return
+	}
+	source := threads.SourceSlack
+	if ch.IsFriend {
+		source = threads.SourceFriend
+	}
+	chanName := m.resolveChannelDisplay(ch.ID)
+	if chanName == "" {
+		chanName = ch.Name
+	}
+	changed := false
+	for _, msg := range msgs {
+		if msg.MessageID == "" {
+			continue
+		}
+		// Skip replies themselves — only parents can become threads.
+		// A reply has ReplyTo set; the parent has ReplyTo == "".
+		if msg.ReplyTo != "" {
+			continue
+		}
+		// Hard prerequisite: a thread requires replies. A plain
+		// authored or @mentioned message with no replies is just a
+		// message — short-circuit before paying for the detector.
+		if len(msg.Replies) == 0 {
+			continue
+		}
+		reason, ok := threads.Detect(msg, me, true)
+		if !ok {
+			continue
+		}
+		snap := m.buildThreadSnapshot(msg, ch, source, chanName, reason)
+		if m.threadStore.Add(snap) {
+			changed = true
+		} else {
+			// Existing record refreshed; treat as changed so the
+			// sidebar resort picks up any new LastActivityTS.
+			changed = true
+		}
+	}
+	if changed {
+		m.channels.SetThreads(m.threadStore.Active())
+	}
+}
+
+// detectionIdentityFor returns the local user identity in whatever
+// form the given channel uses for UserID — Slack U-id for Slack
+// channels, "slacker:<SlackerID>" for friend channels. Returns ""
+// when the identity isn't yet known (friends-only mode pre-AuthTest).
+func (m *Model) detectionIdentityFor(ch *types.Channel) string {
+	if ch == nil {
+		return ""
+	}
+	if ch.IsFriend {
+		if m.cfg != nil && m.cfg.SlackerID != "" {
+			return "slacker:" + m.cfg.SlackerID
+		}
+		return ""
+	}
+	return m.myUserID
+}
+
+// buildThreadSnapshot constructs a ThreadSnapshot from a parent
+// message + its surrounding metadata. The participants list is
+// derived from the message's reply authors (deduped, name-resolved).
+func (m *Model) buildThreadSnapshot(parent types.Message, ch *types.Channel, source threads.Source, chanName string, reason threads.ThreadReason) threads.ThreadSnapshot {
+	authorName := parent.UserName
+	if authorName == "" {
+		authorName = m.resolveUserName(parent.UserID)
+	}
+	participants := []string{}
+	seen := make(map[string]struct{}, len(parent.Replies)+1)
+	add := func(uid, name string) {
+		if uid == "" || name == "" {
+			return
+		}
+		if _, ok := seen[uid]; ok {
+			return
+		}
+		seen[uid] = struct{}{}
+		participants = append(participants, name)
+	}
+	add(parent.UserID, authorName)
+	for _, r := range parent.Replies {
+		nm := r.UserName
+		if nm == "" {
+			nm = m.resolveUserName(r.UserID)
+		}
+		add(r.UserID, nm)
+	}
+	lastActivity := parent.MessageID
+	lastActivityAt := parent.Timestamp
+	for _, r := range parent.Replies {
+		if r.MessageID > lastActivity {
+			lastActivity = r.MessageID
+		}
+		if r.Timestamp.After(lastActivityAt) {
+			lastActivityAt = r.Timestamp
+		}
+	}
+	return threads.ThreadSnapshot{
+		Ref: threads.ThreadRef{
+			Source:    source,
+			ChannelID: ch.ID,
+			ParentTS:  parent.MessageID,
+		},
+		ChannelName:      chanName,
+		ParentText:       previewText(parent.Text, 120),
+		ParentAuthorID:   parent.UserID,
+		ParentAuthorName: authorName,
+		Participants:     participants,
+		LastActivityTS:   lastActivity,
+		LastActivityAt:   lastActivityAt,
+		Reason:           reason,
+	}
+}
+
+// resolveUserName looks up a display name for the given user ID,
+// falling back to the ID itself when no record is known yet.
+func (m *Model) resolveUserName(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	if u, ok := m.users[userID]; ok {
+		if u.DisplayName != "" {
+			return u.DisplayName
+		}
+		if u.RealName != "" {
+			return u.RealName
+		}
+	}
+	if m.friendStore != nil {
+		if strings.HasPrefix(userID, "slacker:") {
+			if f := m.friendStore.Get(userID); f != nil && f.Name != "" {
+				return f.Name
+			}
+		}
+	}
+	return userID
+}
+
+// previewText shortens text for snapshot storage, replacing newlines
+// with single spaces so the saved preview renders on one row.
+func previewText(text string, maxRunes int) string {
+	if text == "" {
+		return ""
+	}
+	out := make([]rune, 0, maxRunes+1)
+	count := 0
+	for _, r := range text {
+		if r == '\n' || r == '\r' {
+			r = ' '
+		}
+		out = append(out, r)
+		count++
+		if count >= maxRunes {
+			out = append(out, '…')
+			break
+		}
+	}
+	return string(out)
+}
+
+// findChannelForMention resolves the channel a clicked @mention
+// pill should switch the user to. Slack ids ("U...") look up the
+// 1:1 DM with that user; friend ids ("slacker:...") look up the
+// matching friend channel.
+//
+// Returns nil when no channel exists for the user (e.g. a workspace
+// member you've never opened a DM with). The caller surfaces this
+// as a warning.
+func (m *Model) findChannelForMention(mentionID string) *types.Channel {
+	if mentionID == "" {
+		return nil
+	}
+	if strings.HasPrefix(mentionID, "slacker:") {
+		// Friend mention. Friend channel ids are "friend:<UserID>"
+		// where UserID is the slacker:<id> form (see handlers_p2p).
+		friendID := mentionID
+		for i := range m.channels.channels {
+			ch := &m.channels.channels[i]
+			if ch.IsFriend && ch.UserID == friendID {
+				return ch
+			}
+		}
+		return nil
+	}
+	// Slack user mention — find the 1:1 DM channel for that user.
+	for i := range m.channels.channels {
+		ch := &m.channels.channels[i]
+		if ch.IsDM && ch.UserID == mentionID {
+			return ch
+		}
+	}
+	return nil
+}
+
+// findChannelByThreadRef resolves the local Channel record for a
+// ThreadRef. Slack threads look up by ChannelID directly; friend
+// threads use the conventional "friend:<UserID>" channel ID
+// (handlers_p2p.go and the polling path both build IDs in this form
+// — see "friend:" + UserID).
+func (m *Model) findChannelByThreadRef(ref threads.ThreadRef) *types.Channel {
+	for i := range m.channels.channels {
+		if m.channels.channels[i].ID == ref.ChannelID {
+			return &m.channels.channels[i]
+		}
+	}
+	return nil
 }
 
 func (m *Model) buildChannelIndex() {
@@ -6904,11 +7697,16 @@ func (m Model) renderStatusBar() string {
 	}
 	versionStr := fmt.Sprintf(" slackers v%s ", m.version)
 	cogPart := ""
+	exitPart := ""
 	if m.cfg != nil && m.cfg.MouseEnabled {
 		// 1 column of padding on each side of the cog emoji.
 		cogPart = " " + settingsCogGlyph + " "
+		// Exit button sits to the right of the version, all the
+		// way in the corner. Single-space pad on each side so the
+		// glyph isn't flush with the screen edge.
+		exitPart = " " + exitButtonGlyph + " "
 	}
-	right := StatusBarStyle.Render(cogPart + versionStr)
+	right := StatusBarStyle.Render(cogPart + versionStr + exitPart)
 
 	// Pad the middle to push right label to the edge.
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -6925,6 +7723,11 @@ func (m Model) renderStatusBar() string {
 // a graphical emoji rather than a tiny monochrome glyph.
 const settingsCogGlyph = "⚙\ufe0f"
 
+// exitButtonGlyph is the quit-app button shown in the bottom-right
+// corner of the status bar when mouse mode is enabled. 🚪 (door)
+// reads as "exit" without the visual heaviness of the red ❌.
+const exitButtonGlyph = "🚪"
+
 // settingsCogClickArea returns the [startX, endX) column range for the
 // settings cog in the status bar. Returns (0, 0) when the cog is not shown.
 func (m Model) settingsCogClickArea() (int, int) {
@@ -6932,12 +7735,29 @@ func (m Model) settingsCogClickArea() (int, int) {
 		return 0, 0
 	}
 	versionStr := fmt.Sprintf(" slackers v%s ", m.version)
-	cogPart := " " + settingsCogGlyph + "  "
-	rightWidth := lipgloss.Width(cogPart + versionStr)
+	cogPart := " " + settingsCogGlyph + " "
+	exitPart := " " + exitButtonGlyph + " "
+	rightWidth := lipgloss.Width(cogPart + versionStr + exitPart)
 	rightStart := m.width - rightWidth
-	// Click area covers the cog glyph plus its surrounding pad spaces for forgiveness.
 	startX := rightStart
 	endX := rightStart + lipgloss.Width(cogPart)
+	return startX, endX
+}
+
+// exitButtonClickArea returns the [startX, endX) column range for the
+// quit-app button in the bottom-right corner. Returns (0, 0) when
+// the button is not shown (mouse mode disabled).
+func (m Model) exitButtonClickArea() (int, int) {
+	if m.cfg == nil || !m.cfg.MouseEnabled {
+		return 0, 0
+	}
+	versionStr := fmt.Sprintf(" slackers v%s ", m.version)
+	cogPart := " " + settingsCogGlyph + " "
+	exitPart := " " + exitButtonGlyph + " "
+	rightWidth := lipgloss.Width(cogPart + versionStr + exitPart)
+	rightStart := m.width - rightWidth
+	startX := rightStart + lipgloss.Width(cogPart+versionStr)
+	endX := startX + lipgloss.Width(exitPart)
 	return startX, endX
 }
 

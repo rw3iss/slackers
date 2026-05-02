@@ -291,7 +291,7 @@ func (m *Model) rebuildSidebarForWorkspace(ws *workspace.Workspace) {
 	m.channels.SetChannels(ws.Channels)
 
 	// Merge in friend channels (friends are workspace-independent).
-	m.channels.SetFriendChannels(m.buildFriendChannels())
+	m.notifyFriendsChanged()
 
 	// Apply workspace-scoped aliases from ChannelMeta.
 	aliases := make(map[string]string, len(ws.ChannelMeta))

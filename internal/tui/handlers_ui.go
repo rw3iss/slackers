@@ -14,10 +14,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rw3iss/slackers/internal/config"
 	"github.com/rw3iss/slackers/internal/debug"
+	"github.com/rw3iss/slackers/internal/threads"
 	"github.com/rw3iss/slackers/internal/types"
 )
 
@@ -37,6 +39,13 @@ func (m *Model) applySettings() {
 	m.channels.SetSort(sortBy, sortAsc)
 	m.channels.SetItemSpacing(m.cfg.SidebarItemSpacing)
 	m.messages.SetItemSpacing(m.cfg.MessageItemSpacing)
+	// Re-arm the threads auto-clear scheduler with the new interval.
+	// SetInterval also runs an immediate sweep so a user who lowers
+	// the cutoff sees the change reflected without waiting a tick.
+	if m.threadScheduler != nil {
+		m.threadScheduler.SetInterval(time.Duration(m.cfg.Threads.AutoClearHours) * time.Hour)
+		m.channels.SetThreads(m.threadStore.Active())
+	}
 	m.resizeComponents()
 }
 
@@ -322,6 +331,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				if viewportY < 0 {
 					return m, nil
 				}
+				if t := m.channels.ThreadByRow(viewportY); t != nil {
+					m.threadOptions = NewThreadOptions(t.Ref, x+1, y)
+					m.threadOptions.SetSize(m.width, m.height)
+					m.overlay = overlayThreadOptions
+					return m, nil
+				}
 				ch, isChannel, _ := m.channels.ChannelByRow(viewportY)
 				if isChannel && ch != nil {
 					items := m.buildSidebarOptionsItems(*ch)
@@ -362,6 +377,25 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.settings.SetSize(m.width, m.height)
 					m.overlay = overlaySettings
 					return m, nil
+				}
+				// Click on the exit button in the very bottom-right
+				// corner — quit the app. Mirrors the Ctrl-Q shutdown
+				// path: flush every debounced store before exit.
+				if exStart, exEnd := m.exitButtonClickArea(); exEnd > exStart && x >= exStart && x < exEnd {
+					config.FlushDebounced()
+					if m.notifStore != nil {
+						m.notifStore.FlushPending()
+					}
+					if m.threadStore != nil {
+						m.threadStore.FlushPending()
+					}
+					if m.threadScheduler != nil {
+						m.threadScheduler.Stop()
+					}
+					if m.p2pNode != nil {
+						_ = m.p2pNode.Close()
+					}
+					return m, tea.Quit
 				}
 			}
 
@@ -415,6 +449,19 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				ch, isChannel, headerKey := m.channels.SelectByRow(viewportY)
+				// Thread row clicked — SelectByRow advances the
+				// cursor; SelectedThread reads the snapshot at the
+				// new selection. Activation dispatches OpenThreadMsg
+				// to switch channel + auto-open the reply detail
+				// view, mirroring the keyboard Enter activation.
+				if !isChannel && headerKey == "" {
+					if t := m.channels.SelectedThread(); t != nil {
+						ref := t.Ref
+						return m, func() tea.Msg {
+							return threads.OpenThreadMsg{Ref: ref, OpenReplyView: true}
+						}
+					}
+				}
 				if headerKey != "" {
 					// Header clicked — toggle collapse.
 					m.channels.ToggleCollapse(headerKey)
@@ -465,6 +512,30 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				// Check if a [FRIEND:...] pill was clicked.
 				if card := m.messages.FriendCardAtClick(msgPaneX, y); card != nil {
 					return m, func() tea.Msg { return FriendCardClickedMsg{Card: *card} }
+				}
+
+				// Check if an @mention pill was clicked — navigate
+				// to the user's DM (Slack) or friend channel (P2P).
+				if mentionID := m.messages.MentionAtClick(msgPaneX, y); mentionID != "" {
+					if ch := m.findChannelForMention(mentionID); ch != nil {
+						chCopy := *ch
+						m.currentCh = &chCopy
+						m.channels.SelectByID(ch.ID)
+						m.channels.ClearUnread(ch.ID)
+						m.markSlackRead(&chCopy)
+						m.clearChannelNotifs(ch.ID)
+						m.setChannelHeader()
+						m.saveLastChannel(ch.ID)
+						m.focus = types.FocusInput
+						m.updateFocus()
+						if ch.IsFriend {
+							m.loadFriendHistory(ch.UserID)
+							return m, nil
+						}
+						return m, loadHistoryCmd(m.slackSvc, ch.ID)
+					}
+					m.warning = "No channel found for that user"
+					return m, nil
 				}
 
 				// Check if a reaction badge was clicked — toggle the reaction.

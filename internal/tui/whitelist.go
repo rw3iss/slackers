@@ -189,7 +189,7 @@ func (m WhitelistModel) View() string {
 
 	scaffold := OverlayScaffold{
 		Title:       "Secure Whitelist",
-		Footer:      "a: add | d: remove | Esc: close",
+		Footer:      "a: add" + HintSep + "d: remove" + HintSep + FooterHintClose,
 		Width:       m.width,
 		Height:      m.height,
 		MaxBoxWidth: 55,

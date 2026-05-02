@@ -84,7 +84,7 @@ func (m RenameModel) View() string {
 
 	scaffold := OverlayScaffold{
 		Title:       "Rename Channel",
-		Footer:      "Enter: save | Esc: cancel | Clear to remove alias",
+		Footer:      "Enter: save" + HintSep + FooterHintCancel + HintSep + "Clear to remove alias",
 		Width:       m.width,
 		Height:      m.height,
 		MaxBoxWidth: 55,

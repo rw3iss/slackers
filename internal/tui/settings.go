@@ -318,6 +318,23 @@ func NewSettingsModel(cfg *config.Config, version string) SettingsModel {
 				options:     []string{"on", "off"},
 			},
 
+			// ───── Threads ─────
+			header("Threads"),
+			{
+				label:       "Backfill Scope",
+				key:         "threads_scan_scope",
+				value:       threadsScanScopeValue(cfg.Threads.ScanScope),
+				description: "What older threads can be discovered. disabled=none, local=in-memory only, subscribed=sidebar channels, all_public=full workspace",
+				options:     []string{"disabled", "local", "subscribed", "all_public"},
+			},
+			{
+				label:       "Auto-Clear Inactive",
+				key:         "threads_auto_clear_hours",
+				value:       threadsAutoClearValue(cfg.Threads.AutoClearHours),
+				description: "Remove threads with no replies older than this. off=never sweep",
+				options:     []string{"off", "24h", "72h", "7d", "30d"},
+			},
+
 			// ───── Customization ─────
 			header("Customization"),
 			{
@@ -951,6 +968,46 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 		} else {
 			m.message = "Shared folder: " + value
 		}
+
+	case "threads_scan_scope":
+		v := strings.ToLower(strings.TrimSpace(value))
+		switch v {
+		case "disabled", "local", "subscribed", "all_public":
+			m.cfg.Threads.ScanScope = v
+			m.fields[m.selected].value = threadsScanScopeValue(v)
+			m.message = "Threads scope: " + v
+		default:
+			m.message = "Invalid scope (disabled, local, subscribed, all_public)"
+			m.fields[m.selected].value = threadsScanScopeValue(m.cfg.Threads.ScanScope)
+			return nil
+		}
+
+	case "threads_auto_clear_hours":
+		v := strings.ToLower(strings.TrimSpace(value))
+		var hours int
+		switch v {
+		case "off", "0":
+			hours = 0
+		case "24h":
+			hours = 24
+		case "72h":
+			hours = 72
+		case "7d":
+			hours = 168
+		case "30d":
+			hours = 720
+		default:
+			m.message = "Pick: off, 24h, 72h, 7d, 30d"
+			m.fields[m.selected].value = threadsAutoClearValue(m.cfg.Threads.AutoClearHours)
+			return nil
+		}
+		m.cfg.Threads.AutoClearHours = hours
+		m.fields[m.selected].value = threadsAutoClearValue(hours)
+		if hours == 0 {
+			m.message = "Auto-clear disabled"
+		} else {
+			m.message = "Auto-clear: " + v
+		}
 	}
 
 	cfg := m.cfg
@@ -959,6 +1016,34 @@ func (m *SettingsModel) applyField(key, value string) tea.Cmd {
 			return ErrMsg{Err: err}
 		}
 		return SettingsSavedMsg{}
+	}
+}
+
+// threadsScanScopeValue formats the saved scan-scope value for the
+// settings overlay. Falls back to the default ("local") for empty.
+func threadsScanScopeValue(v string) string {
+	if v == "" {
+		return "local"
+	}
+	return v
+}
+
+// threadsAutoClearValue formats the saved auto-clear-hours integer
+// into the user-facing label used by the picker.
+func threadsAutoClearValue(hours int) string {
+	switch hours {
+	case 0:
+		return "off"
+	case 24:
+		return "24h"
+	case 72:
+		return "72h"
+	case 168:
+		return "7d"
+	case 720:
+		return "30d"
+	default:
+		return fmt.Sprintf("%dh", hours)
 	}
 }
 
@@ -1154,13 +1239,13 @@ func (m SettingsModel) View() string {
 	}
 	bodyBuf.WriteString("\n\n")
 	if m.editing {
-		bodyBuf.WriteString(dimStyle.Render("  Enter: save | Esc: cancel"))
+		bodyBuf.WriteString(dimStyle.Render("  Enter: save" + HintSep + FooterHintCancel))
 	} else {
 		f := m.fields[m.selected]
 		if len(f.options) > 0 {
-			bodyBuf.WriteString(dimStyle.Render("  Enter/Tab: cycle | Esc/Ctrl-S: close"))
+			bodyBuf.WriteString(dimStyle.Render("  Enter/Tab: cycle" + HintSep + "Esc/Ctrl-S: close"))
 		} else {
-			bodyBuf.WriteString(dimStyle.Render("  /: filter | Enter: edit | Esc/Ctrl-S: close"))
+			bodyBuf.WriteString(dimStyle.Render("  /: filter" + HintSep + "Enter: edit" + HintSep + "Esc/Ctrl-S: close"))
 		}
 	}
 

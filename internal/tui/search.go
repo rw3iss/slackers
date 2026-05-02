@@ -191,7 +191,7 @@ func (m SearchModel) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  Enter: select | Esc: cancel"))
+	b.WriteString(dimStyle.Render("  Enter: select" + HintSep + FooterHintClose))
 
 	content := b.String()
 

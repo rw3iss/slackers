@@ -143,7 +143,7 @@ func (m FriendRequestModel) View() string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("  Tab: switch | Enter: confirm | Esc: cancel"))
+	b.WriteString(dimStyle.Render("  Tab: switch" + HintSep + "Enter: confirm" + HintSep + FooterHintCancel))
 
 	content := b.String()
 
