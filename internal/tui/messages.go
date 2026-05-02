@@ -554,6 +554,7 @@ func (m *MessageViewModel) SetUsers(users map[string]string) {
 	// User display-name changes can affect @mentions inside
 	// cached formatted text; invalidate so everything re-parses.
 	m.formattedTextCache = nil
+	m.mentionsByMsgID = nil
 }
 
 // formatText returns the user-visible rendered form of a message body,

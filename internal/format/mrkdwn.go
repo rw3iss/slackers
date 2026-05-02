@@ -15,9 +15,13 @@ var (
 	reStrikethrough = regexp.MustCompile(`~([^~]+)~`)
 
 	// reUserMention matches both Slack-style mentions (<@U12345>) and
-	// friend-style mentions (<@slacker:abc123>). The two forms share
-	// one regex so callers don't have to walk twice.
-	reUserMention    = regexp.MustCompile(`<@(U[A-Z0-9]+|slacker:[A-Za-z0-9]+)>`)
+	// friend-style mentions (<@slacker:...>). The friend SlackerID
+	// segment is permissive enough to cover the common formats:
+	// machine-generated 32-char hex, custom human-readable handles
+	// like "rw-pc", emails (allowing "." and "@" inside the id is
+	// not currently supported because that breaks the unambiguous
+	// `>` terminator), and underscored handles.
+	reUserMention    = regexp.MustCompile(`<@(U[A-Z0-9]+|slacker:[A-Za-z0-9._\-]+)>`)
 	reChannelMention = regexp.MustCompile(`<#C[A-Z0-9]+\|([^>]+)>`)
 	reLabeledLink    = regexp.MustCompile(`<([^>|]+)\|([^>]+)>`)
 	reBareLink       = regexp.MustCompile(`<([^>|]+)>`)

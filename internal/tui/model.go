@@ -1038,6 +1038,12 @@ func NewModel(wsList []*workspace.Workspace, cfg *config.Config, version string,
 	m.threadScheduler.Start()
 	m.channels.SetThreads(m.threadStore.Active())
 
+	// Push the initial user/friend resolver map into the message
+	// view so friend mentions resolve correctly even before any
+	// UsersLoadedMsg arrives — friends-only mode never fires that
+	// message and would otherwise leave friend mentions unresolved.
+	m.refreshUserMap()
+
 	return m
 }
 
@@ -2664,7 +2670,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.channels.SetChannels(msg.Channels)
 		// Re-apply friend channels — SetChannels above replaces the entire
 		// channel slice and would otherwise wipe the friends loaded earlier.
-		m.channels.SetFriendChannels(m.buildFriendChannels())
+		m.notifyFriendsChanged()
 		m.channels.SetHiddenChannels(m.cfg.HiddenChannels)
 		m.channels.SetAliases(m.cfg.ChannelAliases)
 		m.channels.SetCollapsedGroups(m.cfg.CollapsedGroups)
@@ -2782,15 +2788,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case UsersLoadedMsg:
 		m.users = msg.Users
-		userMap := make(map[string]string, len(msg.Users))
-		for id, u := range msg.Users {
-			name := u.DisplayName
-			if name == "" {
-				name = u.RealName
-			}
-			userMap[id] = name
-		}
-		m.messages.SetUsers(userMap)
+		m.refreshUserMap()
 		// Cache the local Slack user ID for reaction matching.
 		if m.slackSvc != nil {
 			if uid := m.slackSvc.MyUserID(); uid != "" {
@@ -2817,15 +2815,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ws.Users = msg.Users
 			if msg.TeamID == m.activeWsID {
 				m.users = msg.Users
-				userMap := make(map[string]string, len(msg.Users))
-				for id, u := range msg.Users {
-					name := u.DisplayName
-					if name == "" {
-						name = u.RealName
-					}
-					userMap[id] = name
-				}
-				m.messages.SetUsers(userMap)
+				m.refreshUserMap()
 				if ws.MyUserID != "" {
 					m.myUserID = ws.MyUserID
 				}
@@ -3280,7 +3270,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.friendStore.SetOnline(f.UserID, online)
 		if online {
 			m.friendStore.UpdateLastOnline(f.UserID)
-			m.channels.SetFriendChannels(m.buildFriendChannels())
+			m.notifyFriendsChanged()
 			m.setChannelHeader()
 			setBoth("✓ Connected to " + f.Name + " (online)")
 			// On a save where the public key or multiaddr changed,
@@ -3422,7 +3412,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FriendsConfigCloseMsg:
 		m.overlay = overlayNone
 		// Refresh friend channels in sidebar after config changes.
-		m.channels.SetFriendChannels(m.buildFriendChannels())
+		m.notifyFriendsChanged()
 		return m, nil
 
 	case FriendImportBrowseMsg:
@@ -5548,7 +5538,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.friendStore.UpdateLastOnline(msg.SenderID)
 				if !wasOnline {
 					// State flip — refresh sidebar + header.
-					m.channels.SetFriendChannels(m.buildFriendChannels())
+					m.notifyFriendsChanged()
 					m.updateFriendStatusDisplay()
 					if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
 						m.setChannelHeader()
@@ -5593,7 +5583,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.friendStore.SetStatus(msg.SenderID, "offline", "")
 				m.friendStore.UpdateLastOnline(msg.SenderID)
 				m.channels.ClearUnread("friend:" + msg.SenderID)
-				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.notifyFriendsChanged()
 				m.updateFriendStatusDisplay()
 				if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
 					m.setChannelHeader()
@@ -5617,7 +5607,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.friendStore.SetStatus(msg.SenderID, statusType, statusMsg)
 				m.friendStore.SetSharedFolder(msg.SenderID, msg.SharedFolder)
-				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.notifyFriendsChanged()
 				m.updateFriendStatusDisplay()
 				if m.currentCh != nil && m.currentCh.IsFriend && m.currentCh.UserID == msg.SenderID {
 					m.setChannelHeader()
@@ -6228,7 +6218,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				_ = m.friendStore.Add(f)
 				_ = m.friendStore.Save()
-				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.notifyFriendsChanged()
 				if m.p2pNode != nil && m.secureMgr != nil {
 					profile := m.myProfileJSON()
 					go func(uid string) {
@@ -6294,7 +6284,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				_ = m.friendStore.Add(f)
 				_ = m.friendStore.Save()
-				m.channels.SetFriendChannels(m.buildFriendChannels())
+				m.notifyFriendsChanged()
 				m.warning = senderName + " accepted your friend request!"
 				// Drop any pending friend-request notification.
 				if m.notifStore != nil {
@@ -6571,7 +6561,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			_ = m.friendStore.Add(f)
 			_ = m.friendStore.Save()
-			m.channels.SetFriendChannels(m.buildFriendChannels())
+			m.notifyFriendsChanged()
 			m.warning = msg.Name + " added as friend!"
 			// Send accept response over P2P, including our profile so
 			// the requesting peer can learn our display name / email.
@@ -6679,7 +6669,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if anyStateChanged {
-			m.channels.SetFriendChannels(m.buildFriendChannels())
+			m.notifyFriendsChanged()
 			m.updateFriendStatusDisplay()
 		}
 		if currentFriendFlipped {
@@ -7025,12 +7015,10 @@ func (m *Model) refreshMentionSuggest() {
 // user types.
 func (m *Model) buildMentionPool() []MentionEntry {
 	var pool []MentionEntry
+	dmAliasByUser := m.dmAliasByUser()
 	for id, u := range m.users {
-		name := u.DisplayName
-		if name == "" {
-			name = u.RealName
-		}
-		if name == "" {
+		name := m.bestSlackUserName(id, u, dmAliasByUser)
+		if name == "" || name == id {
 			continue
 		}
 		subtitle := "user"
@@ -7199,6 +7187,92 @@ func (m *Model) completeMentionFromSuggest() {
 	newVal := val[:start] + token + val[end:]
 	m.input.SetValue(newVal)
 	m.mentionSuggest.Hide()
+}
+
+// refreshUserMap rebuilds the (id → display name) map used by
+// FormatMessage to resolve `<@...>` mention markers, and pushes
+// it to the message view. Combines Slack workspace users (keyed
+// by U-id) with friends (keyed by "slacker:<SlackerID>") so both
+// transports' mentions resolve to the user-visible name they were
+// composed with.
+//
+// Name precedence (highest first), per the user-facing rule
+// "alias first, then any other name, then the unique id":
+//
+//  1. Channel alias from cfg.ChannelAliases — only meaningful
+//     for Slack users when a DM channel with them has been
+//     aliased; the lookup is keyed by the DM channel id.
+//  2. Slack DisplayName (the @-handle the user picked) for
+//     workspace users; friend Name for P2P friends.
+//  3. Slack RealName (the full real name) for workspace users.
+//  4. Bare id ("U..." / "slacker:...") if absolutely nothing
+//     else is set.
+//
+// Call from any path that mutates the underlying user/friend sets
+// — workspace user load, friend add/remove/rename — so cached
+// formatted text uses up-to-date names. SetUsers invalidates the
+// formatted-text and mention sidecar caches automatically.
+func (m *Model) refreshUserMap() {
+	userMap := make(map[string]string, len(m.users)+8)
+	dmAliasByUser := m.dmAliasByUser()
+	for id, u := range m.users {
+		userMap[id] = m.bestSlackUserName(id, u, dmAliasByUser)
+	}
+	if m.friendStore != nil {
+		for _, f := range m.friendStore.All() {
+			name := f.Name
+			if name == "" {
+				name = "slacker:" + f.SlackerID
+			}
+			userMap["slacker:"+f.SlackerID] = name
+		}
+	}
+	m.messages.SetUsers(userMap)
+}
+
+// notifyFriendsChanged is the canonical "friends mutated" hook —
+// rebuilds the friend channel list and refreshes the message-view
+// resolver so any future @mentions of friends render with their
+// current display name. Call from every path that adds, removes,
+// renames, or otherwise edits the friend store.
+func (m *Model) notifyFriendsChanged() {
+	m.notifyFriendsChanged()
+	m.refreshUserMap()
+}
+
+// dmAliasByUser builds a (Slack U-id → channel alias) map from the
+// DM channel aliases configured in cfg.ChannelAliases. Used so
+// mention rendering and the autocomplete pool can both honour
+// channel aliases as the highest-priority display name.
+func (m *Model) dmAliasByUser() map[string]string {
+	if m.cfg == nil || len(m.cfg.ChannelAliases) == 0 {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, ch := range m.channels.channels {
+		if !ch.IsDM || ch.UserID == "" {
+			continue
+		}
+		if alias, ok := m.cfg.ChannelAliases[ch.ID]; ok && alias != "" {
+			out[ch.UserID] = alias
+		}
+	}
+	return out
+}
+
+// bestSlackUserName returns the highest-priority display name for
+// a Slack workspace user — alias > DisplayName > RealName > id.
+func (m *Model) bestSlackUserName(id string, u types.User, dmAliasByUser map[string]string) string {
+	if alias, ok := dmAliasByUser[id]; ok && alias != "" {
+		return alias
+	}
+	if u.DisplayName != "" {
+		return u.DisplayName
+	}
+	if u.RealName != "" {
+		return u.RealName
+	}
+	return id
 }
 
 // detectThreads runs forward-tracking thread detection over the

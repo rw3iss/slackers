@@ -568,7 +568,7 @@ func (m *Model) mergeFriendProfile(senderUID string, card friends.ContactCard) {
 	}
 	if err := m.friendStore.Update(updated); err == nil {
 		go m.friendStore.Save()
-		m.channels.SetFriendChannels(m.buildFriendChannels())
+		m.notifyFriendsChanged()
 	}
 }
 
@@ -658,7 +658,7 @@ func (m *Model) applyFriendCard(card friends.ContactCard, merge, replace bool) t
 		} else {
 			m.warning = "Imported friend " + label
 		}
-		m.channels.SetFriendChannels(m.buildFriendChannels())
+		m.notifyFriendsChanged()
 		newUID := f.UserID
 		if newUID == "" && f.SlackerID != "" {
 			newUID = "slacker:" + f.SlackerID
@@ -700,7 +700,7 @@ func (m *Model) applyFriendCard(card friends.ContactCard, merge, replace bool) t
 		} else {
 			m.warning = "Merged contact card into " + label
 		}
-		m.channels.SetFriendChannels(m.buildFriendChannels())
+		m.notifyFriendsChanged()
 		return nil
 
 	case replace:
@@ -724,7 +724,7 @@ func (m *Model) applyFriendCard(card friends.ContactCard, merge, replace bool) t
 		} else {
 			m.warning = "Replaced contact card for " + label
 		}
-		m.channels.SetFriendChannels(m.buildFriendChannels())
+		m.notifyFriendsChanged()
 		return nil
 	}
 
@@ -758,7 +758,7 @@ func (m *Model) confirmFriendRemoval(userID string) tea.Cmd {
 	// Refresh the sidebar friend section. The currently-open
 	// friend chat is left on screen for reference until the user
 	// navigates away.
-	m.channels.SetFriendChannels(m.buildFriendChannels())
+	m.notifyFriendsChanged()
 	if m.notifStore != nil {
 		m.notifStore.ClearFriendRequest(userID)
 	}
