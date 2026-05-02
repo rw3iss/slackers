@@ -5085,6 +5085,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// to the bottom of the terminal.
 			m.resizeComponents()
 
+			// Resolve readable @mentions ("@Ryan Weiss") to wire-
+			// format tokens (<@U12345> / <@slacker:abc>) using the
+			// same pool the autocomplete drew from. Tokens that
+			// don't match the pool (@everyone, free-typed @handles)
+			// are left alone.
+			text = m.resolveMentionsForSend(text)
+
 			// Expand any [FRIEND:me] / [FRIEND:<id>] markers to a
 			// full SLF2 hash so the recipient can decode them.
 			text = m.expandFriendMarkers(text)
@@ -7011,11 +7018,13 @@ func (m *Model) refreshMentionSuggest() {
 
 // buildMentionPool assembles the candidate list shown in the
 // @mention popup, merging Slack workspace users and friend records.
-// Sorted alphabetically by DisplayName so prefix matching feels
-// stable as the user types.
+// Each entry's DisplayName is guaranteed unique across the pool so
+// it can serve as a lookup key during send-time mention resolution
+// — duplicates get a "-2", "-3", … suffix in the order encountered.
+// Sorted alphabetically afterwards so the popup feels stable as the
+// user types.
 func (m *Model) buildMentionPool() []MentionEntry {
 	var pool []MentionEntry
-	seenNames := make(map[string]bool)
 	for id, u := range m.users {
 		name := u.DisplayName
 		if name == "" {
@@ -7024,10 +7033,6 @@ func (m *Model) buildMentionPool() []MentionEntry {
 		if name == "" {
 			continue
 		}
-		if seenNames[strings.ToLower(name)] {
-			continue
-		}
-		seenNames[strings.ToLower(name)] = true
 		subtitle := "user"
 		if id == m.myUserID {
 			subtitle = "you"
@@ -7045,10 +7050,6 @@ func (m *Model) buildMentionPool() []MentionEntry {
 			if name == "" {
 				continue
 			}
-			if seenNames[strings.ToLower(name)] {
-				continue
-			}
-			seenNames[strings.ToLower(name)] = true
 			pool = append(pool, MentionEntry{
 				ID:          "slacker:" + f.SlackerID,
 				DisplayName: name,
@@ -7057,17 +7058,132 @@ func (m *Model) buildMentionPool() []MentionEntry {
 			})
 		}
 	}
+	disambiguateMentionPool(pool)
 	sort.Slice(pool, func(i, j int) bool {
 		return strings.ToLower(pool[i].DisplayName) < strings.ToLower(pool[j].DisplayName)
 	})
 	return pool
 }
 
-// completeMentionFromSuggest splices the wire-format token for the
-// currently highlighted @mention into the input, replacing the
-// `@<query>` the user was typing. Called from the input keystroke
-// handler when the user presses Tab or Enter while the popup is
-// visible.
+// disambiguateMentionPool walks `pool` in encounter order and
+// suffixes any duplicate DisplayName with "-2", "-3", … so each
+// entry has a unique name. Mutates in place. Comparison is
+// case-insensitive so "Ryan" and "ryan" count as the same name.
+func disambiguateMentionPool(pool []MentionEntry) {
+	counts := make(map[string]int, len(pool))
+	for i := range pool {
+		key := strings.ToLower(pool[i].DisplayName)
+		counts[key]++
+		if counts[key] > 1 {
+			pool[i].DisplayName = fmt.Sprintf("%s-%d", pool[i].DisplayName, counts[key])
+		}
+	}
+}
+
+// resolveMentionsForSend rewrites every readable `@<name>` token
+// in `text` into Slack/friend wire format (`<@U...>` /
+// `<@slacker:...>`) by looking the name up in the mention pool.
+// Used before the chat send path so the input stays readable
+// ("@Ryan Weiss") while the wire still carries proper mention
+// semantics that Slack will notify on.
+//
+// Matching is longest-first (so "Ryan Weiss" wins over "Ryan"
+// when both are in the pool) and requires a word-boundary after
+// the matched name — whitespace, end of input, or one of the
+// common closing punctuation marks. Tokens that don't match a
+// pool entry are left untouched, which leaves @everyone / @here
+// / @channel broadcasts and unrelated email-style "@" alone.
+func (m *Model) resolveMentionsForSend(text string) string {
+	if !strings.Contains(text, "@") {
+		return text
+	}
+	pool := m.buildMentionPool()
+	if len(pool) == 0 {
+		return text
+	}
+	// Sort by name length descending so longer names match first.
+	byLen := make([]MentionEntry, len(pool))
+	copy(byLen, pool)
+	sort.Slice(byLen, func(i, j int) bool {
+		return len(byLen[i].DisplayName) > len(byLen[j].DisplayName)
+	})
+	out := text
+	idx := 0
+	for idx < len(out) {
+		at := strings.IndexByte(out[idx:], '@')
+		if at < 0 {
+			break
+		}
+		at += idx
+		// Validate `@` boundary — must be at start or after a non-name char.
+		if at > 0 {
+			prev := out[at-1]
+			if !isMentionLeftBoundary(prev) {
+				idx = at + 1
+				continue
+			}
+		}
+		matched := false
+		for _, e := range byLen {
+			name := e.DisplayName
+			tokenLen := 1 + len(name) // include `@`
+			if at+tokenLen > len(out) {
+				continue
+			}
+			if !strings.EqualFold(out[at+1:at+tokenLen], name) {
+				continue
+			}
+			// Trailing boundary check.
+			if at+tokenLen < len(out) {
+				next := out[at+tokenLen]
+				if !isMentionRightBoundary(next) {
+					continue
+				}
+			}
+			wire := "<@" + e.ID + ">"
+			out = out[:at] + wire + out[at+tokenLen:]
+			idx = at + len(wire)
+			matched = true
+			break
+		}
+		if !matched {
+			idx = at + 1
+		}
+	}
+	return out
+}
+
+// isMentionLeftBoundary reports whether the byte immediately
+// before an `@` permits the `@` to start a mention. Inside a word
+// (e.g. an email address) the `@` is not a mention start.
+func isMentionLeftBoundary(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '(', '[', '{', '"', '\'':
+		return true
+	}
+	return false
+}
+
+// isMentionRightBoundary reports whether the byte immediately
+// after a name match permits the match to be treated as a
+// complete mention rather than a prefix of a longer word.
+func isMentionRightBoundary(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '.', ',', '!', '?', ';', ':', ')', ']', '}', '"', '\'':
+		return true
+	}
+	return false
+}
+
+// completeMentionFromSuggest splices the readable display name for
+// the currently highlighted @mention into the input, replacing the
+// `@<query>` the user was typing. The wire-format conversion to
+// `<@U...>` happens later in resolveMentionsForSend so the input
+// stays human-readable while the user is composing.
+//
+// The pool's DisplayName is unique (disambiguateMentionPool ensures
+// that), so the same string round-trips back to the right user id
+// at send time.
 func (m *Model) completeMentionFromSuggest() {
 	sel := m.mentionSuggest.Selected()
 	if sel == nil {
@@ -7079,7 +7195,7 @@ func (m *Model) completeMentionFromSuggest() {
 	if start < 0 || end > len(val) || start > end {
 		return
 	}
-	token := "<@" + sel.ID + "> "
+	token := "@" + sel.DisplayName + " "
 	newVal := val[:start] + token + val[end:]
 	m.input.SetValue(newVal)
 	m.mentionSuggest.Hide()
