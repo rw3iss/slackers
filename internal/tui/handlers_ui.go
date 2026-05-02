@@ -502,6 +502,18 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 				msgPaneX := x - m.sidebarWidth - 2
 
+				// Thread inline-view back-arrow: header line is at
+				// y == 1, and the arrow is rendered as the leading
+				// character of the title. Clicking it has the same
+				// effect as Esc in thread mode — exits the inside
+				// view and restores the channel's scroll position.
+				if y == 1 && m.messages.InThreadMode() {
+					if bs, be := m.messages.ThreadBackPaneClickArea(); be > bs && msgPaneX >= bs && msgPaneX < be {
+						m.messages.ExitThreadMode()
+						return m, nil
+					}
+				}
+
 				// Friend chat: header line is at y == 1 (top border at 0).
 				// If the user clicked the cog icon in the upper-right of
 				// the header, open Friend Details for the current friend.

@@ -718,6 +718,23 @@ func (m MessageViewModel) IsFriendChannel() bool {
 // the codebase.
 const friendCogGlyph = "ℹ\ufe0f"
 
+// threadBackGlyph is the clickable back-arrow rendered ahead of
+// "[Thread] <channel>" when viewing the inline reply detail view.
+// Clicking it has the same effect as pressing Esc — exits thread
+// mode and restores the channel scroll position. Trailing space
+// gives a 1-cell breathing room before "[Thread]".
+const threadBackGlyph = "← "
+
+// ThreadBackPaneClickArea returns the (startCol, endCol) range in
+// message-pane-relative columns where the back-arrow is rendered.
+// Returns (0, 0) when the pane is not in thread mode.
+func (m MessageViewModel) ThreadBackPaneClickArea() (int, int) {
+	if !m.threadMode {
+		return 0, 0
+	}
+	return 0, lipgloss.Width(threadBackGlyph)
+}
+
 // FriendCogPaneClickArea returns the (startCol, endCol) range, in pane
 // content coordinates (0 = first column inside the border+padding), of
 // the friend-details cog in the header line. Returns (0,0) when the cog
@@ -2792,6 +2809,14 @@ func (m MessageViewModel) View() string {
 	if m.channelName != "" {
 		title := m.channelName
 		if m.threadMode {
+			// Clickable back-arrow rendered ahead of the title —
+			// returns the user to the thread's parent channel
+			// (same behaviour as Esc). Hit area is computed by
+			// ThreadBackPaneClickArea below; both pieces share the
+			// same `threadBackGlyph` constant so the rendered
+			// width and the click range stay in lock-step.
+			backStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+			headerParts = append(headerParts, backStyle.Render(threadBackGlyph))
 			title = "[Thread] " + title
 		}
 		headerParts = append(headerParts, titleStyle.Render(title))
