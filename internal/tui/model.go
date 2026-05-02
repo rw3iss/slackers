@@ -7236,7 +7236,7 @@ func (m *Model) refreshUserMap() {
 // current display name. Call from every path that adds, removes,
 // renames, or otherwise edits the friend store.
 func (m *Model) notifyFriendsChanged() {
-	m.notifyFriendsChanged()
+	m.channels.SetFriendChannels(m.buildFriendChannels())
 	m.refreshUserMap()
 }
 
