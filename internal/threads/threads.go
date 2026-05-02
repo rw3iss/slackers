@@ -108,8 +108,17 @@ type ThreadSnapshot struct {
 	ParentAuthorName string       `json:"parent_author_name,omitempty"`
 	Participants     []string     `json:"participants,omitempty"` // names, dedup'd
 	LastActivityTS   string       `json:"last_activity_ts,omitempty"`
-	Reason           ThreadReason `json:"reason"`
-	AddedAt          time.Time    `json:"added_at"`
+	// LastActivityAt is the time of the most-recent reply (or the
+	// parent's timestamp when there are no replies yet) as a
+	// time.Time, parallel to LastActivityTS. Stored separately
+	// because LastActivityTS is a transport-specific identifier
+	// (Slack ts string for Slack, MessageID for friends — the
+	// friend MessageID is a random UUID with no embedded time)
+	// and the sidebar needs a real time value to compute "time
+	// since" labels.
+	LastActivityAt time.Time    `json:"last_activity_at,omitzero"`
+	Reason         ThreadReason `json:"reason"`
+	AddedAt        time.Time    `json:"added_at"`
 }
 
 // ThreadsChangedMsg is dispatched on the Bubbletea channel whenever

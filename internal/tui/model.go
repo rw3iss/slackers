@@ -7307,9 +7307,13 @@ func (m *Model) buildThreadSnapshot(parent types.Message, ch *types.Channel, sou
 		add(r.UserID, nm)
 	}
 	lastActivity := parent.MessageID
+	lastActivityAt := parent.Timestamp
 	for _, r := range parent.Replies {
 		if r.MessageID > lastActivity {
 			lastActivity = r.MessageID
+		}
+		if r.Timestamp.After(lastActivityAt) {
+			lastActivityAt = r.Timestamp
 		}
 	}
 	return threads.ThreadSnapshot{
@@ -7324,6 +7328,7 @@ func (m *Model) buildThreadSnapshot(parent types.Message, ch *types.Channel, sou
 		ParentAuthorName: authorName,
 		Participants:     participants,
 		LastActivityTS:   lastActivity,
+		LastActivityAt:   lastActivityAt,
 		Reason:           reason,
 	}
 }

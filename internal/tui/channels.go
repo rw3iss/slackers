@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -870,7 +871,11 @@ func (m *ChannelListModel) ensureVisible() {
 
 // View renders the channel list.
 func (m ChannelListModel) View() string {
-	maxNameLen := m.width - 6
+	// SidebarStyle now uses asymmetric padding (1 left, 0 right) so
+	// the inner content area is m.width - 3 cells. With a 2-cell
+	// row prefix that leaves m.width - 5 cells for the channel /
+	// thread name itself.
+	maxNameLen := m.width - 5
 
 	// Build display lines from the shared map so click hit-test stays in sync.
 	type displayLine struct {
@@ -1143,16 +1148,24 @@ func wrapAndTruncate(text string, maxWidth, maxLines int) []string {
 }
 
 // renderThreadItem renders one of the two visual lines of a Threads-
-// group entry. line 1 (isSecondLine=false) shows the parent's
-// channel name (Slack-styled or friend-styled); line 2 shows the
-// thread participants in muted italic. Selection highlight covers
-// both lines so the entry reads as a single picker target.
+// group entry. Row 1 shows the channel alias (or "#channel-name" /
+// "@friend-name" when no alias is set) on the left and a muted,
+// right-aligned "time since last activity" badge on the right.
+// Row 2 shows the participants list in muted italic.
+//
+// The two-column row 1 layout:
+//
+//	"  Alias            1h"
+//	 prefix  name      time
+//
+// Both columns share the row's selection highlight so the entry
+// reads as a single picker target.
 func (m ChannelListModel) renderThreadItem(snap threads.ThreadSnapshot, rowIdx int, maxLen int, isSecondLine bool) string {
 	prefix := "  "
 	if rowIdx == m.selected && !isSecondLine {
 		prefix = "> "
 	} else if rowIdx == m.selected {
-		// Indent the second line under the caret position so the
+		// Second line indents under the caret position so the
 		// participants row visually nests under the channel name.
 		prefix = "    "
 	} else {
@@ -1160,7 +1173,7 @@ func (m ChannelListModel) renderThreadItem(snap threads.ThreadSnapshot, rowIdx i
 	}
 
 	if isSecondLine {
-		// Participants row: comma-joined first names, truncated.
+		// Participants row.
 		text := joinParticipantNames(snap.Participants, maxLen-len(prefix))
 		if text == "" {
 			text = "no other participants"
@@ -1177,46 +1190,126 @@ func (m ChannelListModel) renderThreadItem(snap threads.ThreadSnapshot, rowIdx i
 		return style.Render(prefix + text)
 	}
 
-	// Channel-name row.
-	name := snap.ChannelName
-	if name == "" {
-		name = snap.Ref.ChannelID
+	// Row 1 — name + right-aligned time-since.
+	name := m.threadDisplayName(snap)
+	timeStr := formatRelativeTime(snap.LastActivityAt)
+	if timeStr == "" && !snap.AddedAt.IsZero() {
+		timeStr = formatRelativeTime(snap.AddedAt)
 	}
-	switch snap.Ref.Source {
-	case threads.SourceSlack:
-		// Slack channels keep the # prefix unless the snapshot's
-		// ChannelName already starts with one (DMs / friends shouldn't
-		// — those are rendered as the bare name).
-		if !strings.HasPrefix(name, "#") {
-			name = "#" + name
-		}
-	case threads.SourceFriend:
-		// Friend channels prefix with @ so they're immediately
-		// distinguishable from Slack #channels even before colour.
-		if !strings.HasPrefix(name, "@") {
-			name = "@" + name
-		}
+
+	// Compute available width for the name column: total inner
+	// width minus prefix minus time-since text (with a 1-col gap
+	// between name and time).
+	inner := maxLen
+	if inner < 1 {
+		inner = 1
 	}
-	if maxLen > 0 && len(name) > maxLen-len(prefix) {
-		clip := maxLen - len(prefix) - 1
+	timeReserve := 0
+	if timeStr != "" {
+		timeReserve = len(timeStr) + 1 // 1-col gap before time
+	}
+	nameMax := inner - len(prefix) - timeReserve
+	if nameMax < 1 {
+		nameMax = 1
+	}
+	if len(name) > nameMax {
+		clip := nameMax - 1
 		if clip < 1 {
 			clip = 1
 		}
 		name = name[:clip] + "~"
 	}
 
-	var style lipgloss.Style
+	var nameStyle lipgloss.Style
 	if rowIdx == m.selected {
-		style = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Bold(true)
+		nameStyle = lipgloss.NewStyle().Foreground(ColorSelectedChannel).Bold(true)
 		if ColorSelectedChannelBg != "" {
-			style = style.Background(ColorSelectedChannelBg)
+			nameStyle = nameStyle.Background(ColorSelectedChannelBg)
 		}
 	} else if snap.Ref.Source == threads.SourceFriend {
-		style = ThreadFriendChannelRowStyle
+		nameStyle = ThreadFriendChannelRowStyle
 	} else {
-		style = ThreadSlackChannelRowStyle
+		nameStyle = ThreadSlackChannelRowStyle
 	}
-	return style.Render(prefix + name)
+
+	leftPart := nameStyle.Render(prefix + name)
+
+	if timeStr == "" {
+		return leftPart
+	}
+
+	// Pad between name and time with regular spaces. Compute the
+	// spacer so the time-since string ends at the right edge of
+	// the inner content area.
+	used := len(prefix) + len(name)
+	spacer := inner - used - len(timeStr)
+	if spacer < 1 {
+		spacer = 1
+	}
+
+	timeStyle := ThreadParticipantsRowStyle
+	if rowIdx == m.selected && ColorSelectedChannelBg != "" {
+		timeStyle = lipgloss.NewStyle().
+			Foreground(ColorMuted).
+			Background(ColorSelectedChannelBg).
+			Italic(true)
+	}
+	return leftPart + strings.Repeat(" ", spacer) + timeStyle.Render(timeStr)
+}
+
+// threadDisplayName returns the row-1 label for a thread item:
+// the channel alias (when one is configured), otherwise the
+// transport-prefixed channel name ("#general" for Slack, "@Brian"
+// for friend chats). Friend channels never gain a "#" prefix and
+// Slack channels never gain an "@" prefix.
+func (m ChannelListModel) threadDisplayName(snap threads.ThreadSnapshot) string {
+	if alias, ok := m.aliases[snap.Ref.ChannelID]; ok && alias != "" {
+		return alias
+	}
+	name := snap.ChannelName
+	if name == "" {
+		name = snap.Ref.ChannelID
+	}
+	switch snap.Ref.Source {
+	case threads.SourceSlack:
+		if !strings.HasPrefix(name, "#") {
+			name = "#" + name
+		}
+	case threads.SourceFriend:
+		if !strings.HasPrefix(name, "@") {
+			name = "@" + name
+		}
+	}
+	return name
+}
+
+// formatRelativeTime renders a time as a compact "time since" badge
+// (e.g. "now", "5m", "3h", "2d", "1w", "4mo", "1y"). Returns ""
+// for the zero time so the renderer can omit the badge entirely.
+func formatRelativeTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dw", int(d.Hours()/(24*7)))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo", int(d.Hours()/(24*30)))
+	default:
+		return fmt.Sprintf("%dy", int(d.Hours()/(24*365)))
+	}
 }
 
 // joinParticipantNames returns a comma-joined truncated list of

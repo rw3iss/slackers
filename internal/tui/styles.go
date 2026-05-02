@@ -383,16 +383,21 @@ func ApplyTheme(t theme.Theme) {
 // ApplyTheme() with the same effect. Empty bg colors are no-ops in
 // lipgloss so we can safely call .Background() unconditionally.
 func rebuildDerivedStyles() {
+	// Asymmetric padding: 1 col on the left for breathing room
+	// between the border and the content, 0 cols on the right so
+	// channel/thread row text reaches almost to the right border.
+	// The visible "right gap" is then just the 1-col border —
+	// matches the audit's "1 col gap" requirement.
 	SidebarStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorderDefault).
 		Background(ColorBackgroundBg).
-		Padding(0, 1)
+		Padding(0, 0, 0, 1)
 	SidebarActiveStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorderActive).
 		Background(ColorBackgroundBg).
-		Padding(0, 1)
+		Padding(0, 0, 0, 1)
 
 	ChannelItemStyle = styleFromKey(theme.KeyMessageText)
 	ChannelSelectedStyle = styleFromKey(theme.KeySelection).Bold(true)
