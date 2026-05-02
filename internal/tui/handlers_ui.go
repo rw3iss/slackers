@@ -378,6 +378,25 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.overlay = overlaySettings
 					return m, nil
 				}
+				// Click on the exit button in the very bottom-right
+				// corner — quit the app. Mirrors the Ctrl-Q shutdown
+				// path: flush every debounced store before exit.
+				if exStart, exEnd := m.exitButtonClickArea(); exEnd > exStart && x >= exStart && x < exEnd {
+					config.FlushDebounced()
+					if m.notifStore != nil {
+						m.notifStore.FlushPending()
+					}
+					if m.threadStore != nil {
+						m.threadStore.FlushPending()
+					}
+					if m.threadScheduler != nil {
+						m.threadScheduler.Stop()
+					}
+					if m.p2pNode != nil {
+						_ = m.p2pNode.Close()
+					}
+					return m, tea.Quit
+				}
 			}
 
 			// Click on the floating "X Notifications" indicator at

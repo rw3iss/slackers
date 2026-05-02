@@ -7268,11 +7268,16 @@ func (m Model) renderStatusBar() string {
 	}
 	versionStr := fmt.Sprintf(" slackers v%s ", m.version)
 	cogPart := ""
+	exitPart := ""
 	if m.cfg != nil && m.cfg.MouseEnabled {
 		// 1 column of padding on each side of the cog emoji.
 		cogPart = " " + settingsCogGlyph + " "
+		// Exit button sits to the right of the version, all the
+		// way in the corner. Single-space pad on each side so the
+		// glyph isn't flush with the screen edge.
+		exitPart = " " + exitButtonGlyph + " "
 	}
-	right := StatusBarStyle.Render(cogPart + versionStr)
+	right := StatusBarStyle.Render(cogPart + versionStr + exitPart)
 
 	// Pad the middle to push right label to the edge.
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -7289,6 +7294,11 @@ func (m Model) renderStatusBar() string {
 // a graphical emoji rather than a tiny monochrome glyph.
 const settingsCogGlyph = "⚙\ufe0f"
 
+// exitButtonGlyph is the quit-app button shown in the bottom-right
+// corner of the status bar when mouse mode is enabled. ❌ is
+// universally legible as "close" across terminal fonts.
+const exitButtonGlyph = "❌"
+
 // settingsCogClickArea returns the [startX, endX) column range for the
 // settings cog in the status bar. Returns (0, 0) when the cog is not shown.
 func (m Model) settingsCogClickArea() (int, int) {
@@ -7296,12 +7306,29 @@ func (m Model) settingsCogClickArea() (int, int) {
 		return 0, 0
 	}
 	versionStr := fmt.Sprintf(" slackers v%s ", m.version)
-	cogPart := " " + settingsCogGlyph + "  "
-	rightWidth := lipgloss.Width(cogPart + versionStr)
+	cogPart := " " + settingsCogGlyph + " "
+	exitPart := " " + exitButtonGlyph + " "
+	rightWidth := lipgloss.Width(cogPart + versionStr + exitPart)
 	rightStart := m.width - rightWidth
-	// Click area covers the cog glyph plus its surrounding pad spaces for forgiveness.
 	startX := rightStart
 	endX := rightStart + lipgloss.Width(cogPart)
+	return startX, endX
+}
+
+// exitButtonClickArea returns the [startX, endX) column range for the
+// quit-app button in the bottom-right corner. Returns (0, 0) when
+// the button is not shown (mouse mode disabled).
+func (m Model) exitButtonClickArea() (int, int) {
+	if m.cfg == nil || !m.cfg.MouseEnabled {
+		return 0, 0
+	}
+	versionStr := fmt.Sprintf(" slackers v%s ", m.version)
+	cogPart := " " + settingsCogGlyph + " "
+	exitPart := " " + exitButtonGlyph + " "
+	rightWidth := lipgloss.Width(cogPart + versionStr + exitPart)
+	rightStart := m.width - rightWidth
+	startX := rightStart + lipgloss.Width(cogPart+versionStr)
+	endX := startX + lipgloss.Width(exitPart)
 	return startX, endX
 }
 
