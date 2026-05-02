@@ -231,7 +231,7 @@ func (m HiddenChannelsModel) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  Type to filter · ↑/↓ navigate · Enter: unhide · Esc: close"))
+	b.WriteString(dimStyle.Render("  Type to filter" + HintSep + "↑/↓ navigate" + HintSep + "Enter: unhide" + HintSep + FooterHintClose))
 
 	content := b.String()
 

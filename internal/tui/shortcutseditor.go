@@ -471,11 +471,11 @@ func (m ShortcutsEditorModel) View() string {
 
 	b.WriteString("\n\n")
 	if m.editing {
-		b.WriteString(dimStyle.Render("  Press any key to set | Esc: cancel"))
+		b.WriteString(dimStyle.Render("  Press any key to set" + HintSep + FooterHintCancel))
 	} else if m.confirming {
-		b.WriteString(dimStyle.Render("  Enter/Y: confirm reassign | Esc: cancel"))
+		b.WriteString(dimStyle.Render("  Enter/Y: confirm reassign" + HintSep + FooterHintCancel))
 	} else {
-		b.WriteString(dimStyle.Render("  Type to filter | ↑/↓ nav (wraps) | Enter: rebind | Ctrl-R: reset | Esc: close"))
+		b.WriteString(dimStyle.Render("  Type to filter" + HintSep + "↑/↓ nav (wraps)" + HintSep + "Enter: rebind" + HintSep + "Ctrl-R: reset" + HintSep + FooterHintClose))
 	}
 
 	content := b.String()

@@ -167,7 +167,7 @@ func (m AwayStatusModel) View() string {
 	b.WriteString(clearLabel + "\n")
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  Tab: navigate · Enter: toggle/save/clear · Esc: cancel"))
+	b.WriteString(dimStyle.Render("  Tab: navigate" + HintSep + "Enter: toggle/save/clear" + HintSep + FooterHintCancel))
 
 	scaffold := OverlayScaffold{
 		Title:       "Away Status",

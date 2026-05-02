@@ -82,9 +82,10 @@ var (
 	// Shared widget colors — centralised to eliminate inline
 	// magic 256-color indices scattered across overlays. Refreshed
 	// by rebuildDerivedStyles so theme changes pick them up.
-	ColorKeyBindText lipgloss.Color // 229 — keybind text in help / shortcut editor
-	ColorDescText    lipgloss.Color // 252 — secondary description text / metadata
-	ColorStatusOn    lipgloss.Color // #00ff00 — online / secure / "on" indicator
+	ColorKeyBindText  lipgloss.Color // 229 — keybind text in help / shortcut editor
+	ColorDescText     lipgloss.Color // 252 — secondary description text / metadata
+	ColorStatusOn     lipgloss.Color // #00ff00 — online / secure / "on" indicator
+	ColorSplashBanner lipgloss.Color // 15 — bright white splash banner glyphs
 
 	// IsDarkTheme is true when the active theme self-identifies as dark.
 	IsDarkTheme = true
@@ -305,6 +306,7 @@ func ApplyTheme(t theme.Theme) {
 	ColorKeyBindText = lipgloss.Color("229")
 	ColorDescText = lipgloss.Color("252")
 	ColorStatusOn = lipgloss.Color("#00ff00")
+	ColorSplashBanner = lipgloss.Color("15")
 
 	IsDarkTheme = t.IsDark()
 

@@ -65,15 +65,15 @@
 
 ## 5. Recommended execution plan
 
-### Phase A (low risk, apply automatically):
-- Remove diagnostic debug.Log statements (4.2)
-- Remove unused FetchHistory call in loadMoreContextCmd (4.3)
-- Move ansiTruncatePad/ansiAfterCells to overlayhelpers.go (3.3)
-- Replace hardcoded colors with palette constants (2.2)
+### Phase A (low risk, apply automatically): **DONE**
+- ~~Remove diagnostic debug.Log statements (4.2)~~ — **DONE**
+- ~~Remove unused FetchHistory call in loadMoreContextCmd (4.3)~~ — **DONE**
+- ~~Move ansiTruncatePad/ansiAfterCells to overlayhelpers.go (3.3)~~ — **DONE**
+- ~~Replace hardcoded colors with palette constants (2.2)~~ — **DONE** (2026-05-02): added `ColorSplashBanner` to styles.go and switched splash.go to use it; `ColorDescText` (252) was already living in styles.go.
 
-### Phase B (medium risk, apply after user approval):
-- Standardize footer hints across all overlays (2.1)
-- Extract shared popup title/dim styles to styles.go (3.2)
+### Phase B (medium risk, apply after user approval): **DONE**
+- ~~Standardize footer hints across all overlays (2.1)~~ — **DONE** (2026-05-02): swept emojipicker, awaystatus, filebrowser, fileslist, search, msgsearch, friendrequest, friendsconfig (5 sites), shortcutseditor, notifications_overlay, hidden, notificationsettings, emoteedit, whitelist, rename, settings (3 sites). All overlay footers now use `HintSep` + `FooterHintClose` / `FooterHintBack` / `FooterHintCancel` constants.
+- ~~Extract shared popup title/dim styles to styles.go (3.2)~~ — **DONE**: `PopupTitleStyle` and `PopupDimStyle` live in styles.go and are rebuilt by `rebuildDerivedStyles()`.
 
 ### Phase C (high risk, plan separately):
 - ~~Extract generic PopupMenu component from context menu overlays (4.1)~~ — **DONE**: created `popupmenu.go` with shared `PopupMenu` type; refactored all 4 popup files (msgoptions, sidebaroptions, chatoptions, friendcardoptions) to use it. Net result: -539 lines of duplicated code.

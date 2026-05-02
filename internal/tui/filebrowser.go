@@ -858,11 +858,11 @@ func (m *FileBrowserModel) View() string {
 	lines = append(lines, "")
 	switch m.pane {
 	case fbPaneFavorites:
-		lines = append(lines, dimStyle.Render("  ↑/↓: navigate | Enter: open | d: remove | Esc/↓: filter"))
+		lines = append(lines, dimStyle.Render("  ↑/↓: navigate"+HintSep+"Enter: open"+HintSep+"d: remove"+HintSep+"Esc/↓: filter"))
 	case fbPaneFilter:
-		lines = append(lines, dimStyle.Render("  type to filter | ↑: favorites | ↓/Enter: files | Alt+S: sort | Alt+D: dir | Esc: clear/close"))
+		lines = append(lines, dimStyle.Render("  type to filter"+HintSep+"↑: favorites"+HintSep+"↓/Enter: files"+HintSep+"Alt+S: sort"+HintSep+"Alt+D: dir"+HintSep+"Esc: clear/close"))
 	default:
-		lines = append(lines, dimStyle.Render("  ↑/↓: nav | Enter: open | →/Space: select | Ctrl+↑: parent | Ctrl+F: ★ | Alt+S: sort | Alt+D: dir | Esc: close"))
+		lines = append(lines, dimStyle.Render("  ↑/↓: nav"+HintSep+"Enter: open"+HintSep+"→/Space: select"+HintSep+"Ctrl+↑: parent"+HintSep+"Ctrl+F: ★"+HintSep+"Alt+S: sort"+HintSep+"Alt+D: dir"+HintSep+FooterHintClose))
 	}
 
 	content := strings.Join(lines, "\n")

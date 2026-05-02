@@ -29,7 +29,7 @@ func splashTimerCmd() tea.Cmd {
 
 func renderSplash(width, height int, version string) string {
 	bannerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
+		Foreground(ColorSplashBanner).
 		Bold(true)
 
 	taglineStyle := lipgloss.NewStyle().

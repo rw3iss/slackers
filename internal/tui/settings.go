@@ -1239,13 +1239,13 @@ func (m SettingsModel) View() string {
 	}
 	bodyBuf.WriteString("\n\n")
 	if m.editing {
-		bodyBuf.WriteString(dimStyle.Render("  Enter: save | Esc: cancel"))
+		bodyBuf.WriteString(dimStyle.Render("  Enter: save" + HintSep + FooterHintCancel))
 	} else {
 		f := m.fields[m.selected]
 		if len(f.options) > 0 {
-			bodyBuf.WriteString(dimStyle.Render("  Enter/Tab: cycle | Esc/Ctrl-S: close"))
+			bodyBuf.WriteString(dimStyle.Render("  Enter/Tab: cycle" + HintSep + "Esc/Ctrl-S: close"))
 		} else {
-			bodyBuf.WriteString(dimStyle.Render("  /: filter | Enter: edit | Esc/Ctrl-S: close"))
+			bodyBuf.WriteString(dimStyle.Render("  /: filter" + HintSep + "Enter: edit" + HintSep + "Esc/Ctrl-S: close"))
 		}
 	}
 

@@ -211,7 +211,7 @@ func (m NotificationsOverlayModel) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("  ↑/↓: navigate | Enter: open | x: dismiss | Esc: close"))
+	b.WriteString(dimStyle.Render("  ↑/↓: navigate" + HintSep + "Enter: open" + HintSep + "x: dismiss" + HintSep + FooterHintClose))
 
 	content := b.String()
 

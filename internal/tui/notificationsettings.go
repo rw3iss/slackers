@@ -204,7 +204,7 @@ func (m NotificationSettingsModel) View() string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("  Space/Enter: toggle · ↑↓: navigate · Esc: back"))
+	b.WriteString(dimStyle.Render("  Space/Enter: toggle" + HintSep + "↑↓: navigate" + HintSep + FooterHintBack))
 
 	boxH := m.height - 5
 	if boxH < 8 {
