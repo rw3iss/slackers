@@ -47,5 +47,6 @@
   "workspaces": ["alt+w"],
   "audio_call": ["alt+p"],
   "audio_mute": ["alt+x"],
-  "paste_image": ["alt+v"]
+  "paste_image": ["alt+v"],
+  "view_threads": ["alt+t"]
 }

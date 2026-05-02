@@ -94,6 +94,7 @@ const (
 	overlayNotificationSettings
 	overlayChatOptions
 	overlayThreadOptions
+	overlayThreadsView
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -454,9 +455,14 @@ type Model struct {
 	threadStore     *threads.ThreadStore
 	threadScheduler *threads.Scheduler
 	// threadOptions is the right-click context menu rendered next to
-	// a Threads-group sidebar item or (Plan B) a row in the global
-	// Threads overlay.
+	// a Threads-group sidebar item or a row in the global Threads
+	// overlay.
 	threadOptions ThreadOptionsModel
+	// threadsOverlay is the global Threads view triggered by Alt+T
+	// or /threads. Lists every active tracked thread with a search
+	// bar; activation routes through the same OpenThreadMsg the
+	// sidebar uses.
+	threadsOverlay ThreadsOverlayModel
 	// pendingThreadOpenTS holds the parent_ts to auto-enter via
 	// EnterThreadMode after the next channel-switch + history load
 	// completes. Cleared in the HistoryLoadedMsg handler once the
@@ -1445,6 +1451,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case key.Matches(msg, m.keymap.ViewThreads):
+			// Toggle the global Threads view. Same pattern as
+			// Notifications above — second press dismisses.
+			if m.overlay == overlayThreadsView {
+				m.overlay = overlayNone
+				return m, nil
+			}
+			return m, func() tea.Msg { return threads.OpenThreadsViewMsg{} }
+
 		case key.Matches(msg, m.keymap.ShortcutsEditor):
 			// Open the keyboard shortcuts editor directly — same
 			// path the Settings overlay uses for its "Keyboard
@@ -1967,6 +1982,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.threadOptions, cmd = m.threadOptions.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayThreadsView {
+			var cmd tea.Cmd
+			m.threadsOverlay, cmd = m.threadsOverlay.Update(msg)
 			return m, cmd
 		}
 		if m.overlay == overlayContactCardView {
@@ -3916,6 +3936,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// here keeps the event-loop wiring complete and ready for
 		// Plan B when the BackfillScanner starts emitting them.
 		m.channels.SetThreads(msg.Active)
+		// Keep the overlay snapshot list in sync if it's open.
+		if m.overlay == overlayThreadsView {
+			m.threadsOverlay.SetActive(msg.Active)
+		}
+		return m, nil
+
+	case threads.OpenThreadsViewMsg:
+		// Opens the global Threads overlay. Snapshots the current
+		// active set + alias map so the overlay can render and
+		// filter without holding store references.
+		if m.threadStore == nil {
+			return m, nil
+		}
+		aliases := map[string]string{}
+		if m.cfg != nil && m.cfg.ChannelAliases != nil {
+			aliases = m.cfg.ChannelAliases
+		}
+		m.threadsOverlay = NewThreadsOverlay(m.threadStore.Active(), aliases)
+		m.threadsOverlay.SetSize(m.width, m.height)
+		m.overlay = overlayThreadsView
+		return m, nil
+
+	case ThreadsOverlayCloseMsg:
+		if m.overlay == overlayThreadsView {
+			m.overlay = overlayNone
+		}
+		return m, nil
+
+	case ThreadsOverlayRemoveMsg:
+		// User pressed 'x' on a thread row — remove it from the
+		// store, refresh the sidebar, and update the overlay's
+		// list in place so the cursor doesn't jump.
+		if m.threadStore != nil && m.threadStore.Remove(msg.Ref) {
+			active := m.threadStore.Active()
+			m.channels.SetThreads(active)
+			m.threadsOverlay.SetActive(active)
+		}
 		return m, nil
 
 	case FriendCardOptionsSelectMsg:
@@ -6806,6 +6863,8 @@ func (m Model) viewInner() string {
 	case overlayThreadOptions:
 		base := m.renderBaseView()
 		return m.threadOptions.View(base)
+	case overlayThreadsView:
+		return m.threadsOverlay.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the

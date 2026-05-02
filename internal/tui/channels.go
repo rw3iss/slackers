@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -1191,7 +1190,7 @@ func (m ChannelListModel) renderThreadItem(snap threads.ThreadSnapshot, rowIdx i
 	}
 
 	// Row 1 — name + right-aligned time-since.
-	name := m.threadDisplayName(snap)
+	name := threadDisplayName(snap, m.aliases)
 	timeStr := formatRelativeTime(snap.LastActivityAt)
 	if timeStr == "" && !snap.AddedAt.IsZero() {
 		timeStr = formatRelativeTime(snap.AddedAt)
@@ -1262,102 +1261,6 @@ func (m ChannelListModel) renderThreadItem(snap threads.ThreadSnapshot, rowIdx i
 // transport-prefixed channel name ("#general" for Slack, "@Brian"
 // for friend chats). Friend channels never gain a "#" prefix and
 // Slack channels never gain an "@" prefix.
-func (m ChannelListModel) threadDisplayName(snap threads.ThreadSnapshot) string {
-	if alias, ok := m.aliases[snap.Ref.ChannelID]; ok && alias != "" {
-		return alias
-	}
-	name := snap.ChannelName
-	if name == "" {
-		name = snap.Ref.ChannelID
-	}
-	switch snap.Ref.Source {
-	case threads.SourceSlack:
-		if !strings.HasPrefix(name, "#") {
-			name = "#" + name
-		}
-	case threads.SourceFriend:
-		if !strings.HasPrefix(name, "@") {
-			name = "@" + name
-		}
-	}
-	return name
-}
-
-// formatRelativeTime renders a time as a compact "time since" badge
-// (e.g. "now", "5m", "3h", "2d", "1w", "4mo", "1y"). Returns ""
-// for the zero time so the renderer can omit the badge entirely.
-func formatRelativeTime(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	d := time.Since(t)
-	if d < 0 {
-		d = 0
-	}
-	switch {
-	case d < time.Minute:
-		return "now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	case d < 7*24*time.Hour:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	case d < 30*24*time.Hour:
-		return fmt.Sprintf("%dw", int(d.Hours()/(24*7)))
-	case d < 365*24*time.Hour:
-		return fmt.Sprintf("%dmo", int(d.Hours()/(24*30)))
-	default:
-		return fmt.Sprintf("%dy", int(d.Hours()/(24*365)))
-	}
-}
-
-// joinParticipantNames returns a comma-joined truncated list of
-// participant first names. When the list is too long for the
-// available width, the tail is replaced with "+N" so the cell still
-// reads as a list. Empty input returns "".
-func joinParticipantNames(names []string, maxWidth int) string {
-	if len(names) == 0 || maxWidth <= 0 {
-		return ""
-	}
-	// Reduce each entry to its first whitespace-separated token so
-	// "Brian Molidor" → "Brian" — matching the spec's "abbreviated
-	// to ie. just their first names" rule.
-	firsts := make([]string, 0, len(names))
-	for _, n := range names {
-		if n == "" {
-			continue
-		}
-		if i := strings.IndexAny(n, " \t"); i > 0 {
-			firsts = append(firsts, n[:i])
-		} else {
-			firsts = append(firsts, n)
-		}
-	}
-	if len(firsts) == 0 {
-		return ""
-	}
-	// Greedily concatenate, then if the result is too long, truncate
-	// to a "Brian, Maria, +N" suffix.
-	full := strings.Join(firsts, ", ")
-	if len(full) <= maxWidth {
-		return full
-	}
-	for take := len(firsts) - 1; take >= 1; take-- {
-		head := strings.Join(firsts[:take], ", ")
-		extra := len(firsts) - take
-		candidate := fmt.Sprintf("%s, +%d", head, extra)
-		if len(candidate) <= maxWidth {
-			return candidate
-		}
-	}
-	// Last fallback — clip the first name itself.
-	if len(firsts[0]) > maxWidth-1 {
-		return firsts[0][:maxWidth-1] + "…"
-	}
-	return firsts[0]
-}
-
 func (m ChannelListModel) renderItem(ch types.Channel, rowIdx int, maxLen int, isHidden bool) string {
 	prefix := "  "
 	if rowIdx == m.selected {

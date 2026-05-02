@@ -30,6 +30,7 @@ import (
 	"github.com/rw3iss/slackers/internal/commands"
 	"github.com/rw3iss/slackers/internal/config"
 	_ "github.com/rw3iss/slackers/internal/emotes"
+	"github.com/rw3iss/slackers/internal/threads"
 	"github.com/rw3iss/slackers/internal/friends"
 	gamesPlugin "github.com/rw3iss/slackers/internal/plugins/games"
 	"github.com/rw3iss/slackers/internal/setup"
@@ -359,6 +360,18 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 			return commands.Result{
 				Status: commands.StatusOK,
 				Cmd:    func() tea.Msg { return ShortcutsEditorOpenMsg{} },
+			}
+		},
+	})
+
+	register(commands.Command{
+		Name:        "threads",
+		Description: "Open the global Threads view (active threads list with search)",
+		Usage:       "/threads",
+		Run: func(ctx *commands.Context) commands.Result {
+			return commands.Result{
+				Status: commands.StatusOK,
+				Cmd:    func() tea.Msg { return threads.OpenThreadsViewMsg{} },
 			}
 		},
 	})

@@ -67,6 +67,7 @@ var ActionDescriptions = map[string]string{
 	"audio_call":           "Audio call — open active call or start new",
 	"audio_mute":           "Audio call — toggle mic mute",
 	"paste_image":          "Paste image from clipboard into chat",
+	"view_threads":         "Open the global Threads view (also: /threads)",
 }
 
 // ActionOrder defines the display order for the shortcuts editor.
@@ -84,7 +85,7 @@ var ActionOrder = []string{
 	"befriend", "emoji_picker", "select_message",
 	"friend_details", "notifications", "share_my_info",
 	"help", "settings", "shortcuts_editor", "command_list", "away_status",
-	"downloads", "open_downloads_folder",
+	"downloads", "open_downloads_folder", "view_threads",
 	"workspaces", "audio_call", "audio_mute", "paste_image",
 }
 
