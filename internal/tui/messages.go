@@ -726,13 +726,26 @@ const friendCogGlyph = "ℹ\ufe0f"
 const threadBackGlyph = "← "
 
 // ThreadBackPaneClickArea returns the (startCol, endCol) range in
-// message-pane-relative columns where the back-arrow is rendered.
-// Returns (0, 0) when the pane is not in thread mode.
+// message-pane-relative columns where the clickable "back" zone
+// sits. Covers the arrow glyph AND the "[Thread]" label so the
+// click-target is forgiving — the entire "← [Thread]" prefix
+// exits thread mode, regardless of cell-width quirks the terminal
+// might apply to the unicode arrow.
+//
+// The start column is set to -1 so a click that lands one column
+// to the left of the rendered arrow (i.e. on the message pane's
+// left padding) still counts. Returns (0, 0) when the pane is not
+// in thread mode.
 func (m MessageViewModel) ThreadBackPaneClickArea() (int, int) {
 	if !m.threadMode {
 		return 0, 0
 	}
-	return 0, lipgloss.Width(threadBackGlyph)
+	// "← [Thread]" — render width is 10 cells in most terminals.
+	// Use a hardcoded generous end column rather than a precise
+	// lipgloss.Width on the rendered string so we don't have to
+	// re-invoke renderer logic from a hit-test path.
+	const clickWidth = 11 // ← + space + "[Thread]" + trailing space
+	return -1, clickWidth
 }
 
 // FriendCogPaneClickArea returns the (startCol, endCol) range, in pane
