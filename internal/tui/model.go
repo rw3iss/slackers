@@ -7697,47 +7697,51 @@ func (m Model) renderStatusBar() string {
 		team = "slackers"
 	}
 
-	// The status indicator depends on what the user is currently
-	// looking at:
-	//   - Friend chat → reflect THAT friend's P2P connection
-	//   - Slack channel → reflect the Slack socket status, but
-	//     only when Slack mode is configured (BotToken set).
-	//   - No tokens AND no friend selected → hide entirely.
+	// Bottom-left connection-status indicator is currently
+	// disabled. The friend P2P connection state is now shown
+	// inline in the friend chat header (upper-right), and the
+	// Slack-side status indicator only ever reflected the
+	// socket-mode link, which most users don't need at a glance.
+	// Keeping the variables wired so a future status surface can
+	// be plugged back in here without re-deriving the layout.
+	//
+	// Re-enable by removing `showConn = false` below and
+	// uncommenting the original switch:
+	//
+	// switch {
+	// case m.currentCh != nil && m.currentCh.IsFriend:
+	//     online := false
+	//     if m.friendStore != nil {
+	//         if f := m.friendStore.Get(m.currentCh.UserID); f != nil {
+	//             online = f.Online
+	//         }
+	//     }
+	//     if online {
+	//         connStr = StatusConnected.Render("● P2P connected")
+	//     } else {
+	//         connStr = StatusDisconnected.Render("○ P2P disconnected")
+	//     }
+	// case m.cfg != nil && m.cfg.BotToken != "":
+	//     switch m.connStatus {
+	//     case types.StatusConnected:
+	//         connStr = StatusConnected.Render("● Connected")
+	//     case types.StatusConnecting:
+	//         connStr = StatusBarStyle.Render("○ Connecting...")
+	//     case types.StatusError:
+	//         errStr := "error"
+	//         if m.connErr != nil {
+	//             errStr = m.connErr.Error()
+	//         }
+	//         connStr = StatusDisconnected.Render("✕ " + errStr)
+	//     default:
+	//         connStr = StatusDisconnected.Render("○ Disconnected")
+	//     }
+	// default:
+	//     showConn = false
+	// }
 	var connStr string
-	showConn := true
-	switch {
-	case m.currentCh != nil && m.currentCh.IsFriend:
-		online := false
-		if m.friendStore != nil {
-			if f := m.friendStore.Get(m.currentCh.UserID); f != nil {
-				online = f.Online
-			}
-		}
-		if online {
-			connStr = StatusConnected.Render("● P2P connected")
-		} else {
-			connStr = StatusDisconnected.Render("○ P2P disconnected")
-		}
-	case m.cfg != nil && m.cfg.BotToken != "":
-		switch m.connStatus {
-		case types.StatusConnected:
-			connStr = StatusConnected.Render("● Connected")
-		case types.StatusConnecting:
-			connStr = StatusBarStyle.Render("○ Connecting...")
-		case types.StatusError:
-			errStr := "error"
-			if m.connErr != nil {
-				errStr = m.connErr.Error()
-			}
-			connStr = StatusDisconnected.Render("✕ " + errStr)
-		default:
-			connStr = StatusDisconnected.Render("○ Disconnected")
-		}
-	default:
-		// Friends-only mode and no friend chat selected — no
-		// meaningful global connection state to show.
-		showConn = false
-	}
+	_ = connStr
+	showConn := false
 
 	// Permanent "AWAY" indicator when the user has set a manual
 	// away status. Shown alongside the connection info so it's
