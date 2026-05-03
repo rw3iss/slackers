@@ -157,27 +157,21 @@ func (m ChangesOverlayModel) Update(msg tea.Msg) (ChangesOverlayModel, tea.Cmd) 
 			return m, nil
 		}
 		m.err = nil
-		// GitHub returns newest-first within a page; we want the
-		// merged slice oldest→newest so prepend after reversing.
-		incoming := make([]changes.Commit, len(msg.Commits))
-		for i, c := range msg.Commits {
-			incoming[len(msg.Commits)-1-i] = c
-		}
-		// Page 1 (initial) appends newest at the bottom; later
-		// pages prepend older history at the top.
+		// GitHub returns newest-first within a page, which is the
+		// order the overlay renders too — newest at top, oldest at
+		// bottom. Page 1 anchors the head of the slice; later
+		// (older) pages append to the tail so they show below.
 		if msg.Page == 1 {
-			m.commits = append(m.commits, incoming...)
-			// Anchor the cursor to the newest commit (bottom).
+			m.commits = append(m.commits, msg.Commits...)
 			m.applyFilter()
-			m.selected = len(m.filtered) - 1
+			m.selected = 0 // newest
 		} else {
-			// Preserve the cursor position relative to the
-			// commit it was on by remembering its current SHA.
+			// Preserve the cursor's commit across the merge.
 			anchorSHA := ""
 			if c := m.selectedCommit(); c != nil {
 				anchorSHA = c.SHA
 			}
-			m.commits = append(incoming, m.commits...)
+			m.commits = append(m.commits, msg.Commits...)
 			m.applyFilter()
 			if anchorSHA != "" {
 				for i, fi := range m.filtered {
@@ -215,12 +209,6 @@ func (m ChangesOverlayModel) Update(msg tea.Msg) (ChangesOverlayModel, tea.Cmd) 
 			m.filter.Blur()
 			if m.selected > 0 {
 				m.selected--
-				return m, nil
-			}
-			// At the top of the loaded list — fetch older.
-			if m.hasMore && !m.loading && strings.TrimSpace(m.filter.Value()) == "" {
-				m.loading = true
-				return m, changesFetchCmd(m.currentPage + 1)
 			}
 			return m, nil
 		case "down", "j":
@@ -228,6 +216,15 @@ func (m ChangesOverlayModel) Update(msg tea.Msg) (ChangesOverlayModel, tea.Cmd) 
 			m.filter.Blur()
 			if m.selected < len(m.filtered)-1 {
 				m.selected++
+				return m, nil
+			}
+			// At the bottom (oldest loaded) — fetch the next
+			// older page. Search filter active → don't auto-load
+			// since the filter only matches what's already in
+			// memory.
+			if m.hasMore && !m.loading && strings.TrimSpace(m.filter.Value()) == "" {
+				m.loading = true
+				return m, changesFetchCmd(m.currentPage + 1)
 			}
 			return m, nil
 		case "pgup":
@@ -300,13 +297,13 @@ func (m ChangesOverlayModel) Update(msg tea.Msg) (ChangesOverlayModel, tea.Cmd) 
 		case tea.MouseButtonWheelUp:
 			if m.selected > 0 {
 				m.selected--
-			} else if m.hasMore && !m.loading {
-				m.loading = true
-				return m, changesFetchCmd(m.currentPage + 1)
 			}
 		case tea.MouseButtonWheelDown:
 			if m.selected < len(m.filtered)-1 {
 				m.selected++
+			} else if m.hasMore && !m.loading && strings.TrimSpace(m.filter.Value()) == "" {
+				m.loading = true
+				return m, changesFetchCmd(m.currentPage + 1)
 			}
 		}
 	}
@@ -416,20 +413,20 @@ func (m ChangesOverlayModel) View() string {
 			end++
 		}
 
-		if start > 0 || (m.loading && m.currentPage > 0) {
-			tag := "  ↑ ... older commits above"
-			if m.loading {
-				tag = "  ↑ Loading older commits..."
-			}
-			rendered = append(rendered, dimStyle.Render(tag))
-			linesUsed++
+		if start > 0 {
+			rendered = append(rendered, dimStyle.Render("  ↑ ... newer commits above"))
 		}
 		for i := start; i < end; i++ {
 			rendered = append(rendered, rowsPerCommit[i])
 		}
 		_ = linesUsed
-		if end < len(rowsPerCommit) {
-			rendered = append(rendered, dimStyle.Render("  ↓ ... newer commits below"))
+		switch {
+		case m.loading:
+			rendered = append(rendered, dimStyle.Render("  ↓ Loading older commits..."))
+		case end < len(rowsPerCommit):
+			rendered = append(rendered, dimStyle.Render("  ↓ ... older commits below"))
+		case m.hasMore:
+			rendered = append(rendered, dimStyle.Render("  ↓ scroll down for older commits"))
 		}
 
 		b.WriteString(strings.Join(rendered, "\n"))
