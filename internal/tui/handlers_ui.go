@@ -531,8 +531,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 				// Check if an @mention pill was clicked — navigate
 				// to the user's DM (Slack) or friend channel (P2P).
+				// Focus stays on the messages pane (the click landed
+				// here); switching channels shouldn't yank the user
+				// into the input bar.
 				if mentionID := m.messages.MentionAtClick(msgPaneX, y); mentionID != "" {
 					if ch := m.findChannelForMention(mentionID); ch != nil {
+						if m.messages.InThreadMode() {
+							m.messages.ExitThreadMode()
+						}
 						chCopy := *ch
 						m.currentCh = &chCopy
 						m.channels.SelectByID(ch.ID)
@@ -541,8 +547,6 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 						m.clearChannelNotifs(ch.ID)
 						m.setChannelHeader()
 						m.saveLastChannel(ch.ID)
-						m.focus = types.FocusInput
-						m.updateFocus()
 						if ch.IsFriend {
 							m.loadFriendHistory(ch.UserID)
 							return m, nil

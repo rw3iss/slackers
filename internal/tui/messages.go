@@ -1330,11 +1330,17 @@ func (m *MessageViewModel) rewriteMentionPills(line, msgID string, lineIdx int) 
 // messages pane, or "" when the click missed every pill. paneX is
 // the pane-relative column after the caller has stripped the
 // sidebar offset; paneY is the pane row matching m.lineToMsgID.
+//
+// The y-3 offset matches the other pane hit-tests in this file
+// (ReactionAtClick, ReplyLineMessageID, FriendCardAtClick) — it
+// strips the top border, sticky header, and the line above the
+// viewport content so absLine indexes the same line numbering
+// the renderer recorded in mentionHits.
 func (m *MessageViewModel) MentionAtClick(x, y int) string {
 	if len(m.mentionHits) == 0 {
 		return ""
 	}
-	absLine := y - 1 + m.viewport.YOffset
+	absLine := y - 3 + m.viewport.YOffset
 	for _, h := range m.mentionHits {
 		if h.line == absLine && x >= h.startCol && x < h.endCol {
 			return h.id
