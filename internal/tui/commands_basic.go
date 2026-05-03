@@ -376,6 +376,19 @@ func (m *Model) buildCommandRegistry() *commands.Registry {
 		},
 	})
 
+	register(commands.Command{
+		Name:        "changes",
+		Aliases:     []string{"changelog", "commits"},
+		Description: "Browse recent commits from the slackers GitHub repo",
+		Usage:       "/changes",
+		Run: func(ctx *commands.Context) commands.Result {
+			return commands.Result{
+				Status: commands.StatusOK,
+				Cmd:    func() tea.Msg { return ChangesOpenMsg{} },
+			}
+		},
+	})
+
 	// ---- Appearance ------------------------------------------------
 
 	register(commands.Command{

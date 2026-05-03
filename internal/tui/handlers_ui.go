@@ -185,6 +185,10 @@ func (m Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.threadsOverlay, cmd = m.threadsOverlay.Update(msg)
 		return m, cmd
+	case overlayChanges:
+		var cmd tea.Cmd
+		m.changesOverlay, cmd = m.changesOverlay.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }

@@ -96,6 +96,7 @@ const (
 	overlayChatOptions
 	overlayThreadOptions
 	overlayThreadsView
+	overlayChanges
 )
 
 // fileBrowserPurpose tracks why the file browser is open.
@@ -464,6 +465,10 @@ type Model struct {
 	// bar; activation routes through the same OpenThreadMsg the
 	// sidebar uses.
 	threadsOverlay ThreadsOverlayModel
+
+	// changesOverlay is the /changes commit-history view. Pages
+	// through GitHub's public commits API for the slackers repo.
+	changesOverlay ChangesOverlayModel
 	// pendingThreadOpenTS holds the parent_ts to auto-enter via
 	// EnterThreadMode after the next channel-switch + history load
 	// completes. Cleared in the HistoryLoadedMsg handler once the
@@ -1988,6 +1993,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayThreadsView {
 			var cmd tea.Cmd
 			m.threadsOverlay, cmd = m.threadsOverlay.Update(msg)
+			return m, cmd
+		}
+		if m.overlay == overlayChanges {
+			var cmd tea.Cmd
+			m.changesOverlay, cmd = m.changesOverlay.Update(msg)
 			return m, cmd
 		}
 		if m.overlay == overlayContactCardView {
@@ -3957,6 +3967,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ThreadsOverlayCloseMsg:
 		if m.overlay == overlayThreadsView {
 			m.overlay = overlayNone
+		}
+		return m, nil
+
+	case ChangesOpenMsg:
+		// Open the /changes commit-history overlay and kick off
+		// the initial GitHub fetch. The overlay model itself
+		// handles paging on scroll-up.
+		m.changesOverlay = NewChangesOverlay()
+		m.changesOverlay.SetSize(m.width, m.height)
+		m.overlay = overlayChanges
+		return m, m.changesOverlay.InitialFetchCmd()
+
+	case ChangesCloseMsg:
+		if m.overlay == overlayChanges {
+			m.overlay = overlayNone
+		}
+		return m, nil
+
+	case changesPageLoadedMsg, changesToastClearMsg:
+		// Async results from the changes overlay's GitHub fetch
+		// or its toast-clear timer. Forward to the overlay so it
+		// can update its state. Only if the overlay is open —
+		// stale results from a closed-and-reopened overlay are
+		// discarded silently.
+		if m.overlay == overlayChanges {
+			var cmd tea.Cmd
+			m.changesOverlay, cmd = m.changesOverlay.Update(msg)
+			return m, cmd
 		}
 		return m, nil
 
@@ -6861,6 +6899,8 @@ func (m Model) viewInner() string {
 		return m.threadOptions.View(base)
 	case overlayThreadsView:
 		return m.threadsOverlay.View()
+	case overlayChanges:
+		return m.changesOverlay.View()
 	}
 
 	// Normal view path: delegate to renderBaseView so the

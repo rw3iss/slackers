@@ -21,6 +21,11 @@ above the input showing the top fuzzy matches.
 - `/version` — show the running version
 - `/quit` — exit slackers
 - `/me` — show your own contact info
+- `/changes` (also `/changelog`, `/commits`) — browse recent commits
+  from the slackers GitHub repo. Pages 10 commits at a time as you
+  scroll up; Enter expands a commit's full message inline; `y` copies
+  the GitHub URL of the highlighted commit to the clipboard. Tab
+  toggles focus to the search bar to filter the loaded set.
 
 ### Channels & messages
 
