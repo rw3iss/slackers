@@ -1,0 +1,76 @@
+name: Release
+
+# Builds slackers natively on each target platform (Linux + macOS
+# arm64 / amd64) and uploads each binary to the GitHub release for
+# the pushed tag. Native runners are required because the
+# hraban/opus dependency uses CGO against the platform's libopus,
+# which cross-compilation from Linux can't satisfy without a full
+# osxcross toolchain.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+            goos: linux
+            goarch: amd64
+          - os: macos-13
+            target: darwin-amd64
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+
+      - name: Install opus (Linux)
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopus-dev libopusfile-dev pkg-config
+
+      - name: Install opus (macOS)
+        if: matrix.goos == 'darwin'
+        run: brew install opus pkg-config
+
+      - name: Build
+        env:
+          CGO_ENABLED: '1'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p build
+          go build \
+            -ldflags "-s -w -X main.version=${VERSION}" \
+            -o "build/slackers-${{ matrix.target }}" \
+            ./cmd/slackers
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/slackers-${{ matrix.target }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
