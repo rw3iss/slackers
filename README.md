@@ -539,6 +539,62 @@ make lint         # Run go vet
 make clean        # Remove build artifacts
 ```
 
+### Releases
+
+Tag pushes (`git tag v0.x.y && git push origin v0.x.y`) trigger
+`.github/workflows/release.yml`, which builds slackers natively on
+each target platform and uploads each binary to the matching
+GitHub release. Native runners are required because `hraban/opus`
+is a CGO dependency against the platform's `libopus` — a Linux
+host can't cross-compile that without a full `osxcross` toolchain.
+
+Current matrix:
+
+| Target          | Runner          | Reliability |
+|-----------------|-----------------|-------------|
+| `linux-amd64`   | `ubuntu-latest` | reliable    |
+| `darwin-arm64`  | `macos-latest`  | reliable    |
+| `darwin-amd64`  | `macos-13`      | flaky (soft-fail, see below) |
+
+Windows is intentionally not in the matrix — the MSYS2 + opus
+toolchain for Windows is a separate setup that hasn't been wired
+up. Build from source on Windows for now.
+
+#### Manually publishing the Intel-Mac (`darwin-amd64`) binary
+
+GitHub deprioritised the `macos-13` runner pool after macOS 13
+left their LTS window. Jobs there frequently queue indefinitely
+without ever dispatching, so the Intel-Mac entry in the release
+workflow is marked `continue-on-error: true` with a 30-minute
+job timeout. When that job times out (or never starts), the
+release ships without the `slackers-darwin-amd64` artifact and
+you can build + upload it by hand from any Intel Mac:
+
+```bash
+# On an Intel Mac, with go and brew installed:
+brew install opus opusfile pkg-config
+
+git clone https://github.com/rw3iss/slackers.git
+cd slackers
+git checkout v0.x.y                                # the published tag
+
+CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build \
+  -ldflags "-s -w -X main.version=0.x.y" \
+  -o build/slackers-darwin-amd64 \
+  ./cmd/slackers
+
+# Upload to the existing GitHub release (gh CLI must be authed):
+gh release upload v0.x.y build/slackers-darwin-amd64
+```
+
+Alternatively, on an Apple Silicon Mac with the macOS SDK, you
+can produce both binaries by setting `GOARCH=amd64` and adding
+`-target=x86_64-apple-darwin` to the C compiler flags — but
+brew on arm64 only installs arm64 opus libraries, so an x86_64
+opus has to be installed alongside under a different prefix.
+The Intel-Mac path above is simpler and what the project uses
+when the hosted runner falls through.
+
 ### Project structure
 
 ```

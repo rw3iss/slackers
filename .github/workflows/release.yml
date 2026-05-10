@@ -26,15 +26,32 @@ jobs:
             target: linux-amd64
             goos: linux
             goarch: amd64
+            allow_failure: false
+            job_timeout: 30
+          # macos-13 is the last hosted runner with x86_64 Intel
+          # silicon. GitHub deprioritised that pool when macOS 13
+          # fell out of their LTS support window, so jobs there
+          # frequently queue for ages or never dispatch at all.
+          # Mark this entry as a soft-fail so a stuck Intel build
+          # doesn't block the rest of the release; the timeout
+          # caps the worst case at 30 min before we move on.
+          # See README "Manually publishing the Intel-Mac binary"
+          # for how to build and upload it by hand when needed.
           - os: macos-13
             target: darwin-amd64
             goos: darwin
             goarch: amd64
+            allow_failure: true
+            job_timeout: 30
           - os: macos-latest
             target: darwin-arm64
             goos: darwin
             goarch: arm64
+            allow_failure: false
+            job_timeout: 30
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.job_timeout }}
+    continue-on-error: ${{ matrix.allow_failure }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
