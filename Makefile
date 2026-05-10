@@ -1,6 +1,6 @@
 BINARY_NAME=slackers
 BUILD_DIR=build
-VERSION=0.26.0
+VERSION=0.26.1
 LDFLAGS=-ldflags "-s -w -X main.version=$(VERSION)"
 
 .PHONY: all build clean install uninstall test lint run setup help

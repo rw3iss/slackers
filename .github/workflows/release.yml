@@ -53,7 +53,9 @@ jobs:
 
       - name: Install opus (macOS)
         if: matrix.goos == 'darwin'
-        run: brew install opus pkg-config
+        # `hraban/opus` pkg-configs both `opus` and `opusfile` —
+        # brew ships them as separate formulae.
+        run: brew install opus opusfile pkg-config
 
       - name: Build
         env:
